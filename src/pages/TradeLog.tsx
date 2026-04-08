@@ -128,7 +128,7 @@ export function TradeLog() {
         <TradeForm
           account={account}
           onClose={() => setShowForm(false)}
-          onSaved={() => { setShowForm(false); load(); }}
+          onSaved={async () => { setShowForm(false); await load(); }}
         />
       )}
     </div>
