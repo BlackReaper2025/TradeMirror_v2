@@ -1,19 +1,38 @@
 // ─── Demo data seeder — Phase 2 ──────────────────────────────────────────────
-// Runs once on first launch if the DB is empty. Mirrors the Phase 1 mock data.
+// Runs once on first launch if the DB is empty.
+// Uses a shared promise so concurrent callers (React StrictMode) all await
+// the same operation instead of racing each other.
 
 import { getDb } from "./index";
 import { accounts, trades, dailyStats, quotes, appSettings } from "./schema";
 
-export async function seedIfEmpty() {
+let _seedPromise: Promise<void> | null = null;
+
+export function seedIfEmpty(): Promise<void> {
+  if (!_seedPromise) {
+    _seedPromise = doSeed().catch((err) => {
+      // Reset on failure so a retry is possible
+      _seedPromise = null;
+      throw err;
+    });
+  }
+  return _seedPromise;
+}
+
+async function doSeed(): Promise<void> {
   const db = getDb();
 
-  // Check if already seeded
+  console.log("[seed] Checking if DB is empty …");
   const existing = await db.select().from(accounts).limit(1);
-  if (existing.length > 0) return;
+  if (existing.length > 0) {
+    console.log("[seed] Already seeded — skipping.");
+    return;
+  }
 
-  console.log("[seed] Seeding demo data...");
+  console.log("[seed] Inserting demo data …");
 
   // ── Accounts ────────────────────────────────────────────────────────────────
+  console.log("[seed] → accounts");
   await db.insert(accounts).values([
     {
       id: "acc-1",
@@ -47,7 +66,8 @@ export async function seedIfEmpty() {
     },
   ]);
 
-  // ── App settings (select FTMO as active account) ───────────────────────────
+  // ── App settings ─────────────────────────────────────────────────────────────
+  console.log("[seed] → app_settings");
   await db.insert(appSettings).values({
     id: 1,
     selectedAccountId: "acc-1",
@@ -55,7 +75,8 @@ export async function seedIfEmpty() {
     lastOpenedPage: "dashboard",
   });
 
-  // ── Today's trades (April 8 2026) ──────────────────────────────────────────
+  // ── Today's trades (April 8 2026) ────────────────────────────────────────────
+  console.log("[seed] → trades");
   const today = "2026-04-08";
   await db.insert(trades).values([
     {
@@ -108,7 +129,8 @@ export async function seedIfEmpty() {
     },
   ]);
 
-  // ── Daily stats — 30 days of equity + 35 days of calendar data ────────────
+  // ── Daily stats ───────────────────────────────────────────────────────────────
+  console.log("[seed] → daily_stats");
   const pnlByDay: Record<string, number> = {};
 
   // Equity curve data (30 days ending April 8 2026)
@@ -117,13 +139,11 @@ export async function seedIfEmpty() {
     1100, 1480, 1020, 1780, 2100, 1850, 2340, 2100, 1900, 2500,
     2200, 2700, 2400, 2900, 2650, 3100, 2850, 3300, 2900, 2340,
   ];
-  // Calculate daily PnL from cumulative returns
   for (let i = 0; i < rawReturns.length; i++) {
-    const d = new Date(2026, 3, 8); // April 8 2026
+    const d = new Date(2026, 3, 8);
     d.setDate(d.getDate() - (29 - i));
     const dateStr = d.toISOString().split("T")[0];
-    const dailyPnl = i === 0 ? 0 : rawReturns[i] - rawReturns[i - 1];
-    pnlByDay[dateStr] = dailyPnl;
+    pnlByDay[dateStr] = i === 0 ? 0 : rawReturns[i] - rawReturns[i - 1];
   }
 
   // Calendar data (35 days from March 5 2026)
@@ -135,25 +155,23 @@ export async function seedIfEmpty() {
     0, 640, -110, 410, 380, 510, 0,
   ];
   for (let i = 0; i < calData.length; i++) {
-    const d = new Date(2026, 2, 5); // March 5 2026
+    const d = new Date(2026, 2, 5);
     d.setDate(d.getDate() + i);
     const dateStr = d.toISOString().split("T")[0];
-    if (!(dateStr in pnlByDay)) {
-      pnlByDay[dateStr] = calData[i];
-    }
+    if (!(dateStr in pnlByDay)) pnlByDay[dateStr] = calData[i];
   }
 
-  // Insert all daily stats rows
+  // Build rows (exclude zero-pnl days)
   const statsRows = Object.entries(pnlByDay)
     .filter(([, pnl]) => pnl !== 0)
     .map(([day, pnl]) => {
       const tradeCount = Math.floor(Math.random() * 4) + 1;
-      const winCount = pnl > 0 ? Math.ceil(tradeCount * 0.65) : Math.floor(tradeCount * 0.35);
+      const winCount = pnl > 0
+        ? Math.ceil(tradeCount * 0.65)
+        : Math.floor(tradeCount * 0.35);
       const lossCount = tradeCount - winCount;
-      const avgWin = pnl > 0 ? pnl / Math.max(winCount, 1) * 1.5 : 300;
+      const avgWin = pnl > 0 ? (pnl / Math.max(winCount, 1)) * 1.5 : 300;
       const avgLoss = pnl < 0 ? Math.abs(pnl) / Math.max(lossCount, 1) : 150;
-      const winRate = tradeCount > 0 ? (winCount / tradeCount) * 100 : 0;
-
       return {
         id: `ds-acc1-${day}`,
         accountId: "acc-1",
@@ -164,14 +182,16 @@ export async function seedIfEmpty() {
         lossCount,
         avgWin,
         avgLoss,
-        winRate,
-        profitFactor: avgLoss > 0 ? (avgWin * winCount) / (avgLoss * Math.max(lossCount, 1)) : 0,
+        winRate: tradeCount > 0 ? (winCount / tradeCount) * 100 : 0,
+        profitFactor:
+          avgLoss > 0
+            ? (avgWin * winCount) / (avgLoss * Math.max(lossCount, 1))
+            : 0,
         maxDrawdown: avgLoss,
       };
     });
 
-  // Override today's stats with real trade data
-  const todayIdx = statsRows.findIndex((r) => r.day === today);
+  // Override today with exact numbers
   const todayStats = {
     id: `ds-acc1-${today}`,
     accountId: "acc-1",
@@ -186,20 +206,17 @@ export async function seedIfEmpty() {
     profitFactor: 2.21,
     maxDrawdown: 221,
   };
-  if (todayIdx >= 0) {
-    statsRows[todayIdx] = todayStats;
-  } else {
-    statsRows.push(todayStats);
+  const todayIdx = statsRows.findIndex((r) => r.day === today);
+  if (todayIdx >= 0) statsRows[todayIdx] = todayStats;
+  else statsRows.push(todayStats);
+
+  // Single bulk INSERT — one IPC call instead of ~40
+  if (statsRows.length > 0) {
+    await db.insert(dailyStats).values(statsRows).onConflictDoNothing();
   }
 
-  for (const row of statsRows) {
-    await db
-      .insert(dailyStats)
-      .values(row)
-      .onConflictDoNothing();
-  }
-
-  // ── Quotes ─────────────────────────────────────────────────────────────────
+  // ── Quotes ────────────────────────────────────────────────────────────────────
+  console.log("[seed] → quotes");
   await db.insert(quotes).values([
     {
       text: "The goal of a successful trader is to make the best trades. Money is secondary.",

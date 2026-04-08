@@ -36,20 +36,32 @@ const EMPTY: DashboardData = {
 };
 
 export function useDashboardData() {
-  const { ready } = useDatabase();
+  const { ready, error } = useDatabase();
   const [data, setData] = useState<DashboardData>(EMPTY);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    // If DB errored out, stop loading — don't hang forever
+    if (error) {
+      console.error("[useDashboardData] DB provider errored — aborting load.");
+      setLoading(false);
+      return;
+    }
+
     if (!ready) return;
 
     let cancelled = false;
 
     async function load() {
       try {
+        console.log("[useDashboardData] Loading dashboard data …");
+
+        console.log("[useDashboardData] → getSettings");
         const settings = await getSettings();
         const accountId = settings?.selectedAccountId ?? "acc-1";
+        console.log("[useDashboardData] → accountId:", accountId);
 
+        console.log("[useDashboardData] → parallel queries …");
         const [account, todayStats, recentTrades, equityCurve, calendarDays, portfolio, quotes] =
           await Promise.all([
             getAccount(accountId),
@@ -61,19 +73,29 @@ export function useDashboardData() {
             getActiveQuotes(),
           ]);
 
+        console.log("[useDashboardData] All queries complete:", {
+          account: account?.name,
+          todayStats: todayStats?.totalPnl,
+          trades: recentTrades.length,
+          equityPoints: equityCurve.length,
+          calDays: calendarDays.length,
+          portfolioSlices: portfolio.length,
+          quotes: quotes.length,
+        });
+
         if (!cancelled) {
           setData({ account, todayStats, recentTrades, equityCurve, calendarDays, portfolio, quotes });
           setLoading(false);
         }
       } catch (err) {
-        console.error("[useDashboardData]", err);
+        console.error("[useDashboardData] Query failed:", err);
         if (!cancelled) setLoading(false);
       }
     }
 
     load();
     return () => { cancelled = true; };
-  }, [ready]);
+  }, [ready, error]);
 
   return { data, loading };
 }
