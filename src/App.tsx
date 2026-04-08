@@ -1,6 +1,7 @@
 import { ThemeProvider } from "./theme/ThemeContext";
 import { AppShell } from "./components/layout/AppShell";
 import { Dashboard } from "./pages/Dashboard";
+import { TradeLog } from "./pages/TradeLog";
 import { DatabaseProvider } from "./db/DatabaseProvider";
 
 function App() {
@@ -12,6 +13,8 @@ function App() {
           switch (page) {
             case "dashboard":
               return <Dashboard />;
+            case "trade-log":
+              return <TradeLog />;
             default:
               return (
                 <div
