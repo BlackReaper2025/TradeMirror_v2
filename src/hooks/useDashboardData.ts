@@ -1,6 +1,7 @@
 // ─── useDashboardData — fetches all data the dashboard needs from SQLite ─────
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { useDatabase } from "../db/DatabaseProvider";
+import { tradeEvents } from "../lib/tradeEvents";
 import {
   getSettings,
   getAccount,
@@ -40,62 +41,67 @@ export function useDashboardData() {
   const [data, setData] = useState<DashboardData>(EMPTY);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    // If DB errored out, stop loading — don't hang forever
+  const load = useCallback(async () => {
     if (error) {
       console.error("[useDashboardData] DB provider errored — aborting load.");
       setLoading(false);
       return;
     }
-
     if (!ready) return;
 
-    let cancelled = false;
+    try {
+      console.log("[useDashboardData] Loading dashboard data …");
 
-    async function load() {
-      try {
-        console.log("[useDashboardData] Loading dashboard data …");
+      const settings   = await getSettings();
+      const accountId  = settings?.selectedAccountId ?? "acc-1";
+      console.log("[useDashboardData] → accountId:", accountId);
 
-        console.log("[useDashboardData] → getSettings");
-        const settings = await getSettings();
-        const accountId = settings?.selectedAccountId ?? "acc-1";
-        console.log("[useDashboardData] → accountId:", accountId);
+      const [account, todayStats, recentTrades, equityCurve, calendarDays, portfolio, quotes] =
+        await Promise.all([
+          getAccount(accountId),
+          getTodayStats(accountId),
+          getTodayTrades(accountId),
+          getEquityCurve(accountId, 30),
+          getCalendarDays(accountId, 35),
+          getPortfolio(),
+          getActiveQuotes(),
+        ]);
 
-        console.log("[useDashboardData] → parallel queries …");
-        const [account, todayStats, recentTrades, equityCurve, calendarDays, portfolio, quotes] =
-          await Promise.all([
-            getAccount(accountId),
-            getTodayStats(accountId),
-            getTodayTrades(accountId),
-            getEquityCurve(accountId, 30),
-            getCalendarDays(accountId, 35),
-            getPortfolio(),
-            getActiveQuotes(),
-          ]);
+      console.log("[useDashboardData] All queries complete:", {
+        account: account?.name,
+        currentBalance: account?.currentBalance,
+        todayPnl: todayStats?.totalPnl,
+        todayTrades: recentTrades.length,
+        todayWinRate: todayStats?.winRate,
+        todayAvgWin: todayStats?.avgWin,
+        todayAvgLoss: todayStats?.avgLoss,
+        todayProfitFactor: todayStats?.profitFactor,
+        equityPoints: equityCurve.length,
+      });
 
-        console.log("[useDashboardData] All queries complete:", {
-          account: account?.name,
-          todayStats: todayStats?.totalPnl,
-          trades: recentTrades.length,
-          equityPoints: equityCurve.length,
-          calDays: calendarDays.length,
-          portfolioSlices: portfolio.length,
-          quotes: quotes.length,
-        });
-
-        if (!cancelled) {
-          setData({ account, todayStats, recentTrades, equityCurve, calendarDays, portfolio, quotes });
-          setLoading(false);
-        }
-      } catch (err) {
-        console.error("[useDashboardData] Query failed:", err);
-        if (!cancelled) setLoading(false);
-      }
+      setData({ account, todayStats, recentTrades, equityCurve, calendarDays, portfolio, quotes });
+      setLoading(false);
+    } catch (err) {
+      console.error("[useDashboardData] Query failed:", err);
+      setLoading(false);
     }
-
-    load();
-    return () => { cancelled = true; };
   }, [ready, error]);
+
+  // Initial load when DB becomes ready
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  // Refetch whenever a trade is saved/updated/deleted from any page
+  useEffect(() => {
+    if (!ready) return;
+    console.log("[useDashboardData] Subscribing to tradeEvents");
+    const unsub = tradeEvents.subscribe(() => {
+      console.log("[useDashboardData] tradeEvents fired — refetching dashboard data");
+      load();
+    });
+    return unsub;
+  }, [ready, load]);
 
   return { data, loading };
 }

@@ -11,10 +11,12 @@ import {
   createTrade,
   createJournalEntry,
   recalculateDailyStats,
+  updateAccountBalance,
   type TradeWithJournal,
   type Account,
 } from "../db/queries";
 import { TradeForm, type TradeFormValues } from "../components/tradelog/TradeForm";
+import { tradeEvents } from "../lib/tradeEvents";
 
 function fmt$(n: number) {
   const abs = Math.abs(n).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -57,14 +59,24 @@ export function TradeLog() {
       const tradeId   = `t-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
       const journalId = `j-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 
-      // Determine day string from openedAt for stats recalc
-      const day = values.openedAt.split("T")[0];
+      // Store openedAt as local datetime string ("YYYY-MM-DDTHH:MM:SS") — no Z suffix.
+      // This keeps the day component consistent with localDateStr() used in queries.
+      const normaliseDateTime = (v: string) => {
+        if (!v) return v;
+        // datetime-local gives "YYYY-MM-DDTHH:MM", pad seconds
+        return v.length === 16 ? v + ":00" : v.replace(/Z$/, "");
+      };
+
+      const openedAt = normaliseDateTime(values.openedAt);
+      const day      = openedAt.split("T")[0]; // local date for daily_stats
+
+      console.log("[TradeLog] saving trade — openedAt:", openedAt, "day:", day);
 
       await createTrade({
         id:             tradeId,
         accountId:      account.id,
-        openedAt:       values.openedAt.includes("T") ? values.openedAt + ":00Z" : values.openedAt,
-        closedAt:       values.closedAt ? values.closedAt + ":00Z" : undefined,
+        openedAt,
+        closedAt:       values.closedAt ? normaliseDateTime(values.closedAt) : undefined,
         instrument:     values.instrument.trim(),
         side:           values.side,
         setupName:      values.setupName.trim() || undefined,
@@ -77,6 +89,7 @@ export function TradeLog() {
         technicalNotes: values.technicalNotes.trim() || undefined,
         tags:           values.tags.trim() || undefined,
       });
+      console.log("[TradeLog] ✓ trade inserted");
 
       await createJournalEntry({
         id:              journalId,
@@ -89,8 +102,16 @@ export function TradeLog() {
         disciplineScore: values.disciplineScore  ? parseInt(values.disciplineScore)  : undefined,
         freeformNotes:   values.freeformNotes.trim() || undefined,
       });
+      console.log("[TradeLog] ✓ journal inserted");
 
       await recalculateDailyStats(account.id, day);
+      console.log("[TradeLog] ✓ daily_stats recalculated");
+
+      await updateAccountBalance(account.id);
+      console.log("[TradeLog] ✓ account balance updated");
+
+      // Notify dashboard (and any other subscriber) to refetch
+      tradeEvents.notify();
 
       setShowForm(false);
       await load();

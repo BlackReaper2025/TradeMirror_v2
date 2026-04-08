@@ -10,6 +10,18 @@ import {
   appSettings,
 } from "./schema";
 
+// ─── Shared date helper ───────────────────────────────────────────────────────
+// Always use LOCAL calendar date (YYYY-MM-DD) so that:
+//   - trade.openedAt day (from datetime-local input, local time)
+//   - daily_stats.day (written by recalculateDailyStats)
+//   - queries filtering by "today" (getTodayStats, getTodayTrades)
+// all refer to the same string and never diverge for non-UTC timezones.
+
+export function localDateStr(date: Date = new Date()): string {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
 // ─── Inferred types ───────────────────────────────────────────────────────────
 
 export type Account      = typeof accounts.$inferSelect;
@@ -64,12 +76,14 @@ export async function getAccount(id: string): Promise<Account | null> {
 
 export async function getTodayStats(accountId: string) {
   const db = getDb();
-  const today = new Date().toISOString().split("T")[0];
+  const today = localDateStr();
+  console.log("[getTodayStats] querying day:", today, "accountId:", accountId);
   const rows = await db
     .select()
     .from(dailyStats)
     .where(and(eq(dailyStats.accountId, accountId), eq(dailyStats.day, today)))
     .limit(1);
+  console.log("[getTodayStats] result:", rows[0] ?? null);
   return rows[0] ?? null;
 }
 
@@ -77,15 +91,16 @@ export async function getTodayStats(accountId: string) {
 
 export async function getTodayTrades(accountId: string): Promise<Trade[]> {
   const db = getDb();
-  const today = new Date().toISOString().split("T")[0];
+  const today = localDateStr();
+  // Bounds without Z — trades are stored as "YYYY-MM-DDTHH:MM:SS" local time
   return db
     .select()
     .from(trades)
     .where(
       and(
         eq(trades.accountId, accountId),
-        gte(trades.openedAt, today + "T00:00:00Z"),
-        lte(trades.openedAt, today + "T23:59:59Z")
+        gte(trades.openedAt, today + "T00:00:00"),
+        lte(trades.openedAt, today + "T23:59:59")
       )
     )
     .orderBy(desc(trades.openedAt));
@@ -294,15 +309,44 @@ export async function createJournalEntry(input: CreateJournalInput): Promise<voi
   });
 }
 
+// ─── Update account current_balance from actual trade PnL ────────────────────
+// Recomputes: starting_balance + SUM(pnl) across all trades for that account.
+// Must be called after any trade is created, updated, or deleted.
+
+export async function updateAccountBalance(accountId: string): Promise<void> {
+  const db = getDb();
+
+  const allTrades = await db
+    .select({ pnl: trades.pnl })
+    .from(trades)
+    .where(eq(trades.accountId, accountId));
+
+  const account = await getAccount(accountId);
+  if (!account) return;
+
+  const totalPnl       = allTrades.reduce((s, t) => s + (t.pnl ?? 0), 0);
+  const newBalance     = account.startingBalance + totalPnl;
+
+  console.log("[updateAccountBalance] accountId:", accountId, "totalPnl:", totalPnl, "newBalance:", newBalance);
+
+  await db
+    .update(accounts)
+    .set({ currentBalance: newBalance })
+    .where(eq(accounts.id, accountId));
+}
+
 // ─── Recalculate daily_stats for a given account + day ───────────────────────
 // Called after any trade is created/updated/deleted for that day.
 
 export async function recalculateDailyStats(
   accountId: string,
-  day: string // YYYY-MM-DD
+  day: string // YYYY-MM-DD local date
 ): Promise<void> {
   const db = getDb();
 
+  console.log("[recalculateDailyStats] accountId:", accountId, "day:", day);
+
+  // Bounds without Z — trades stored as local datetime strings
   const dayTrades = await db
     .select()
     .from(trades)
@@ -313,6 +357,8 @@ export async function recalculateDailyStats(
         lte(trades.openedAt, day + "T23:59:59")
       )
     );
+
+  console.log("[recalculateDailyStats] found", dayTrades.length, "trades for", day);
 
   if (dayTrades.length === 0) {
     // Remove the stats row if no trades remain
