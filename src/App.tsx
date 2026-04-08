@@ -1,9 +1,11 @@
 import { ThemeProvider } from "./theme/ThemeContext";
 import { AppShell } from "./components/layout/AppShell";
 import { Dashboard } from "./pages/Dashboard";
+import { DatabaseProvider } from "./db/DatabaseProvider";
 
 function App() {
   return (
+    <DatabaseProvider>
     <ThemeProvider>
       <AppShell>
         {(page) => {
@@ -28,6 +30,7 @@ function App() {
         }}
       </AppShell>
     </ThemeProvider>
+    </DatabaseProvider>
   );
 }
 

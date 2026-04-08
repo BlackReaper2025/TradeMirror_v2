@@ -1,13 +1,17 @@
 import { ArrowUpRight, ArrowDownRight, ExternalLink } from "lucide-react";
 import { Panel, PanelHeader } from "../ui/Panel";
 import { Badge } from "../ui/Badge";
-import { RECENT_TRADES } from "../../data/mockData";
+import type { Trade } from "../../db/queries";
 
 function formatTime(iso: string) {
   return new Date(iso).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: false });
 }
 
-export function TradeLogPreview() {
+interface Props {
+  trades: Trade[];
+}
+
+export function TradeLogPreview({ trades }: Props) {
   return (
     <Panel className="h-full flex flex-col">
       <PanelHeader label="Today's Trades">
@@ -17,9 +21,10 @@ export function TradeLogPreview() {
       </PanelHeader>
 
       <div className="flex flex-col gap-2 flex-1 overflow-auto">
-        {RECENT_TRADES.map((trade) => {
-          const isWin = trade.pnl > 0;
-          const pnlStr = `${isWin ? "+" : ""}$${Math.abs(trade.pnl).toLocaleString()}`;
+        {trades.map((trade) => {
+          const pnl = trade.pnl ?? 0;
+          const isWin = pnl > 0;
+          const pnlStr = `${isWin ? "+" : ""}$${Math.abs(pnl).toLocaleString()}`;
           return (
             <div
               key={trade.id}
@@ -55,7 +60,7 @@ export function TradeLogPreview() {
                 </div>
               </div>
 
-              {/* P&L + RR */}
+              {/* P&L */}
               <div className="text-right flex-shrink-0">
                 <div
                   className="text-[14px] font-bold tabular-nums"
@@ -63,13 +68,16 @@ export function TradeLogPreview() {
                 >
                   {pnlStr}
                 </div>
-                <div className="text-[11px] tabular-nums" style={{ color: "var(--text-muted)" }}>
-                  {trade.rr > 0 ? "+" : ""}{trade.rr.toFixed(1)}R
-                </div>
               </div>
             </div>
           );
         })}
+
+        {trades.length === 0 && (
+          <div className="flex-1 flex items-center justify-center">
+            <span className="text-[12px]" style={{ color: "var(--text-muted)" }}>No trades today</span>
+          </div>
+        )}
       </div>
     </Panel>
   );

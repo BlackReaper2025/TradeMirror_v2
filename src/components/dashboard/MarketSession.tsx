@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Panel, PanelHeader } from "../ui/Panel";
-import { SESSIONS, getCurrentSession, SessionWindow } from "../../data/mockData";
+import { SESSIONS, getCurrentSession, type SessionWindow } from "../../lib/sessions";
 
 const SESSION_COLORS: Record<string, string> = {
   "Pre-Asia":  "#6366f1",

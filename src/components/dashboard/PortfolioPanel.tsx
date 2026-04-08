@@ -1,16 +1,22 @@
 import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer } from "recharts";
 import { Panel, PanelHeader } from "../ui/Panel";
-import { PORTFOLIO, PORTFOLIO_TOTAL } from "../../data/mockData";
+
+interface PortfolioSlice {
+  name: string;
+  value: number;
+  color: string;
+}
 
 interface CustomTooltipProps {
   active?: boolean;
   payload?: Array<{ name: string; value: number; payload: { color: string } }>;
+  total: number;
 }
 
-function CustomTooltip({ active, payload }: CustomTooltipProps) {
+function CustomTooltip({ active, payload, total }: CustomTooltipProps) {
   if (!active || !payload?.length) return null;
   const item = payload[0];
-  const pct = ((item.value / PORTFOLIO_TOTAL) * 100).toFixed(1);
+  const pct = ((item.value / total) * 100).toFixed(1);
   return (
     <div
       className="px-3 py-2 rounded-xl text-[12px]"
@@ -25,7 +31,13 @@ function CustomTooltip({ active, payload }: CustomTooltipProps) {
   );
 }
 
-export function PortfolioPanel() {
+interface Props {
+  portfolio: PortfolioSlice[];
+}
+
+export function PortfolioPanel({ portfolio }: Props) {
+  const total = portfolio.reduce((s, p) => s + p.value, 0);
+
   return (
     <Panel className="h-full flex flex-col">
       <PanelHeader label="Portfolio">
@@ -33,7 +45,7 @@ export function PortfolioPanel() {
           className="text-[13px] font-bold tabular-nums"
           style={{ color: "var(--text-primary)" }}
         >
-          {new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(PORTFOLIO_TOTAL)}
+          {new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(total)}
         </span>
       </PanelHeader>
 
@@ -42,7 +54,7 @@ export function PortfolioPanel() {
         <ResponsiveContainer width="100%" height="100%">
           <PieChart>
             <Pie
-              data={PORTFOLIO}
+              data={portfolio}
               cx="50%"
               cy="50%"
               innerRadius={52}
@@ -51,19 +63,19 @@ export function PortfolioPanel() {
               dataKey="value"
               strokeWidth={0}
             >
-              {PORTFOLIO.map((entry, i) => (
+              {portfolio.map((entry, i) => (
                 <Cell key={i} fill={entry.color} />
               ))}
             </Pie>
-            <Tooltip content={<CustomTooltip />} />
+            <Tooltip content={<CustomTooltip total={total} />} />
           </PieChart>
         </ResponsiveContainer>
       </div>
 
       {/* Legend */}
       <div className="flex flex-col gap-2 mt-2">
-        {PORTFOLIO.map((item) => {
-          const pct = ((item.value / PORTFOLIO_TOTAL) * 100).toFixed(1);
+        {portfolio.map((item) => {
+          const pct = total > 0 ? ((item.value / total) * 100).toFixed(1) : "0.0";
           return (
             <div key={item.name} className="flex items-center justify-between">
               <div className="flex items-center gap-2">

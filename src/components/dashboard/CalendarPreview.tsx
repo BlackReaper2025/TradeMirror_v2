@@ -1,5 +1,4 @@
 import { Panel, PanelHeader } from "../ui/Panel";
-import { CALENDAR_DAYS } from "../../data/mockData";
 
 const WEEK_LABELS = ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"];
 
@@ -17,8 +16,18 @@ function cellTextColor(pnl: number): string {
   return "#f87171";
 }
 
-export function CalendarPreview() {
-  const days = CALENDAR_DAYS.slice(-35); // last 5 weeks
+interface CalendarDay {
+  date: string;
+  pnl: number;
+  tradeCount: number;
+}
+
+interface Props {
+  calendarDays: CalendarDay[];
+}
+
+export function CalendarPreview({ calendarDays }: Props) {
+  const days = calendarDays.slice(-35);
 
   return (
     <Panel className="h-full flex flex-col">

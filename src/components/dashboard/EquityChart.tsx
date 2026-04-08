@@ -8,7 +8,7 @@ import {
   CartesianGrid,
 } from "recharts";
 import { Panel, PanelHeader } from "../ui/Panel";
-import { EQUITY_CURVE, ACTIVE_ACCOUNT } from "../../data/mockData";
+import type { Account } from "../../db/queries";
 
 function formatBalance(n: number) {
   if (n >= 1_000_000) return `$${(n / 1_000_000).toFixed(1)}M`;
@@ -20,12 +20,13 @@ interface CustomTooltipProps {
   active?: boolean;
   payload?: Array<{ value: number }>;
   label?: string;
+  startingBalance: number;
 }
 
-function CustomTooltip({ active, payload, label }: CustomTooltipProps) {
+function CustomTooltip({ active, payload, label, startingBalance }: CustomTooltipProps) {
   if (!active || !payload?.length) return null;
   const val = payload[0].value;
-  const diff = val - ACTIVE_ACCOUNT.startingBalance;
+  const diff = val - startingBalance;
   const isPos = diff >= 0;
   return (
     <div
@@ -48,23 +49,33 @@ function CustomTooltip({ active, payload, label }: CustomTooltipProps) {
   );
 }
 
-export function EquityChart() {
-  const min = Math.min(...EQUITY_CURVE.map((p) => p.balance));
-  const max = Math.max(...EQUITY_CURVE.map((p) => p.balance));
+interface Props {
+  equityCurve: Array<{ date: string; balance: number }>;
+  account: Account | null;
+}
+
+export function EquityChart({ equityCurve, account }: Props) {
+  const startingBalance = account?.startingBalance ?? 0;
+  const allTimeGain = account ? account.currentBalance - account.startingBalance : 0;
+  const isPos = allTimeGain >= 0;
+
+  const min = equityCurve.length ? Math.min(...equityCurve.map((p) => p.balance)) : 0;
+  const max = equityCurve.length ? Math.max(...equityCurve.map((p) => p.balance)) : 0;
   const padding = (max - min) * 0.15;
 
   return (
     <Panel className="h-full flex flex-col">
       <PanelHeader label="Equity Curve">
-        <span className="text-[11px] tabular-nums" style={{ color: "var(--accent-text)" }}>
-          +$2,340 all time
+        <span className="text-[11px] tabular-nums" style={{ color: isPos ? "var(--accent-text)" : "#f87171" }}>
+          {isPos ? "+" : ""}
+          {new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(allTimeGain)} all time
         </span>
       </PanelHeader>
 
       <div className="flex-1" style={{ minHeight: 0 }}>
         <ResponsiveContainer width="100%" height="100%">
           <AreaChart
-            data={EQUITY_CURVE}
+            data={equityCurve}
             margin={{ top: 4, right: 4, left: 0, bottom: 0 }}
           >
             <defs>
@@ -97,7 +108,10 @@ export function EquityChart() {
               width={52}
             />
 
-            <Tooltip content={<CustomTooltip />} cursor={{ stroke: "rgba(255,255,255,0.08)", strokeWidth: 1 }} />
+            <Tooltip
+              content={<CustomTooltip startingBalance={startingBalance} />}
+              cursor={{ stroke: "rgba(255,255,255,0.08)", strokeWidth: 1 }}
+            />
 
             <Area
               type="monotone"

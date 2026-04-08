@@ -1,16 +1,25 @@
 import { useEffect, useState } from "react";
 import { Quote as QuoteIcon, RefreshCw } from "lucide-react";
 import { Panel } from "../ui/Panel";
-import { QUOTES } from "../../data/mockData";
 
-export function QuotePanel() {
+interface QuoteItem {
+  text: string;
+  author: string;
+}
+
+interface Props {
+  quotes: QuoteItem[];
+}
+
+export function QuotePanel({ quotes }: Props) {
   const [idx, setIdx] = useState(0);
   const [visible, setVisible] = useState(true);
 
   const advance = () => {
+    if (!quotes.length) return;
     setVisible(false);
     setTimeout(() => {
-      setIdx((i) => (i + 1) % QUOTES.length);
+      setIdx((i) => (i + 1) % quotes.length);
       setVisible(true);
     }, 250);
   };
@@ -19,9 +28,9 @@ export function QuotePanel() {
   useEffect(() => {
     const id = setInterval(advance, 45_000);
     return () => clearInterval(id);
-  }, []);
+  }, [quotes.length]);
 
-  const quote = QUOTES[idx];
+  const quote = quotes[idx] ?? { text: "Loading...", author: "" };
 
   return (
     <Panel className="h-full flex flex-col justify-between">
@@ -67,7 +76,7 @@ export function QuotePanel() {
 
       {/* Dot indicators */}
       <div className="flex gap-1 mt-4">
-        {QUOTES.map((_, i) => (
+        {quotes.map((_, i) => (
           <button
             key={i}
             onClick={() => { setVisible(false); setTimeout(() => { setIdx(i); setVisible(true); }, 250); }}
