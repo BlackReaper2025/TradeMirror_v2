@@ -1,20 +1,18 @@
 // ─── Database connection — wraps @tauri-apps/plugin-sql with Drizzle ─────────
 import Database from "@tauri-apps/plugin-sql";
+import { appDataDir } from "@tauri-apps/api/path";
 import { drizzle } from "drizzle-orm/sqlite-proxy";
 import * as schema from "./schema";
 
 export type AppDb = ReturnType<typeof drizzle<typeof schema>>;
 
 let _db: AppDb | null = null;
-// Shared promise: concurrent callers (e.g. React StrictMode double-invocation)
-// all await the same open operation instead of racing to call Database.load() twice.
+// Shared promise so React StrictMode double-invocation shares one open call.
 let _initPromise: Promise<AppDb> | null = null;
 
 /**
- * tauri-plugin-sql only understands null, numbers, strings, and Uint8Array as
- * bind parameters. JS booleans (true/false) and undefined are not valid — they
- * cause silent bind failures or crashes on the Rust side.
- * This helper coerces every param to a safe SQLite-compatible value.
+ * tauri-plugin-sql only accepts null, number, string, Uint8Array as bind params.
+ * JS booleans and undefined must be coerced before every execute/select call.
  */
 function serializeParams(params: unknown[]): unknown[] {
   return params.map((p) => {
@@ -26,7 +24,16 @@ function serializeParams(params: unknown[]): unknown[] {
 }
 
 async function openDb(): Promise<AppDb> {
-  console.log("[db] Opening sqlite:trademirror.db …");
+  // Log the exact resolved path so we always know which file is being used.
+  try {
+    const dataDir = await appDataDir();
+    console.log("[db] App data dir:", dataDir);
+    console.log("[db] DB file will be:", dataDir + "trademirror.db");
+  } catch {
+    console.warn("[db] Could not resolve appDataDir — running outside Tauri?");
+  }
+
+  console.log("[db] Calling Database.load('sqlite:trademirror.db') …");
   const sqlite = await Database.load("sqlite:trademirror.db");
   console.log("[db] Connection established. Building Drizzle proxy …");
 
@@ -37,7 +44,6 @@ async function openDb(): Promise<AppDb> {
         await sqlite.execute(sql, safe);
         return { rows: [] };
       }
-      // SELECT — plugin returns array of row-objects; proxy expects array of value-arrays
       const rows = await sqlite.select<Record<string, unknown>[]>(sql, safe);
       return {
         rows: (rows as Record<string, unknown>[]).map((row) =>
@@ -52,16 +58,10 @@ async function openDb(): Promise<AppDb> {
   return _db;
 }
 
-/**
- * Opens the SQLite database and returns a typed Drizzle instance.
- * Migrations are handled by tauri-plugin-sql on the Rust side.
- * Safe to call multiple times — all callers share one open operation.
- */
 export async function initDb(): Promise<AppDb> {
   if (_db) return _db;
   if (!_initPromise) {
     _initPromise = openDb().catch((err) => {
-      // Reset so a retry is possible after failure
       _initPromise = null;
       throw err;
     });
@@ -69,7 +69,6 @@ export async function initDb(): Promise<AppDb> {
   return _initPromise;
 }
 
-/** Returns the initialized db. Throws if initDb() was not awaited first. */
 export function getDb(): AppDb {
   if (!_db) throw new Error("[db] Not ready — call initDb() first.");
   return _db;

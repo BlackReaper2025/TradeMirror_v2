@@ -1,7 +1,6 @@
 // ─── Demo data seeder — Phase 2 ──────────────────────────────────────────────
 // Runs once on first launch if the DB is empty.
-// Uses a shared promise so concurrent callers (React StrictMode) all await
-// the same operation instead of racing each other.
+// Shared promise guards against React StrictMode double-invocation.
 
 import { getDb } from "./index";
 import { accounts, trades, dailyStats, quotes, appSettings } from "./schema";
@@ -11,7 +10,6 @@ let _seedPromise: Promise<void> | null = null;
 export function seedIfEmpty(): Promise<void> {
   if (!_seedPromise) {
     _seedPromise = doSeed().catch((err) => {
-      // Reset on failure so a retry is possible
       _seedPromise = null;
       throw err;
     });
@@ -19,8 +17,36 @@ export function seedIfEmpty(): Promise<void> {
   return _seedPromise;
 }
 
+// ─── Dev-only reset ──────────────────────────────────────────────────────────
+// Open DevTools console and run:  localStorage.setItem('tm_reset_db', '1')
+// then reload. Clears all tables before seed so first-run can be re-tested
+// without deleting the file manually.  Auto-clears the flag after one use.
+async function devResetIfRequested(): Promise<boolean> {
+  if (!import.meta.env.DEV) return false;
+  const flag =
+    typeof localStorage !== "undefined"
+      ? localStorage.getItem("tm_reset_db")
+      : null;
+  if (!flag) return false;
+
+  console.warn("[seed] DEV RESET requested — clearing all tables …");
+  const db = getDb();
+  // Delete in FK-safe order
+  await db.delete(quotes);
+  await db.delete(dailyStats);
+  await db.delete(trades);
+  await db.delete(appSettings);
+  await db.delete(accounts);
+  localStorage.removeItem("tm_reset_db");
+  console.warn("[seed] DEV RESET complete.");
+  return true;
+}
+
+// ─── Main seed function ───────────────────────────────────────────────────────
 async function doSeed(): Promise<void> {
   const db = getDb();
+
+  await devResetIfRequested();
 
   console.log("[seed] Checking if DB is empty …");
   const existing = await db.select().from(accounts).limit(1);
@@ -29,11 +55,10 @@ async function doSeed(): Promise<void> {
     return;
   }
 
-  console.log("[seed] Inserting demo data …");
+  console.log("[seed] DB is empty. Starting seed …");
 
-  // ── Accounts ────────────────────────────────────────────────────────────────
-  console.log("[seed] → accounts");
-  await db.insert(accounts).values([
+  // ── Accounts ─────────────────────────────────────────────────────────────────
+  const accountRows = [
     {
       id: "acc-1",
       name: "FTMO Challenge",
@@ -41,7 +66,7 @@ async function doSeed(): Promise<void> {
       startingBalance: 100_000,
       currentBalance: 102_340,
       dailyTarget: 1_000,
-      accountType: "challenge",
+      accountType: "challenge" as const,
       isActive: true,
     },
     {
@@ -51,7 +76,7 @@ async function doSeed(): Promise<void> {
       startingBalance: 50_000,
       currentBalance: 48_750,
       dailyTarget: 500,
-      accountType: "prop",
+      accountType: "prop" as const,
       isActive: true,
     },
     {
@@ -61,10 +86,17 @@ async function doSeed(): Promise<void> {
       startingBalance: 10_000,
       currentBalance: 12_100,
       dailyTarget: 200,
-      accountType: "personal",
+      accountType: "personal" as const,
       isActive: true,
     },
-  ]);
+  ];
+
+  // Log what will be sent so we can confirm boolean → integer coercion
+  console.log("[seed] → accounts (sample row keys):", Object.keys(accountRows[0]));
+  console.log("[seed] → accounts isActive type:", typeof accountRows[0].isActive, "value:", accountRows[0].isActive);
+
+  await db.insert(accounts).values(accountRows);
+  console.log("[seed] ✓ accounts inserted");
 
   // ── App settings ─────────────────────────────────────────────────────────────
   console.log("[seed] → app_settings");
@@ -74,8 +106,9 @@ async function doSeed(): Promise<void> {
     themeMode: "auto",
     lastOpenedPage: "dashboard",
   });
+  console.log("[seed] ✓ app_settings inserted");
 
-  // ── Today's trades (April 8 2026) ────────────────────────────────────────────
+  // ── Trades ───────────────────────────────────────────────────────────────────
   console.log("[seed] → trades");
   const today = "2026-04-08";
   await db.insert(trades).values([
@@ -85,7 +118,7 @@ async function doSeed(): Promise<void> {
       openedAt: `${today}T08:12:00Z`,
       closedAt: `${today}T08:47:00Z`,
       instrument: "EUR/USD",
-      side: "long",
+      side: "long" as const,
       setupName: "London Open Break",
       size: 2.0,
       pnl: 523,
@@ -97,7 +130,7 @@ async function doSeed(): Promise<void> {
       openedAt: `${today}T09:05:00Z`,
       closedAt: `${today}T09:22:00Z`,
       instrument: "GBP/USD",
-      side: "short",
+      side: "short" as const,
       setupName: "Rejection Wick",
       size: 1.5,
       pnl: -221,
@@ -109,7 +142,7 @@ async function doSeed(): Promise<void> {
       openedAt: `${today}T10:14:00Z`,
       closedAt: `${today}T10:51:00Z`,
       instrument: "NAS100",
-      side: "long",
+      side: "long" as const,
       setupName: "Break & Retest",
       size: 0.5,
       pnl: 451,
@@ -121,19 +154,19 @@ async function doSeed(): Promise<void> {
       openedAt: `${today}T11:30:00Z`,
       closedAt: `${today}T11:58:00Z`,
       instrument: "GBP/JPY",
-      side: "long",
+      side: "long" as const,
       setupName: "Fib Retracement",
       size: 1.0,
       pnl: 487,
       fees: 0,
     },
   ]);
+  console.log("[seed] ✓ trades inserted");
 
   // ── Daily stats ───────────────────────────────────────────────────────────────
   console.log("[seed] → daily_stats");
   const pnlByDay: Record<string, number> = {};
 
-  // Equity curve data (30 days ending April 8 2026)
   const rawReturns = [
     0, 340, 820, 1050, 720, 1340, 980, 1600, 1220, 900,
     1100, 1480, 1020, 1780, 2100, 1850, 2340, 2100, 1900, 2500,
@@ -142,11 +175,10 @@ async function doSeed(): Promise<void> {
   for (let i = 0; i < rawReturns.length; i++) {
     const d = new Date(2026, 3, 8);
     d.setDate(d.getDate() - (29 - i));
-    const dateStr = d.toISOString().split("T")[0];
-    pnlByDay[dateStr] = i === 0 ? 0 : rawReturns[i] - rawReturns[i - 1];
+    pnlByDay[d.toISOString().split("T")[0]] =
+      i === 0 ? 0 : rawReturns[i] - rawReturns[i - 1];
   }
 
-  // Calendar data (35 days from March 5 2026)
   const calData = [
     240, 0, -120, 580, 320, 0, 0,
     0, 450, -80, 720, 0, 280, 0,
@@ -157,11 +189,10 @@ async function doSeed(): Promise<void> {
   for (let i = 0; i < calData.length; i++) {
     const d = new Date(2026, 2, 5);
     d.setDate(d.getDate() + i);
-    const dateStr = d.toISOString().split("T")[0];
-    if (!(dateStr in pnlByDay)) pnlByDay[dateStr] = calData[i];
+    const key = d.toISOString().split("T")[0];
+    if (!(key in pnlByDay)) pnlByDay[key] = calData[i];
   }
 
-  // Build rows (exclude zero-pnl days)
   const statsRows = Object.entries(pnlByDay)
     .filter(([, pnl]) => pnl !== 0)
     .map(([day, pnl]) => {
@@ -191,7 +222,6 @@ async function doSeed(): Promise<void> {
       };
     });
 
-  // Override today with exact numbers
   const todayStats = {
     id: `ds-acc1-${today}`,
     accountId: "acc-1",
@@ -210,10 +240,11 @@ async function doSeed(): Promise<void> {
   if (todayIdx >= 0) statsRows[todayIdx] = todayStats;
   else statsRows.push(todayStats);
 
-  // Single bulk INSERT — one IPC call instead of ~40
+  // Single bulk INSERT
   if (statsRows.length > 0) {
     await db.insert(dailyStats).values(statsRows).onConflictDoNothing();
   }
+  console.log("[seed] ✓ daily_stats inserted", statsRows.length, "rows");
 
   // ── Quotes ────────────────────────────────────────────────────────────────────
   console.log("[seed] → quotes");
@@ -261,6 +292,7 @@ async function doSeed(): Promise<void> {
       isActive: true,
     },
   ]);
+  console.log("[seed] ✓ quotes inserted");
 
-  console.log("[seed] Demo data seeded successfully.");
+  console.log("[seed] ✓ All demo data seeded successfully.");
 }
