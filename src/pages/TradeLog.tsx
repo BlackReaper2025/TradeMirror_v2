@@ -4,10 +4,17 @@ import { Plus, TrendingUp, TrendingDown, BarChart2, Hash } from "lucide-react";
 import { Panel } from "../components/ui/Panel";
 import { TradeTable } from "../components/tradelog/TradeTable";
 import { useDatabase } from "../db/DatabaseProvider";
-import { getAllTradesWithJournal, getSettings, getAccount, type TradeWithJournal, type Account } from "../db/queries";
-
-// TradeForm is imported lazily below to keep this file clean
-import { TradeForm } from "../components/tradelog/TradeForm";
+import {
+  getAllTradesWithJournal,
+  getSettings,
+  getAccount,
+  createTrade,
+  createJournalEntry,
+  recalculateDailyStats,
+  type TradeWithJournal,
+  type Account,
+} from "../db/queries";
+import { TradeForm, type TradeFormValues } from "../components/tradelog/TradeForm";
 
 function fmt$(n: number) {
   const abs = Math.abs(n).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -16,10 +23,11 @@ function fmt$(n: number) {
 
 export function TradeLog() {
   const { ready } = useDatabase();
-  const [account, setAccount]   = useState<Account | null>(null);
-  const [trades, setTrades]     = useState<TradeWithJournal[]>([]);
-  const [loading, setLoading]   = useState(true);
-  const [showForm, setShowForm] = useState(false);
+  const [account, setAccount]     = useState<Account | null>(null);
+  const [trades, setTrades]       = useState<TradeWithJournal[]>([]);
+  const [loading, setLoading]     = useState(true);
+  const [showForm, setShowForm]   = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     if (!ready) return;
@@ -40,6 +48,57 @@ export function TradeLog() {
   }, [ready]);
 
   useEffect(() => { load(); }, [load]);
+
+  // ── Save a new trade + optional journal entry ──────────────────────────────
+  const handleSave = useCallback(async (values: TradeFormValues) => {
+    if (!account) return;
+    setSaveError(null);
+    try {
+      const tradeId   = `t-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+      const journalId = `j-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+
+      // Determine day string from openedAt for stats recalc
+      const day = values.openedAt.split("T")[0];
+
+      await createTrade({
+        id:             tradeId,
+        accountId:      account.id,
+        openedAt:       values.openedAt.includes("T") ? values.openedAt + ":00Z" : values.openedAt,
+        closedAt:       values.closedAt ? values.closedAt + ":00Z" : undefined,
+        instrument:     values.instrument.trim(),
+        side:           values.side,
+        setupName:      values.setupName.trim() || undefined,
+        entryPrice:     values.entryPrice  ? parseFloat(values.entryPrice)  : undefined,
+        stopPrice:      values.stopPrice   ? parseFloat(values.stopPrice)   : undefined,
+        targetPrice:    values.targetPrice ? parseFloat(values.targetPrice) : undefined,
+        size:           values.size        ? parseFloat(values.size)        : undefined,
+        fees:           values.fees        ? parseFloat(values.fees)        : 0,
+        pnl:            values.pnl         ? parseFloat(values.pnl)         : 0,
+        technicalNotes: values.technicalNotes.trim() || undefined,
+        tags:           values.tags.trim() || undefined,
+      });
+
+      await createJournalEntry({
+        id:              journalId,
+        tradeId:         tradeId,
+        emotionBefore:   values.emotionBefore   || undefined,
+        emotionAfter:    values.emotionAfter     || undefined,
+        mistakes:        values.mistakes.trim()  || undefined,
+        lessons:         values.lessons.trim()   || undefined,
+        confidenceScore: values.confidenceScore  ? parseInt(values.confidenceScore)  : undefined,
+        disciplineScore: values.disciplineScore  ? parseInt(values.disciplineScore)  : undefined,
+        freeformNotes:   values.freeformNotes.trim() || undefined,
+      });
+
+      await recalculateDailyStats(account.id, day);
+
+      setShowForm(false);
+      await load();
+    } catch (err) {
+      console.error("[TradeLog] save error:", err);
+      setSaveError(String(err));
+    }
+  }, [account, load]);
 
   // ── Summary stats from loaded trades ──────────────────────────────────────
   const wins    = trades.filter((t) => (t.pnl ?? 0) > 0);
@@ -123,12 +182,23 @@ export function TradeLog() {
         )}
       </Panel>
 
+      {/* ── Save error toast ────────────────────────────────────────────────── */}
+      {saveError && (
+        <div
+          className="fixed bottom-6 right-6 z-50 px-4 py-3 rounded-xl text-[12px] max-w-sm"
+          style={{ background: "rgba(239,68,68,0.15)", border: "1px solid rgba(239,68,68,0.3)", color: "#f87171" }}
+        >
+          <strong>Save failed:</strong> {saveError}
+          <button className="ml-3 underline" onClick={() => setSaveError(null)}>dismiss</button>
+        </div>
+      )}
+
       {/* ── Trade entry form (slide-over) ───────────────────────────────────── */}
       {showForm && account && (
         <TradeForm
           account={account}
           onClose={() => setShowForm(false)}
-          onSaved={async () => { setShowForm(false); await load(); }}
+          onSaved={handleSave}
         />
       )}
     </div>
