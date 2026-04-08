@@ -1,0 +1,24 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm run:*)",
+      "Bash(export PATH=\"/c/Program Files/nodejs:$PATH\")",
+      "mcp__Claude_Preview__preview_start",
+      "Read(//c/Program Files/nodejs//**)",
+      "Read(//c/Program Files/nodejs/**)",
+      "Bash(curl -s http://localhost:5173)",
+      "Bash(pkill -f \"vite\")",
+      "Bash(netstat -ano)",
+      "Bash(taskkill /PID 10788 /F)",
+      "Bash(taskkill /PID 9964 /F)",
+      "Bash(cmd.exe /c \"taskkill /PID 10788 /F\")",
+      "Bash(cmd.exe /c \"taskkill /PID 9964 /F\")",
+      "Bash(cmd.exe /c \"taskkill /F /PID 10788 2>&1\")",
+      "Bash(cmd.exe /c \"tasklist /FI \\\\\"PID eq 10788\\\\\" 2>&1\")",
+      "Bash(cmd.exe /c \"netstat -b -a -n -o 2>&1 | findstr :5173\")",
+      "Bash(curl -s http://localhost:5174)",
+      "Bash(pkill -f \"vite.js --port 5174\")",
+      "Bash(pkill -f \"vite.js\")"
+    ]
+  }
+}
