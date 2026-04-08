@@ -10,6 +10,21 @@ let _db: AppDb | null = null;
 // all await the same open operation instead of racing to call Database.load() twice.
 let _initPromise: Promise<AppDb> | null = null;
 
+/**
+ * tauri-plugin-sql only understands null, numbers, strings, and Uint8Array as
+ * bind parameters. JS booleans (true/false) and undefined are not valid — they
+ * cause silent bind failures or crashes on the Rust side.
+ * This helper coerces every param to a safe SQLite-compatible value.
+ */
+function serializeParams(params: unknown[]): unknown[] {
+  return params.map((p) => {
+    if (p === undefined) return null;
+    if (p === true) return 1;
+    if (p === false) return 0;
+    return p;
+  });
+}
+
 async function openDb(): Promise<AppDb> {
   console.log("[db] Opening sqlite:trademirror.db …");
   const sqlite = await Database.load("sqlite:trademirror.db");
@@ -17,15 +32,13 @@ async function openDb(): Promise<AppDb> {
 
   _db = drizzle(
     async (sql, params, method) => {
+      const safe = serializeParams(params as unknown[]);
       if (method === "run") {
-        await sqlite.execute(sql, params as unknown[]);
+        await sqlite.execute(sql, safe);
         return { rows: [] };
       }
       // SELECT — plugin returns array of row-objects; proxy expects array of value-arrays
-      const rows = await sqlite.select<Record<string, unknown>[]>(
-        sql,
-        params as unknown[]
-      );
+      const rows = await sqlite.select<Record<string, unknown>[]>(sql, safe);
       return {
         rows: (rows as Record<string, unknown>[]).map((row) =>
           Object.values(row)
