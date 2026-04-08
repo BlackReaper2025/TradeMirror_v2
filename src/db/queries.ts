@@ -72,6 +72,42 @@ export async function getAccount(id: string): Promise<Account | null> {
   return rows[0] ?? null;
 }
 
+// ─── Dashboard: all-time account stats ───────────────────────────────────────
+// Used for the stat cards: Win Rate, Avg Win, Avg Loss, Profit Factor, Trades.
+// Computed live from the trades table — NOT from daily_stats.
+
+export interface AllTimeStats {
+  tradeCount:   number;
+  winCount:     number;
+  lossCount:    number;
+  winRate:      number;  // 0-100
+  avgWin:       number;
+  avgLoss:      number;
+  profitFactor: number;
+}
+
+export async function getAllTimeStats(accountId: string): Promise<AllTimeStats> {
+  const db = getDb();
+
+  const allTrades = await db
+    .select({ pnl: trades.pnl })
+    .from(trades)
+    .where(eq(trades.accountId, accountId));
+
+  const wins   = allTrades.filter((t) => (t.pnl ?? 0) > 0);
+  const losses = allTrades.filter((t) => (t.pnl ?? 0) < 0);
+
+  const tradeCount   = allTrades.length;
+  const winCount     = wins.length;
+  const lossCount    = losses.length;
+  const winRate      = tradeCount > 0 ? (winCount / tradeCount) * 100 : 0;
+  const avgWin       = winCount  > 0 ? wins.reduce((s, t)   => s + (t.pnl ?? 0), 0) / winCount   : 0;
+  const avgLoss      = lossCount > 0 ? Math.abs(losses.reduce((s, t) => s + (t.pnl ?? 0), 0)) / lossCount : 0;
+  const profitFactor = avgLoss > 0 ? (avgWin * winCount) / (avgLoss * Math.max(lossCount, 1)) : 0;
+
+  return { tradeCount, winCount, lossCount, winRate, avgWin, avgLoss, profitFactor };
+}
+
 // ─── Dashboard: today's stats ─────────────────────────────────────────────────
 
 export async function getTodayStats(accountId: string) {

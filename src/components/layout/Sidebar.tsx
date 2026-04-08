@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import {
   LayoutDashboard,
   ScrollText,
@@ -8,6 +9,9 @@ import {
   Settings,
 } from "lucide-react";
 import { clsx } from "clsx";
+import { useDatabase } from "../../db/DatabaseProvider";
+import { tradeEvents } from "../../lib/tradeEvents";
+import { getSettings, getAccount, type Account } from "../../db/queries";
 
 export type Page =
   | "dashboard"
@@ -25,12 +29,12 @@ interface NavItem {
 }
 
 const NAV_ITEMS: NavItem[] = [
-  { id: "dashboard",       label: "Dashboard",       icon: LayoutDashboard },
-  { id: "trade-log",       label: "Trade Log",       icon: ScrollText      },
-  { id: "calendar",        label: "Calendar",        icon: CalendarDays    },
-  { id: "analytics",       label: "Analytics",       icon: BarChart2       },
-  { id: "risk-calculator", label: "Risk Calc",       icon: Calculator      },
-  { id: "inspiration",     label: "Inspiration",     icon: ImageIcon       },
+  { id: "dashboard",       label: "Dashboard",   icon: LayoutDashboard },
+  { id: "trade-log",       label: "Trade Log",   icon: ScrollText      },
+  { id: "calendar",        label: "Calendar",    icon: CalendarDays    },
+  { id: "analytics",       label: "Analytics",   icon: BarChart2       },
+  { id: "risk-calculator", label: "Risk Calc",   icon: Calculator      },
+  { id: "inspiration",     label: "Inspiration", icon: ImageIcon       },
 ];
 
 interface SidebarProps {
@@ -38,7 +42,38 @@ interface SidebarProps {
   onNavigate: (page: Page) => void;
 }
 
+function formatBalance(n: number) {
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+    minimumFractionDigits: 2,
+  }).format(n);
+}
+
 export function Sidebar({ activePage, onNavigate }: SidebarProps) {
+  const { ready } = useDatabase();
+  const [account, setAccount] = useState<Account | null>(null);
+
+  const loadAccount = async () => {
+    if (!ready) return;
+    try {
+      const settings = await getSettings();
+      const acc = await getAccount(settings?.selectedAccountId ?? "acc-1");
+      setAccount(acc);
+    } catch (err) {
+      console.error("[Sidebar] failed to load account:", err);
+    }
+  };
+
+  // Load on mount
+  useEffect(() => { loadAccount(); }, [ready]);
+
+  // Refresh whenever any trade changes (balance updates)
+  useEffect(() => {
+    if (!ready) return;
+    return tradeEvents.subscribe(loadAccount);
+  }, [ready]);
+
   return (
     <aside
       className="flex flex-col h-full select-none"
@@ -83,8 +118,8 @@ export function Sidebar({ activePage, onNavigate }: SidebarProps) {
               )}
               style={{
                 background: isActive ? "var(--accent-dim)" : "transparent",
-                color: isActive ? "var(--accent-text)" : "var(--text-secondary)",
-                border: isActive ? "1px solid var(--accent-border)" : "1px solid transparent",
+                color:      isActive ? "var(--accent-text)" : "var(--text-secondary)",
+                border:     isActive ? "1px solid var(--accent-border)" : "1px solid transparent",
               }}
               onMouseEnter={(e) => {
                 if (!isActive) {
@@ -106,7 +141,7 @@ export function Sidebar({ activePage, onNavigate }: SidebarProps) {
         })}
       </nav>
 
-      {/* Bottom — settings + account indicator */}
+      {/* Bottom — settings + active account */}
       <div
         className="px-3 pb-4 flex flex-col gap-0.5"
         style={{ borderTop: "1px solid var(--border-subtle)", paddingTop: 12 }}
@@ -128,7 +163,7 @@ export function Sidebar({ activePage, onNavigate }: SidebarProps) {
           <span>Settings</span>
         </button>
 
-        {/* Active account pill */}
+        {/* Active account pill — live data */}
         <div
           className="mt-3 mx-1 px-3 py-3 rounded-xl"
           style={{ background: "var(--bg-panel)", border: "1px solid var(--border-subtle)" }}
@@ -137,10 +172,10 @@ export function Sidebar({ activePage, onNavigate }: SidebarProps) {
             Active Account
           </div>
           <div className="text-[13px] font-semibold" style={{ color: "var(--text-primary)" }}>
-            FTMO Challenge
+            {account?.name ?? "—"}
           </div>
-          <div className="text-[11px]" style={{ color: "var(--text-secondary)" }}>
-            $102,340.00
+          <div className="text-[11px] tabular-nums" style={{ color: "var(--text-secondary)" }}>
+            {account != null ? formatBalance(account.currentBalance) : "—"}
           </div>
           <div className="flex items-center gap-1.5 mt-1.5">
             <span className="w-1.5 h-1.5 rounded-full pulse-dot" style={{ background: "var(--accent)" }} />

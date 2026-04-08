@@ -54,7 +54,7 @@ export function Dashboard() {
             <AccountBalance account={data.account} todayStats={data.todayStats} />
           </div>
           <div style={{ minHeight: 220 }}>
-            <StatsRow todayStats={data.todayStats} />
+            <StatsRow allTimeStats={data.allTimeStats} />
           </div>
         </div>
 
