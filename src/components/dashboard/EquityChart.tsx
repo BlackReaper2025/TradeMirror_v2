@@ -1,9 +1,12 @@
 // ─── EquityChart — standalone equity curve panel with timeframe selector ──────
 import React, { useState, useMemo, useEffect } from "react";
+import { invoke, convertFileSrc } from "@tauri-apps/api/core";
+import { getSlideshowFolder } from "../../lib/preferences";
 import {
   AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
   ComposedChart, useXAxisScale, useYAxisScale,
 } from "recharts";
+import { Images, ChevronLeft, ChevronRight } from "lucide-react";
 import { Panel } from "../ui/Panel";
 import type { Account, Candle } from "../../db/queries";
 import { getHourlyCandles, getDailyCandles } from "../../db/queries";
@@ -172,6 +175,124 @@ function CandleChart({ candles, startingBalance }: { candles: Candle[]; starting
   );
 }
 
+// ─── Slideshow error boundary — prevents black screen on any render error ──────
+
+class SlideshowBoundary extends React.Component<
+  { children: React.ReactNode },
+  { err: string | null }
+> {
+  state = { err: null };
+  static getDerivedStateFromError(e: Error) { return { err: e.message ?? "Unknown error" }; }
+  render() {
+    if (this.state.err) return (
+      <div className="h-full flex items-center justify-center px-6 text-center">
+        <span className="text-[12px]" style={{ color: "var(--text-muted)" }}>
+          Slideshow error: {this.state.err}
+        </span>
+      </div>
+    );
+    return this.props.children;
+  }
+}
+
+// ─── Slideshow view ───────────────────────────────────────────────────────────
+
+// Normalise Windows backslashes → forward slashes so asset protocol resolves correctly
+function toAssetSrc(filePath: string): string {
+  const normalised = filePath.replace(/\\/g, "/");
+  return convertFileSrc(normalised);
+}
+
+function SlideshowView() {
+  const [images, setImages] = useState<string[]>([]);
+  const [idx,    setIdx]    = useState(0);
+  const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
+  const [errMsg, setErrMsg] = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+    const folder = getSlideshowFolder();
+    if (!folder) {
+      setStatus("error");
+      setErrMsg("No folder set. Add one in Settings → Inspiration.");
+      return;
+    }
+    invoke<string[]>("list_images", { folder })
+      .then(paths => {
+        if (cancelled) return;
+        if (paths.length === 0) { setStatus("error"); setErrMsg("No images found in that folder."); return; }
+        setImages(paths);
+        setStatus("ready");
+      })
+      .catch((e: unknown) => {
+        if (cancelled) return;
+        setStatus("error");
+        setErrMsg(`Could not read folder: ${String(e)}`);
+      });
+    return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
+    if (images.length < 2) return;
+    const id = setInterval(() => setIdx(i => (i + 1) % images.length), 30_000);
+    return () => clearInterval(id);
+  }, [images.length]);
+
+  if (status === "error") return (
+    <div className="h-full flex items-center justify-center px-6 text-center">
+      <span className="text-[13px]" style={{ color: "var(--text-muted)" }}>{errMsg}</span>
+    </div>
+  );
+
+  if (status === "loading" || images.length === 0) return (
+    <div className="h-full flex items-center justify-center">
+      <span className="text-[13px]" style={{ color: "var(--text-muted)" }}>Loading…</span>
+    </div>
+  );
+
+  const src = toAssetSrc(images[idx]);
+
+  return (
+    <div className="relative h-full w-full flex items-center justify-center" style={{ background: "#000" }}>
+      <img
+        key={src}
+        src={src}
+        alt=""
+        className="h-full w-full"
+        style={{ objectFit: "contain" }}
+        onError={() => {
+          // Skip this image and try the next one
+          if (images.length > 1) setIdx(i => (i + 1) % images.length);
+        }}
+      />
+      {images.length > 1 && (
+        <>
+          <button
+            onClick={() => setIdx(i => (i - 1 + images.length) % images.length)}
+            className="absolute left-3 w-7 h-7 rounded-lg flex items-center justify-center"
+            style={{ background: "rgba(0,0,0,0.45)", color: "rgba(255,255,255,0.7)", border: "1px solid rgba(255,255,255,0.12)" }}
+          >
+            <ChevronLeft size={14} />
+          </button>
+          <button
+            onClick={() => setIdx(i => (i + 1) % images.length)}
+            className="absolute right-3 w-7 h-7 rounded-lg flex items-center justify-center"
+            style={{ background: "rgba(0,0,0,0.45)", color: "rgba(255,255,255,0.7)", border: "1px solid rgba(255,255,255,0.12)" }}
+          >
+            <ChevronRight size={14} />
+          </button>
+          <span
+            className="absolute bottom-3 right-3 text-[10px] tabular-nums px-2 py-0.5 rounded"
+            style={{ background: "rgba(0,0,0,0.5)", color: "rgba(255,255,255,0.5)" }}
+          >
+            {idx + 1}/{images.length}
+          </span>
+        </>
+      )}
+    </div>
+  );
+}
+
 // ─── Timeframe button ──────────────────────────────────────────────────────────
 
 function TfButton({ label, active, onClick }: { label: string; active: boolean; onClick: () => void }) {
@@ -201,9 +322,10 @@ interface Props {
 }
 
 export function EquityChart({ equityCurve, account }: Props) {
-  const [timeframe, setTimeframe] = useState<Timeframe>("ALL");
-  const [candles, setCandles]     = useState<Candle[]>([]);
-  const { ready }                 = useDatabase();
+  const [timeframe, setTimeframe]   = useState<Timeframe>("ALL");
+  const [candles, setCandles]       = useState<Candle[]>([]);
+  const [viewMode, setViewMode]     = useState<"chart" | "slideshow">("chart");
+  const { ready }                   = useDatabase();
 
   const isCandle = CANDLE_TIMEFRAMES.includes(timeframe);
 
@@ -235,24 +357,43 @@ export function EquityChart({ equityCurve, account }: Props) {
         className="flex items-center justify-between px-5 py-3 shrink-0"
         style={{ borderBottom: "1px solid var(--border-subtle)" }}
       >
-        <div className="flex items-center gap-3">
+        <div className="flex items-center">
           <span className="text-[14px] font-semibold uppercase tracking-widest" style={{ color: "var(--text-secondary)" }}>
-            Equity Curve
+            {viewMode === "chart" ? "Equity Curve" : "Inspiration"}
           </span>
-          <span className="text-[11px] tabular-nums font-medium" style={{ color: isPos ? "var(--accent-text)" : "#f87171" }}>
-            {isPos ? "+" : ""}
-            {new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(allTimeGain)} all time
-          </span>
+          {viewMode === "chart" && (
+            <span className="text-[11px] tabular-nums font-medium ml-3" style={{ color: isPos ? "var(--accent-text)" : "#f87171" }}>
+              {isPos ? "+" : ""}
+              {new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(allTimeGain)} all time
+            </span>
+          )}
         </div>
-        <div className="flex items-center gap-1">
+        <button
+          onClick={() => setViewMode(m => m === "chart" ? "slideshow" : "chart")}
+          title={viewMode === "chart" ? "Switch to slideshow" : "Switch to equity curve"}
+          className="w-7 h-7 rounded-lg flex items-center justify-center transition-colors"
+          style={{
+            background: viewMode === "slideshow" ? "var(--accent-dim)" : "rgba(255,255,255,0.06)",
+            border: viewMode === "slideshow" ? "1px solid var(--accent-border)" : "1px solid rgba(255,255,255,0.1)",
+            color: viewMode === "slideshow" ? "var(--accent-text)" : "var(--text-muted)",
+          }}
+        >
+          <Images size={13} />
+        </button>
+      </div>
+
+      {/* ── Content — flex-1 ── */}
+      <div className="flex-1 relative" style={{ minHeight: 0 }}>
+        {viewMode === "slideshow" ? (
+          <SlideshowBoundary><SlideshowView /></SlideshowBoundary>
+        ) : (
+        <>
+        {/* Timeframe buttons — top right */}
+        <div className="absolute top-3 right-3 flex items-center gap-1" style={{ zIndex: 2 }}>
           {TIMEFRAMES.map(tf => (
             <TfButton key={tf} label={tf} active={timeframe === tf} onClick={() => setTimeframe(tf)} />
           ))}
         </div>
-      </div>
-
-      {/* ── Chart — flex-1 ── */}
-      <div className="flex-1 relative" style={{ minHeight: 0 }}>
         {isCandle ? (
           <CandleChart candles={candles} startingBalance={startingBalance} />
         ) : filtered.length < 2 ? (
@@ -297,7 +438,8 @@ export function EquityChart({ equityCurve, account }: Props) {
             </AreaChart>
           </ResponsiveContainer>
         )}
-
+        </>
+        )}
       </div>
 
     </Panel>

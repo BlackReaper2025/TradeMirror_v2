@@ -1,14 +1,19 @@
 import { useState, useEffect } from "react";
-import { Plus, Check } from "lucide-react";
+import { Plus, Check, Trash2, FolderOpen } from "lucide-react";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { Panel, PanelHeader } from "../components/ui/Panel";
 import { getTimeFormat, setTimeFormat, type TimeFormat } from "../lib/preferences";
-import { getBrokerageUrl, setBrokerageUrl, getMusicUrl, setMusicUrl } from "../lib/preferences";
+import { getBrokerageUrl, setBrokerageUrl, getMusicUrl, setMusicUrl, getSlideshowFolder, setSlideshowFolder } from "../lib/preferences";
 import {
   getSettings,
   getActiveAccounts,
   createAccount,
   upsertSelectedAccount,
   clearAllTradesForAccount,
+  getAllQuotes,
+  addQuote,
+  deleteQuote,
+  getAllTradesForExport,
   type Account,
 } from "../db/queries";
 import { eq } from "drizzle-orm";
@@ -153,14 +158,25 @@ export function Settings() {
   }
 
   // ── External URLs ──
-  const [brokerUrl, setBrokerLocal] = useState(getBrokerageUrl);
-  const [musicUrl,  setMusicLocal]  = useState(getMusicUrl);
+  const [brokerUrl,       setBrokerLocal]       = useState(getBrokerageUrl);
+  const [musicUrl,        setMusicLocal]        = useState(getMusicUrl);
+  const [slideshowFolder, setSlideshowLocal]    = useState(getSlideshowFolder);
 
   function saveBrokerUrl() {
     setBrokerageUrl(brokerUrl.trim());
   }
   function saveMusicUrl() {
     setMusicUrl(musicUrl.trim());
+  }
+  function saveSlideshowFolder() {
+    setSlideshowFolder(slideshowFolder.trim());
+  }
+  async function browseSlideshowFolder() {
+    const selected = await openDialog({ directory: true, multiple: false });
+    if (typeof selected === "string" && selected) {
+      setSlideshowLocal(selected);
+      setSlideshowFolder(selected);
+    }
   }
 
   // ── All accounts + selected ──
@@ -284,6 +300,96 @@ export function Settings() {
     }
   }
 
+  // ── Psychology Quotes ──
+  const [allQuotes,      setAllQuotes]      = useState<Array<{ id: number; text: string; author: string; isActive: boolean }>>([]);
+  const [newQuoteText,   setNewQuoteText]   = useState("");
+  const [newQuoteAuthor, setNewQuoteAuthor] = useState("");
+  const [quoteAdding,    setQuoteAdding]    = useState(false);
+  const [showAddQuote,   setShowAddQuote]   = useState(false);
+
+  async function loadQuotes() {
+    if (!ready) return;
+    const rows = await getAllQuotes();
+    setAllQuotes(rows);
+  }
+  useEffect(() => { loadQuotes(); }, [ready]);
+
+  async function handleAddQuote() {
+    if (!newQuoteText.trim() || !newQuoteAuthor.trim()) return;
+    setQuoteAdding(true);
+    try {
+      await addQuote(newQuoteText.trim(), newQuoteAuthor.trim());
+      setNewQuoteText("");
+      setNewQuoteAuthor("");
+      setShowAddQuote(false);
+      await loadQuotes();
+      tradeEvents.notify();
+    } finally {
+      setQuoteAdding(false);
+    }
+  }
+
+  async function handleDeleteQuote(id: number) {
+    await deleteQuote(id);
+    await loadQuotes();
+    tradeEvents.notify();
+  }
+
+  // ── Export trades ──
+  const [exporting, setExporting] = useState(false);
+  const [exportDone, setExportDone] = useState(false);
+
+  async function handleExport() {
+    if (!ready) return;
+    setExporting(true);
+    try {
+      const rows = await getAllTradesForExport();
+
+      const esc = (v: unknown) => {
+        const s = v == null ? "" : String(v);
+        return s.includes(",") || s.includes('"') || s.includes("\n")
+          ? `"${s.replace(/"/g, '""')}"` : s;
+      };
+
+      const headers = [
+        "ID", "Account ID", "Opened At", "Closed At", "Instrument", "Side",
+        "Setup", "Entry Price", "Stop Price", "Target Price", "Size", "Fees", "P&L",
+        "Technical Notes", "Tags",
+        "Emotion Before", "Emotion After", "Mistakes", "Lessons",
+        "Confidence Score", "Discipline Score", "Journal Notes",
+      ];
+
+      const dataRows = rows.map(t => [
+        esc(t.id), esc(t.accountId), esc(t.openedAt), esc(t.closedAt),
+        esc(t.instrument), esc(t.side), esc(t.setupName),
+        esc(t.entryPrice), esc(t.stopPrice), esc(t.targetPrice),
+        esc(t.size), esc(t.fees), esc(t.pnl),
+        esc(t.technicalNotes), esc(t.tags),
+        esc(t.journal?.emotionBefore), esc(t.journal?.emotionAfter),
+        esc(t.journal?.mistakes), esc(t.journal?.lessons),
+        esc(t.journal?.confidenceScore), esc(t.journal?.disciplineScore),
+        esc(t.journal?.freeformNotes),
+      ].join(","));
+
+      const csv = [headers.join(","), ...dataRows].join("\r\n");
+      const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+      const url  = URL.createObjectURL(blob);
+      const a    = document.createElement("a");
+      const date = new Date().toISOString().split("T")[0];
+      a.href     = url;
+      a.download = `trademirror-trades-${date}.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
+
+      setExportDone(true);
+      setTimeout(() => setExportDone(false), 3000);
+    } catch (err) {
+      console.error("[Settings] export failed:", err);
+    } finally {
+      setExporting(false);
+    }
+  }
+
   // ── Clear trades ──
   const [clearing,      setClearing]      = useState(false);
   const [clearConfirm,  setClearConfirm]  = useState(false);
@@ -322,36 +428,6 @@ export function Settings() {
             Preferences are saved locally to this device.
           </p>
         </div>
-
-        {/* ── Display ── */}
-        <SectionTitle>Display</SectionTitle>
-        <Panel>
-          <PanelHeader label="Time Format" />
-          <div className="flex flex-col gap-2">
-            <ToggleOption label="12-hour" description="e.g. 02:30 PM" value="12h" selected={timeFormat === "12h"} onSelect={handleTimeFormatChange} />
-            <ToggleOption label="24-hour" description="e.g. 14:30" value="24h" selected={timeFormat === "24h"} onSelect={handleTimeFormatChange} />
-          </div>
-        </Panel>
-
-        {/* ── External Links ── */}
-        <SectionTitle>External Links</SectionTitle>
-        <Panel>
-          <PanelHeader label="Brokerage &amp; Music" />
-          <div className="flex flex-col gap-4">
-            <div className="flex items-end gap-3">
-              <div className="flex-1">
-                <FieldInput label="Brokerage / Prop Firm URL" value={brokerUrl} onChange={setBrokerLocal} placeholder="https://your-broker.com/dashboard" />
-              </div>
-              <SaveButton onClick={saveBrokerUrl}>Save</SaveButton>
-            </div>
-            <div className="flex items-end gap-3">
-              <div className="flex-1">
-                <FieldInput label="Music Playlist URL" value={musicUrl} onChange={setMusicLocal} placeholder="https://music.youtube.com/playlist?list=..." />
-              </div>
-              <SaveButton onClick={saveMusicUrl}>Save</SaveButton>
-            </div>
-          </div>
-        </Panel>
 
         {/* ── Accounts ── */}
         <SectionTitle>Accounts</SectionTitle>
@@ -482,6 +558,165 @@ export function Settings() {
           ) : (
             <p className="text-[13px]" style={{ color: "var(--text-muted)" }}>Loading account…</p>
           )}
+        </Panel>
+
+        {/* ── Display ── */}
+        <SectionTitle>Display</SectionTitle>
+        <Panel>
+          <PanelHeader label="Time Format" />
+          <div className="flex flex-col gap-2">
+            <ToggleOption label="12-hour" description="e.g. 02:30 PM" value="12h" selected={timeFormat === "12h"} onSelect={handleTimeFormatChange} />
+            <ToggleOption label="24-hour" description="e.g. 14:30" value="24h" selected={timeFormat === "24h"} onSelect={handleTimeFormatChange} />
+          </div>
+        </Panel>
+
+        {/* ── External Links ── */}
+        <SectionTitle>External Links</SectionTitle>
+        <Panel>
+          <PanelHeader label="Brokerage &amp; Music" />
+          <div className="flex flex-col gap-4">
+            <div className="flex items-end gap-3">
+              <div className="flex-1">
+                <FieldInput label="Brokerage / Prop Firm URL" value={brokerUrl} onChange={setBrokerLocal} placeholder="https://your-broker.com/dashboard" />
+              </div>
+              <SaveButton onClick={saveBrokerUrl}>Save</SaveButton>
+            </div>
+            <div className="flex items-end gap-3">
+              <div className="flex-1">
+                <FieldInput label="Music Playlist URL" value={musicUrl} onChange={setMusicLocal} placeholder="https://music.youtube.com/playlist?list=..." />
+              </div>
+              <SaveButton onClick={saveMusicUrl}>Save</SaveButton>
+            </div>
+          </div>
+        </Panel>
+
+        {/* ── Inspiration Slideshow ── */}
+        <SectionTitle>Inspiration</SectionTitle>
+        <Panel>
+          <PanelHeader label="Slideshow Folder" />
+          <div className="flex flex-col gap-2">
+            <p className="text-[12px]" style={{ color: "var(--text-muted)" }}>
+              Paste the full path to a local folder containing your inspiration images. The equity curve panel can display them as a slideshow.
+            </p>
+            <div className="flex items-end gap-3">
+              <div className="flex-1">
+                <FieldInput
+                  label="Folder Path"
+                  value={slideshowFolder}
+                  onChange={setSlideshowLocal}
+                  placeholder="e.g. C:\Users\Geoff\Pictures\Inspiration"
+                />
+              </div>
+              <button
+                onClick={browseSlideshowFolder}
+                className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-[12px] font-semibold transition-all shrink-0"
+                style={{
+                  background: "rgba(255,255,255,0.07)",
+                  border: "1px solid rgba(255,255,255,0.14)",
+                  color: "var(--text-secondary)",
+                }}
+                onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = "rgba(255,255,255,0.12)"; (e.currentTarget as HTMLElement).style.color = "var(--text-primary)"; }}
+                onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = "rgba(255,255,255,0.07)"; (e.currentTarget as HTMLElement).style.color = "var(--text-secondary)"; }}
+              >
+                <FolderOpen size={13} /> Browse
+              </button>
+              <SaveButton onClick={saveSlideshowFolder}>Save</SaveButton>
+            </div>
+          </div>
+        </Panel>
+
+        {/* ── Psychology Quotes ── */}
+        <SectionTitle>Psychology Quotes</SectionTitle>
+        <Panel>
+          <div className="flex items-center justify-between mb-3">
+            <PanelHeader label="Quote Library" />
+            <button
+              onClick={() => setShowAddQuote(v => !v)}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12px] font-semibold transition-all"
+              style={{
+                background: showAddQuote ? "var(--accent-dim)" : "rgba(255,255,255,0.07)",
+                border:     showAddQuote ? "1px solid var(--accent-border)" : "1px solid rgba(255,255,255,0.14)",
+                color:      showAddQuote ? "var(--accent-text)" : "var(--text-secondary)",
+              }}
+            >
+              <Plus size={12} /> Add Quote
+            </button>
+          </div>
+
+          {/* Add quote form */}
+          {showAddQuote && (
+            <div className="flex flex-col gap-3 mb-4 pb-4" style={{ borderBottom: "1px solid var(--border-subtle)" }}>
+              <FieldInput label="Quote" value={newQuoteText} onChange={setNewQuoteText} placeholder="Enter the quote text…" />
+              <FieldInput label="Author" value={newQuoteAuthor} onChange={setNewQuoteAuthor} placeholder="e.g. Mark Douglas" />
+              <div className="flex justify-end gap-2">
+                <button
+                  onClick={() => { setShowAddQuote(false); setNewQuoteText(""); setNewQuoteAuthor(""); }}
+                  className="px-4 py-2 rounded-lg text-[12px] font-semibold transition-all"
+                  style={{ background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.12)", color: "var(--text-secondary)" }}
+                >
+                  Cancel
+                </button>
+                <SaveButton
+                  onClick={handleAddQuote}
+                  disabled={quoteAdding || !newQuoteText.trim() || !newQuoteAuthor.trim()}
+                >
+                  {quoteAdding ? "Adding…" : "Add Quote"}
+                </SaveButton>
+              </div>
+            </div>
+          )}
+
+          {/* Quote list */}
+          <div className="flex flex-col gap-2 overflow-y-auto" style={{ maxHeight: 260 }}>
+            {allQuotes.length === 0 && (
+              <p className="text-[13px]" style={{ color: "var(--text-muted)" }}>No quotes yet. Add one above.</p>
+            )}
+            {allQuotes.map(q => (
+              <div
+                key={q.id}
+                className="flex items-start justify-between gap-3 px-4 py-3 rounded-lg"
+                style={{ background: "var(--bg-panel-alt)", border: "1px solid var(--border-subtle)" }}
+              >
+                <div className="flex-1 min-w-0">
+                  <p className="text-[13px] leading-snug" style={{ color: "var(--text-primary)" }}>{q.text}</p>
+                  <p className="text-[11px] mt-0.5 font-medium" style={{ color: "var(--text-muted)" }}>— {q.author}</p>
+                </div>
+                <button
+                  onClick={() => handleDeleteQuote(q.id)}
+                  className="shrink-0 w-6 h-6 rounded flex items-center justify-center transition-colors mt-0.5"
+                  style={{ color: "var(--text-muted)" }}
+                  onMouseEnter={e => (e.currentTarget as HTMLElement).style.color = "#f87171"}
+                  onMouseLeave={e => (e.currentTarget as HTMLElement).style.color = "var(--text-muted)"}
+                >
+                  <Trash2 size={13} />
+                </button>
+              </div>
+            ))}
+          </div>
+        </Panel>
+
+        {/* ── Data ── */}
+        <SectionTitle>Data</SectionTitle>
+        <Panel>
+          <PanelHeader label="Export" />
+          <div className="flex items-center justify-between">
+            <div>
+              <div className="text-[13px] font-medium" style={{ color: "var(--text-primary)" }}>Export trade history</div>
+              <div className="text-[11px] mt-0.5" style={{ color: "var(--text-muted)" }}>Downloads all trades and journal entries as a CSV file.</div>
+            </div>
+            <button
+              onClick={handleExport}
+              disabled={exporting || !ready}
+              className="ml-4 shrink-0 px-4 py-2 rounded-lg text-[12px] font-semibold transition-all disabled:opacity-50"
+              style={{
+                background: exportDone ? "rgba(74,222,128,0.1)" : "var(--accent-dim)",
+                border:     exportDone ? "1px solid rgba(74,222,128,0.3)" : "1px solid var(--accent-border)",
+                color:      exportDone ? "#4ade80" : "var(--accent-text)",
+              }}
+            >
+              {exporting ? "Exporting…" : exportDone ? "✓ Downloaded" : "Export CSV"}
+            </button>
+          </div>
         </Panel>
 
         {/* ── Developer Tools ── */}

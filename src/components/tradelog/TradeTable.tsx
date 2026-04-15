@@ -133,7 +133,7 @@ export function TradeTable({ trades, onNewTrade, onEditTrade, onDeleteTrade }: P
                 key={trade.id}
                 className="group transition-colors cursor-pointer"
                 style={{ borderBottom: "1px solid var(--border-subtle)" }}
-                onClick={() => onEditTrade(trade)}
+                onDoubleClick={() => onEditTrade(trade)}
                 onMouseEnter={(e) => (e.currentTarget.style.background = "var(--bg-panel-alt)")}
                 onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
               >

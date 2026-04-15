@@ -472,6 +472,54 @@ export async function getActiveQuotes(): Promise<Array<{ text: string; author: s
   return rows.map((q) => ({ text: q.text, author: q.author }));
 }
 
+export async function getAllQuotes(): Promise<Array<{ id: number; text: string; author: string; isActive: boolean }>> {
+  const db = getDb();
+  const rows = await db.select().from(quotes).orderBy(quotes.id);
+  return rows.map((q) => ({ id: q.id, text: q.text, author: q.author, isActive: q.isActive }));
+}
+
+export async function addQuote(text: string, author: string): Promise<void> {
+  const db = getDb();
+  await db.insert(quotes).values({ text, author, isActive: true });
+}
+
+export async function deleteQuote(id: number): Promise<void> {
+  const db = getDb();
+  await db.delete(quotes).where(eq(quotes.id, id));
+}
+
+// ─── Export: all trades across all accounts as CSV ────────────────────────────
+
+export async function getAllTradesForExport(): Promise<TradeWithJournal[]> {
+  const db = getDb();
+
+  const tradeRows = await db
+    .select()
+    .from(trades)
+    .orderBy(desc(trades.openedAt));
+
+  if (tradeRows.length === 0) return [];
+
+  const tradeIds = tradeRows.map((t) => t.id);
+  const allJournals = await db
+    .select()
+    .from(tradeJournal)
+    .where(
+      sql`${tradeJournal.tradeId} IN (${sql.join(
+        tradeIds.map((id) => sql`${id}`),
+        sql`, `
+      )})`
+    );
+
+  const journalByTradeId = new Map<string, TradeJournal>();
+  for (const j of allJournals) journalByTradeId.set(j.tradeId, j);
+
+  return tradeRows.map((t) => ({
+    ...t,
+    journal: journalByTradeId.get(t.id) ?? null,
+  }));
+}
+
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Phase 3 — Trade Log read/write

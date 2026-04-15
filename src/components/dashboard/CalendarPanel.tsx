@@ -135,13 +135,10 @@ export function CalendarPanel({ calendarDays, selectedDate, onSelectDate }: Prop
         WebkitMaskComposite: "xor",
         maskComposite: "exclude",
       } as React.CSSProperties} />
-    <Panel state className="h-full flex flex-col gap-0 p-0 overflow-hidden" style={{ border: "none", borderRadius: "14px", background: "radial-gradient(ellipse at top left, rgba(255,255,255,0.07) 0%, transparent 60%), rgba(8,12,18,0.55)", backdropFilter: "blur(10px)", WebkitBackdropFilter: "blur(10px)", boxShadow: "none" } as React.CSSProperties}>
+    <Panel state className="h-full flex flex-col overflow-hidden" style={{ border: "none", borderRadius: "14px", background: "radial-gradient(ellipse at top left, rgba(255,255,255,0.07) 0%, transparent 60%), rgba(8,12,18,0.55)", backdropFilter: "blur(10px)", WebkitBackdropFilter: "blur(10px)", boxShadow: "none" } as React.CSSProperties}>
 
       {/* ── Header ── */}
-      <div
-        className="flex items-center justify-between px-5 py-1.5 shrink-0"
-        style={{ borderBottom: "1px solid var(--border-subtle)" }}
-      >
+      <div className="flex items-center justify-between mb-3 shrink-0">
         <span className="text-[14px] font-semibold uppercase tracking-widest" style={{ color: "var(--text-secondary)" }}>
           Calendar
         </span>
@@ -171,7 +168,7 @@ export function CalendarPanel({ calendarDays, selectedDate, onSelectDate }: Prop
       </div>
 
       {/* ── Calendar grid ── */}
-      <div className="flex-1 flex flex-col min-h-0 px-4 pt-2 pb-2">
+      <div className="flex-1 flex flex-col min-h-0">
         {/* Day-of-week labels */}
         <div className="grid grid-cols-7 gap-1 mb-1.5">
           {DOW.map(d => (

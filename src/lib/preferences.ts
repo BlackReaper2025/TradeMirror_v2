@@ -5,9 +5,10 @@
 export type TimeFormat = "12h" | "24h";
 
 const KEYS = {
-  timeFormat:   "tm_time_format",
-  brokerageUrl: "tm_brokerage_url",
-  musicUrl:     "tm_music_url",
+  timeFormat:       "tm_time_format",
+  brokerageUrl:     "tm_brokerage_url",
+  musicUrl:         "tm_music_url",
+  slideshowFolder:  "tm_slideshow_folder",
 } as const;
 
 export function getTimeFormat(): TimeFormat {
@@ -31,5 +32,13 @@ export function getMusicUrl(): string {
 }
 export function setMusicUrl(url: string): void {
   localStorage.setItem(KEYS.musicUrl, url);
+  window.dispatchEvent(new CustomEvent("tm:prefs-changed"));
+}
+
+export function getSlideshowFolder(): string {
+  return localStorage.getItem(KEYS.slideshowFolder) ?? "";
+}
+export function setSlideshowFolder(path: string): void {
+  localStorage.setItem(KEYS.slideshowFolder, path);
   window.dispatchEvent(new CustomEvent("tm:prefs-changed"));
 }

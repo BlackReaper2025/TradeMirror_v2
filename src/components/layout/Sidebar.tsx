@@ -371,13 +371,8 @@ export function Sidebar({ activePage, onNavigate, collapsed, onToggleCollapse }:
           gap: 2,
         }}
       >
-        {/* Portfolio widget — expanded sidebar only, just above Brokerage */}
-        {!collapsed && (
-          <PortfolioWidget portfolio={portfolio} />
-        )}
-
         {/* Brokerage, Music, Settings */}
-        <div style={{ padding: collapsed ? "0 4px 8px" : "0 8px 8px", display: "flex", flexDirection: "column", gap: 2 }}>
+        <div style={{ padding: collapsed ? "0 4px 0" : "0 8px 0", display: "flex", flexDirection: "column", gap: 2 }}>
           <IconBtn
             icon={ExternalLink}
             label={brokerageUrl ? "Brokerage" : "Brokerage (set URL in Settings)"}
@@ -423,6 +418,11 @@ export function Sidebar({ activePage, onNavigate, collapsed, onToggleCollapse }:
               <span className="text-[10px]" style={{ color: "var(--accent-text)" }}>Live</span>
             </div>
           </div>
+        )}
+
+        {/* Portfolio widget — expanded sidebar only, on the bottom */}
+        {!collapsed && (
+          <PortfolioWidget portfolio={portfolio} />
         )}
       </div>
     </aside>
