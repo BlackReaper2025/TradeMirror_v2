@@ -1,6 +1,6 @@
 import { TrendingUp, TrendingDown } from "lucide-react";
 import { Panel } from "../ui/Panel";
-import type { Account, DailyStat } from "../../db/queries";
+import type { Account, TodayLiveStats } from "../../db/queries";
 
 function formatCurrency(n: number) {
   return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 2 }).format(n);
@@ -8,13 +8,13 @@ function formatCurrency(n: number) {
 
 interface Props {
   account: Account | null;
-  todayStats: DailyStat | null;
+  todayStats: TodayLiveStats;
 }
 
 export function AccountBalance({ account, todayStats }: Props) {
   if (!account) return null;
 
-  const pnl = todayStats?.totalPnl ?? 0;
+  const pnl = todayStats.totalPnl;
   const isPositive = pnl >= 0;
 
   const targetPct = ((pnl / account.dailyTarget) * 100).toFixed(0);
@@ -23,11 +23,11 @@ export function AccountBalance({ account, todayStats }: Props) {
   ).toFixed(2);
 
   return (
-    <Panel glow className="flex flex-col gap-4 h-full">
+    <Panel state className="flex flex-col gap-4 h-full">
       {/* Header row */}
       <div className="flex items-start justify-between">
         <div>
-          <div className="text-[11px] font-semibold uppercase tracking-widest" style={{ color: "var(--text-secondary)" }}>
+          <div className="text-[15px] font-semibold uppercase tracking-widest" style={{ color: "var(--text-secondary)" }}>
             Account Balance
           </div>
           <div className="text-[12px] mt-0.5" style={{ color: "var(--text-muted)" }}>
@@ -61,7 +61,7 @@ export function AccountBalance({ account, todayStats }: Props) {
         className="rounded-xl p-4"
         style={{ background: "var(--bg-panel-alt)", border: "1px solid var(--border-subtle)" }}
       >
-        <div className="text-[11px] font-semibold uppercase tracking-widest mb-2" style={{ color: "var(--text-secondary)" }}>
+        <div className="text-[15px] font-semibold uppercase tracking-widest mb-2" style={{ color: "var(--text-secondary)" }}>
           Today's P&L
         </div>
         <div className="flex items-end justify-between">
@@ -70,7 +70,7 @@ export function AccountBalance({ account, todayStats }: Props) {
               {isPositive ? "+" : ""}{formatCurrency(pnl)}
             </div>
             <div className="text-[12px] mt-1" style={{ color: "var(--text-secondary)" }}>
-              {todayStats?.tradeCount ?? 0} trades · {todayStats?.winCount ?? 0}W / {todayStats?.lossCount ?? 0}L
+              {todayStats.tradeCount} trades · {todayStats.winCount}W / {todayStats.lossCount}L
             </div>
           </div>
           <div className="text-right">

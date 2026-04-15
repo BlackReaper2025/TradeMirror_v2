@@ -5,8 +5,9 @@ interface PanelProps {
   children: ReactNode;
   className?: string;
   style?: CSSProperties;
-  glow?: boolean;       // adds accent-colored glow
-  padded?: boolean;     // default true
+  glow?: boolean;   // legacy: accent border + glow, no bg tint
+  state?: boolean;  // hero panel: tinted bg + stronger glow — reacts to theme state
+  padded?: boolean; // default true
   onClick?: () => void;
 }
 
@@ -14,7 +15,7 @@ interface PanelProps {
  * Base glass panel — the fundamental building block for all dashboard cards.
  * All colors come from CSS custom properties so the dynamic theme works automatically.
  */
-export function Panel({ children, className, style, glow = false, padded = true, onClick }: PanelProps) {
+export function Panel({ children, className, style, glow = false, state = false, padded = true, onClick }: PanelProps) {
   return (
     <div
       onClick={onClick}
@@ -22,7 +23,7 @@ export function Panel({ children, className, style, glow = false, padded = true,
         "panel relative overflow-hidden",
         padded && "p-5",
         onClick && "cursor-pointer transition-colors hover:border-[var(--border-medium)]",
-        glow && "panel-glow",
+        state ? "panel-state" : glow ? "panel-glow" : "",
         className
       )}
       style={style}
@@ -41,7 +42,7 @@ export function PanelHeader({ label, children }: PanelHeaderProps) {
   return (
     <div className="flex items-center justify-between mb-4">
       <span
-        className="text-[11px] font-semibold uppercase tracking-widest"
+        className="text-[14px] font-semibold uppercase tracking-widest"
         style={{ color: "var(--text-secondary)" }}
       >
         {label}

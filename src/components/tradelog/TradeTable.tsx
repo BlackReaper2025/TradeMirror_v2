@@ -1,11 +1,14 @@
 // ─── TradeTable — lists all trades for the selected account ──────────────────
-import { ArrowUpRight, ArrowDownRight, BookOpen } from "lucide-react";
+import { useState } from "react";
+import { ArrowUpRight, ArrowDownRight, BookOpen, Pencil, Trash2 } from "lucide-react";
 import { Badge } from "../ui/Badge";
 import type { TradeWithJournal } from "../../db/queries";
 
 interface Props {
   trades: TradeWithJournal[];
   onNewTrade: () => void;
+  onEditTrade: (trade: TradeWithJournal) => void;
+  onDeleteTrade: (tradeId: string) => void;
 }
 
 function fmt(n: number | null | undefined) {
@@ -53,9 +56,26 @@ const COL_HEADERS = [
   { label: "R:R",         width: 68  },
   { label: "P&L",         width: 100 },
   { label: "Journal",     width: 68  },
+  { label: "",            width: 72  }, // actions
 ];
 
-export function TradeTable({ trades, onNewTrade }: Props) {
+export function TradeTable({ trades, onNewTrade, onEditTrade, onDeleteTrade }: Props) {
+  // confirmDeleteId: trade whose delete button was first-clicked; second click confirms.
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+
+  function handleDeleteClick(e: React.MouseEvent, tradeId: string) {
+    e.stopPropagation(); // don't open the edit drawer
+    if (confirmDeleteId === tradeId) {
+      // Second click = confirmed
+      setConfirmDeleteId(null);
+      onDeleteTrade(tradeId);
+    } else {
+      setConfirmDeleteId(tradeId);
+      // Auto-cancel after 4 s
+      setTimeout(() => setConfirmDeleteId((cur) => (cur === tradeId ? null : cur)), 4000);
+    }
+  }
+
   if (trades.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center flex-1 gap-4" style={{ color: "var(--text-muted)" }}>
@@ -86,12 +106,12 @@ export function TradeTable({ trades, onNewTrade }: Props) {
 
   return (
     <div className="flex-1 overflow-auto">
-      <table className="w-full border-collapse" style={{ minWidth: 900 }}>
+      <table className="w-full border-collapse" style={{ minWidth: 960 }}>
         <thead>
           <tr style={{ borderBottom: "1px solid var(--border-subtle)" }}>
-            {COL_HEADERS.map((col) => (
+            {COL_HEADERS.map((col, i) => (
               <th
-                key={col.label}
+                key={i}
                 className="text-left px-3 py-2.5 text-[11px] font-semibold uppercase tracking-widest"
                 style={{ color: "var(--text-muted)", width: col.width, whiteSpace: "nowrap" }}
               >
@@ -102,16 +122,18 @@ export function TradeTable({ trades, onNewTrade }: Props) {
         </thead>
         <tbody>
           {trades.map((trade) => {
-            const pnl     = trade.pnl ?? 0;
-            const isWin   = pnl > 0;
-            const isLoss  = pnl < 0;
+            const pnl      = trade.pnl ?? 0;
+            const isWin    = pnl > 0;
+            const isLoss   = pnl < 0;
             const pnlColor = isWin ? "#4ade80" : isLoss ? "#f87171" : "var(--text-secondary)";
+            const awaitingConfirm = confirmDeleteId === trade.id;
 
             return (
               <tr
                 key={trade.id}
-                className="group transition-colors"
+                className="group transition-colors cursor-pointer"
                 style={{ borderBottom: "1px solid var(--border-subtle)" }}
+                onClick={() => onEditTrade(trade)}
                 onMouseEnter={(e) => (e.currentTarget.style.background = "var(--bg-panel-alt)")}
                 onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
               >
@@ -210,6 +232,42 @@ export function TradeTable({ trades, onNewTrade }: Props) {
                   ) : (
                     <span className="text-[11px]" style={{ color: "var(--text-muted)" }}>—</span>
                   )}
+                </td>
+
+                {/* Actions */}
+                <td className="px-3 py-3" onClick={(e) => e.stopPropagation()}>
+                  <div className="flex items-center gap-1">
+                    {/* Edit hint icon — subtle, reinforces row is clickable */}
+                    <button
+                      title="Edit trade"
+                      onClick={(e) => { e.stopPropagation(); onEditTrade(trade); }}
+                      className="w-6 h-6 rounded flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+                      style={{ color: "var(--text-muted)" }}
+                    >
+                      <Pencil size={12} />
+                    </button>
+
+                    {/* Delete button — two-click confirm */}
+                    <button
+                      title={awaitingConfirm ? "Click again to confirm delete" : "Delete trade"}
+                      onClick={(e) => handleDeleteClick(e, trade.id)}
+                      className="w-6 h-6 rounded flex items-center justify-center opacity-0 group-hover:opacity-100 transition-all"
+                      style={{
+                        color: awaitingConfirm ? "#f87171" : "var(--text-muted)",
+                        background: awaitingConfirm ? "rgba(248,113,113,0.12)" : "transparent",
+                        opacity: awaitingConfirm ? 1 : undefined,
+                      }}
+                    >
+                      <Trash2 size={12} />
+                    </button>
+
+                    {/* Confirm label */}
+                    {awaitingConfirm && (
+                      <span className="text-[10px] font-semibold" style={{ color: "#f87171" }}>
+                        Confirm?
+                      </span>
+                    )}
+                  </div>
                 </td>
               </tr>
             );

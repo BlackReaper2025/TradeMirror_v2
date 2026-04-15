@@ -30,7 +30,7 @@ export function CalendarPreview({ calendarDays }: Props) {
   const days = calendarDays.slice(-35);
 
   return (
-    <Panel className="h-full flex flex-col">
+    <Panel state className="h-full flex flex-col">
       <PanelHeader label="Calendar" />
 
       {/* Day labels */}

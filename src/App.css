@@ -21,7 +21,7 @@ body {
 
 /* ─── Theme Tokens ──────────────────────────────────── */
 :root {
-  /* Backgrounds */
+  /* Backgrounds — never overridden by state; surfaces stay neutral dark */
   --bg-base:          #080c12;
   --bg-sidebar:       #060a0f;
   --bg-panel:         #0d1219;
@@ -33,54 +33,55 @@ body {
   --border-medium:    rgba(255, 255, 255, 0.09);
   --border-strong:    rgba(255, 255, 255, 0.14);
 
-  /* Text */
+  /* Text — slightly lifted secondary/muted for comfortable reading */
   --text-primary:     #dce6f4;
-  --text-secondary:   #64748b;
-  --text-muted:       #374151;
+  --text-secondary:   #7a8fa8;   /* was #64748b — more legible on dark bg */
+  --text-muted:       #4a5568;   /* was #374151 — lifted one step */
   --text-label:       #8899aa;
 
-  /* Accent — overridden by theme state class */
+  /* ── Accent: green (default / target hit) ── */
   --accent:           #22c55e;
   --accent-dim:       rgba(34, 197, 94, 0.18);
-  --accent-glow:      rgba(34, 197, 94, 0.10);
-  --accent-border:    rgba(34, 197, 94, 0.22);
+  --accent-glow:      rgba(34, 197, 94, 0.13);   /* outer bloom — panel glow */
+  --accent-border:    rgba(34, 197, 94, 0.24);   /* panel border ring */
   --accent-text:      #4ade80;
 
   /* Chart */
   --chart-line:       #22c55e;
-  --chart-fill-from:  rgba(34, 197, 94, 0.18);
+  --chart-fill-from:  rgba(34, 197, 94, 0.22);
   --chart-fill-to:    rgba(34, 197, 94, 0.00);
 }
 
-/* ─── Yellow theme (positive, target not hit) ───────── */
+/* ─── Yellow theme (positive, target not hit) ─────── */
+/* Only accent tokens change — backgrounds stay neutral dark so panels stay
+   clean. Dynamic color lives in borders, glow, and accent elements only. */
 .theme-yellow {
   --accent:           #f59e0b;
   --accent-dim:       rgba(245, 158, 11, 0.18);
-  --accent-glow:      rgba(245, 158, 11, 0.10);
-  --accent-border:    rgba(245, 158, 11, 0.22);
+  --accent-glow:      rgba(245, 158, 11, 0.20);
+  --accent-border:    rgba(245, 158, 11, 0.38);
   --accent-text:      #fbbf24;
+
   --chart-line:       #f59e0b;
-  --chart-fill-from:  rgba(245, 158, 11, 0.18);
+  --chart-fill-from:  rgba(245, 158, 11, 0.24);
   --chart-fill-to:    rgba(245, 158, 11, 0.00);
 }
 
-/* ─── Red theme (negative day) ──────────────────────── */
+/* ─── Red theme (negative day) ──────────────────────  */
 .theme-red {
   --accent:           #ef4444;
   --accent-dim:       rgba(239, 68, 68, 0.18);
-  --accent-glow:      rgba(239, 68, 68, 0.10);
-  --accent-border:    rgba(239, 68, 68, 0.22);
+  --accent-glow:      rgba(239, 68, 68, 0.18);
+  --accent-border:    rgba(239, 68, 68, 0.34);
   --accent-text:      #f87171;
+
   --chart-line:       #ef4444;
-  --chart-fill-from:  rgba(239, 68, 68, 0.18);
+  --chart-fill-from:  rgba(239, 68, 68, 0.22);
   --chart-fill-to:    rgba(239, 68, 68, 0.00);
 }
 
 /* ─── Scrollbar ─────────────────────────────────────── */
-::-webkit-scrollbar {
-  width: 4px;
-  height: 4px;
-}
+::-webkit-scrollbar { width: 4px; height: 4px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb {
   background: rgba(255, 255, 255, 0.08);
@@ -90,42 +91,71 @@ body {
   background: rgba(255, 255, 255, 0.14);
 }
 
-/* ─── Utility classes ───────────────────────────────── */
+/* ─── Panel — unified glow system ───────────────────── */
+/*
+ * The accent border + outer bloom live here, on the base .panel class.
+ * Because CSS vars are swapped by .theme-yellow / .theme-red on <html>,
+ * every panel everywhere in the app — Dashboard, Trade Log, Settings,
+ * placeholder pages — automatically picks up the current state color.
+ * No per-panel props needed for the base treatment.
+ */
 .panel {
   background: var(--bg-panel);
-  border: 1px solid var(--border-subtle);
+  border: 1px solid var(--accent-border);
   border-radius: 14px;
 }
 
-.panel-glow {
-  box-shadow: 0 0 0 1px var(--accent-border), 0 8px 32px var(--accent-glow);
+/*
+ * panel-glow: kept for backward compat.
+ */
+.panel-glow {}
+
+/*
+ * panel-state: hero panels (AccountBalance, EquityChart, etc.)
+ */
+.panel-state {
+  border-color: var(--accent-border);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
 }
 
+/* ─── Sidebar state border ───────────────────────────── */
+/* Ties the sidebar edge into the global state color */
+.theme-yellow aside,
+.theme-red   aside {
+  border-right-color: var(--accent-border);
+}
+
+/* ─── Utilities ─────────────────────────────────────── */
 .accent-text { color: var(--accent-text); }
 .accent-bg   { background-color: var(--accent-dim); }
 .accent-dot  { background-color: var(--accent); }
 
 /* ─── Animations ────────────────────────────────────── */
 @keyframes pulse-dot {
-  0%, 100% { opacity: 1; transform: scale(1); }
+  0%, 100% { opacity: 1;   transform: scale(1);    }
   50%       { opacity: 0.5; transform: scale(0.85); }
 }
 
 @keyframes fade-in {
   from { opacity: 0; transform: translateY(6px); }
-  to   { opacity: 1; transform: translateY(0); }
+  to   { opacity: 1; transform: translateY(0);   }
 }
 
-.pulse-dot {
-  animation: pulse-dot 2s ease-in-out infinite;
-}
-
-.fade-in {
-  animation: fade-in 0.4s ease forwards;
-}
+.pulse-dot { animation: pulse-dot 2s ease-in-out infinite; }
+.fade-in   { animation: fade-in 0.4s ease forwards; }
 
 /* ─── Number rendering ──────────────────────────────── */
 .tabular-nums {
   font-variant-numeric: tabular-nums;
   font-feature-settings: "tnum";
+}
+
+/* ─── Hide native number input spinners ─────────────── */
+input[type="number"]::-webkit-outer-spin-button,
+input[type="number"]::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+input[type="number"] {
+  -moz-appearance: textfield;
 }

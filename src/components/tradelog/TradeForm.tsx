@@ -1,8 +1,8 @@
-// ─── TradeForm — slide-over drawer for new trade entry ───────────────────────
-import { useState, useEffect } from "react";
-import { X, ChevronRight, TrendingUp, TrendingDown, BookOpen, Tag } from "lucide-react";
+// ─── TradeForm — slide-over drawer for new trade entry or edit ────────────────
+import { useState, useEffect, useRef, useCallback } from "react"; // useRef used in TimeInput hold logic
+import { X, ChevronRight, TrendingUp, TrendingDown, BookOpen, Tag, ChevronUp, ChevronDown } from "lucide-react";
 import { FormField, inputClass, inputStyle } from "../ui/FormField";
-import type { Account } from "../../db/queries";
+import type { Account, TradeWithJournal } from "../../db/queries";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -37,9 +37,25 @@ const EMOTION_OPTIONS = [
 ];
 
 const SETUP_SUGGESTIONS = [
-  "London Open Break", "Break & Retest", "Rejection Wick",
-  "Fib Retracement", "Range Breakout", "Trend Continuation",
-  "Liquidity Sweep", "Order Block", "Fair Value Gap",
+  "Supply & Demand Zone", "Liquidity Sweep", "Wyckoff",
+  "Break & Retest", "Rejection Wick", "Fib Retracement",
+  "Range Breakout", "Fair Value Gap",
+];
+
+const MAJOR_PAIRS = [
+  "EUR/USD", "GBP/USD", "USD/JPY", "USD/CHF",
+  "AUD/USD", "USD/CAD", "NZD/USD",
+  "EUR/GBP", "EUR/JPY", "GBP/JPY",
+  "EUR/CHF", "EUR/AUD", "EUR/CAD",
+  "GBP/CHF", "GBP/AUD", "GBP/CAD",
+  "AUD/JPY", "CAD/JPY", "CHF/JPY",
+  "XAU/USD", "US100", "US500", "US30",
+];
+
+const TAG_SUGGESTIONS = [
+  "london-open", "ny-open", "order-block", "trend-continuation",
+  "high-rr", "reversal", "breakout", "scalp", "swing",
+  "news-event", "patience", "fomo", "revenge",
 ];
 
 function todayLocal() {
@@ -55,9 +71,10 @@ function nowTimeLocal() {
 }
 
 function makeEmpty(): TradeFormValues {
+  const now = `${todayLocal()}T${nowTimeLocal()}`;
   return {
-    openedAt: `${todayLocal()}T${nowTimeLocal()}`,
-    closedAt: "",
+    openedAt: now,
+    closedAt: now,
     instrument: "",
     side: "long",
     setupName: "",
@@ -79,6 +96,36 @@ function makeEmpty(): TradeFormValues {
   };
 }
 
+// Convert an existing trade (with optional journal) into form values for editing.
+function tradeToFormValues(t: TradeWithJournal): TradeFormValues {
+  const norm = (v: string | null | undefined) => v ?? "";
+  // datetime-local inputs need "YYYY-MM-DDTHH:MM" — trim seconds/Z if present
+  const dt   = (v: string | null | undefined) =>
+    v ? v.replace("Z", "").slice(0, 16) : "";
+  return {
+    openedAt:        dt(t.openedAt),
+    closedAt:        dt(t.closedAt),
+    instrument:      t.instrument,
+    side:            t.side,
+    setupName:       norm(t.setupName),
+    entryPrice:      t.entryPrice  != null ? String(t.entryPrice)  : "",
+    stopPrice:       t.stopPrice   != null ? String(t.stopPrice)   : "",
+    targetPrice:     t.targetPrice != null ? String(t.targetPrice) : "",
+    size:            t.size        != null ? String(t.size)        : "",
+    fees:            t.fees        != null ? String(t.fees)        : "",
+    pnl:             t.pnl         != null ? String(t.pnl)         : "",
+    technicalNotes:  norm(t.technicalNotes),
+    tags:            norm(t.tags),
+    emotionBefore:   norm(t.journal?.emotionBefore),
+    emotionAfter:    norm(t.journal?.emotionAfter),
+    mistakes:        norm(t.journal?.mistakes),
+    lessons:         norm(t.journal?.lessons),
+    confidenceScore: t.journal?.confidenceScore != null ? String(t.journal.confidenceScore) : "",
+    disciplineScore: t.journal?.disciplineScore != null ? String(t.journal.disciplineScore) : "",
+    freeformNotes:   norm(t.journal?.freeformNotes),
+  };
+}
+
 // ─── Derived R:R display ──────────────────────────────────────────────────────
 
 function deriveRR(v: TradeFormValues): string {
@@ -90,6 +137,99 @@ function deriveRR(v: TradeFormValues): string {
   const reward = v.side === "long" ? tp - e : e - tp;
   if (risk <= 0) return "—";
   return `${(reward / risk).toFixed(2)}R`;
+}
+
+// ─── Custom time picker with nudge buttons ────────────────────────────────────
+
+function TimeInput({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const timeoutRef  = useRef<ReturnType<typeof setTimeout>  | null>(null);
+
+  // Because onChange doesn't accept a setter fn, we use a ref for the current value
+  const valueRef = useRef(value);
+  valueRef.current = value;
+
+  const nudgeDirect = useCallback((dm: number) => {
+    const [ph, pm] = valueRef.current.split(":").map(n => parseInt(n) || 0);
+    let total = ph * 60 + pm + dm;
+    total = ((total % 1440) + 1440) % 1440;
+    onChange(`${pad(Math.floor(total / 60))}:${pad(total % 60)}`);
+  }, [onChange]);
+
+  const startHold = useCallback((dm: number) => {
+    nudgeDirect(dm);
+    timeoutRef.current = setTimeout(() => {
+      intervalRef.current = setInterval(() => nudgeDirect(dm), 80);
+    }, 400);
+  }, [nudgeDirect]);
+
+  const stopHold = useCallback(() => {
+    if (timeoutRef.current)  clearTimeout(timeoutRef.current);
+    if (intervalRef.current) clearInterval(intervalRef.current);
+  }, []);
+
+  useEffect(() => stopHold, [stopHold]);
+
+  const nudgeBtn: React.CSSProperties = {
+    display: "flex", alignItems: "center", justifyContent: "center",
+    width: 16, height: 16, borderRadius: 3, cursor: "pointer", flexShrink: 0,
+    background: "rgba(255,255,255,0.10)", border: "1px solid rgba(255,255,255,0.16)",
+    color: "var(--text-secondary)", userSelect: "none",
+  };
+
+  return (
+    <div
+      className="flex items-center gap-1.5 px-2 rounded-lg"
+      style={{ ...inputStyle, flex: "0 0 auto", height: 38 }}
+    >
+      {/* Time display */}
+      <input
+        type="time"
+        value={value}
+        onChange={e => onChange(e.target.value)}
+        style={{ background: "transparent", border: "none", outline: "none", color: "var(--text-primary)", fontSize: 13, width: 90, flexShrink: 0 }}
+      />
+      {/* Minute nudge with hold-to-repeat */}
+      <div className="flex flex-col gap-0.5">
+        <button
+          type="button" style={nudgeBtn}
+          onMouseDown={() => startHold(1)}
+          onMouseUp={stopHold} onMouseLeave={stopHold}
+        >
+          <ChevronUp size={9} />
+        </button>
+        <button
+          type="button" style={nudgeBtn}
+          onMouseDown={() => startHold(-1)}
+          onMouseUp={stopHold} onMouseLeave={stopHold}
+        >
+          <ChevronDown size={9} />
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ─── Split date + time input ──────────────────────────────────────────────────
+
+function DateTimeInput({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  const parts    = value ? value.split("T") : [todayLocal(), nowTimeLocal()];
+  const datePart = parts[0] || todayLocal();
+  const timePart = (parts[1] || nowTimeLocal()).slice(0, 5);
+
+  return (
+    <div className="flex gap-2">
+      <input
+        type="date"
+        value={datePart}
+        onChange={e => onChange(`${e.target.value}T${timePart}`)}
+        className={inputClass}
+        style={{ ...inputStyle, flex: "0 0 auto", width: 116 }}
+      />
+      <TimeInput value={timePart} onChange={t => onChange(`${datePart}T${t}`)} />
+    </div>
+  );
 }
 
 // ─── Styled input helpers ─────────────────────────────────────────────────────
@@ -225,14 +365,14 @@ function ScoreInput({
               background:
                 n <= score
                   ? n >= 7 ? "rgba(74,222,128,0.25)" : n >= 4 ? "rgba(251,191,36,0.25)" : "rgba(248,113,113,0.25)"
-                  : "var(--bg-panel-alt)",
+                  : "rgba(255,255,255,0.08)",
               color:
                 n <= score
                   ? n >= 7 ? "#4ade80" : n >= 4 ? "#fbbf24" : "#f87171"
-                  : "var(--text-muted)",
+                  : "var(--text-secondary)",
               border: n <= score
                 ? n >= 7 ? "1px solid rgba(74,222,128,0.3)" : n >= 4 ? "1px solid rgba(251,191,36,0.3)" : "1px solid rgba(248,113,113,0.3)"
-                : "1px solid var(--border-subtle)",
+                : "1px solid rgba(255,255,255,0.14)",
             }}
           >
             {n}
@@ -247,26 +387,46 @@ function ScoreInput({
 
 interface Props {
   account: Account;
+  existingTrade?: TradeWithJournal | null;
   onClose: () => void;
   onSaved: (values: TradeFormValues) => Promise<void>;
 }
 
 type Tab = "trade" | "journal";
 
-export function TradeForm({ account, onClose, onSaved }: Props) {
-  const [values, setValues]   = useState<TradeFormValues>(makeEmpty);
+export function TradeForm({ account, existingTrade, onClose, onSaved }: Props) {
+  const isEdit = existingTrade != null;
+  const [values, setValues]   = useState<TradeFormValues>(() =>
+    isEdit ? tradeToFormValues(existingTrade!) : makeEmpty()
+  );
   const [tab, setTab]         = useState<Tab>("trade");
   const [saving, setSaving]   = useState(false);
   const [errors, setErrors]   = useState<Partial<Record<keyof TradeFormValues, string>>>({});
+  const historyRef            = useRef<TradeFormValues[]>([]);
+  const isUndoRef             = useRef(false);
 
-  // Close on Escape
+  // Close on Escape, undo on Ctrl+Z
   useEffect(() => {
-    const handler = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape") { onClose(); return; }
+      if (e.key === "z" && (e.ctrlKey || e.metaKey) && !e.shiftKey) {
+        e.preventDefault();
+        if (historyRef.current.length === 0) return;
+        const prev = historyRef.current[historyRef.current.length - 1];
+        historyRef.current = historyRef.current.slice(0, -1);
+        isUndoRef.current = true;
+        setValues(prev);
+        isUndoRef.current = false;
+      }
+    };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
   }, [onClose]);
 
   function set<K extends keyof TradeFormValues>(key: K, val: TradeFormValues[K]) {
+    if (!isUndoRef.current) {
+      historyRef.current = [...historyRef.current, values].slice(-50);
+    }
     setValues((prev) => ({ ...prev, [key]: val }));
     if (errors[key]) setErrors((prev) => { const n = { ...prev }; delete n[key]; return n; });
   }
@@ -318,7 +478,7 @@ export function TradeForm({ account, onClose, onSaved }: Props) {
         >
           <div>
             <h2 className="text-[16px] font-bold" style={{ color: "var(--text-primary)" }}>
-              New Trade
+              {isEdit ? "Edit Trade" : "New Trade"}
             </h2>
             <div className="text-[12px] mt-0.5" style={{ color: "var(--text-muted)" }}>
               {account.name} · {account.brokerOrFirm}
@@ -346,7 +506,7 @@ export function TradeForm({ account, onClose, onSaved }: Props) {
               onClick={() => setTab(t)}
               className="px-4 py-2 text-[12px] font-semibold capitalize rounded-t-lg transition-colors"
               style={{
-                color: tab === t ? "var(--accent-text)" : "var(--text-muted)",
+                color: tab === t ? "var(--accent-text)" : "var(--text-secondary)",
                 background: tab === t ? "var(--accent-dim)" : "transparent",
                 borderBottom: tab === t ? "2px solid var(--accent)" : "2px solid transparent",
                 marginBottom: -1,
@@ -398,9 +558,9 @@ export function TradeForm({ account, onClose, onSaved }: Props) {
               onClick={onClose}
               className="px-4 py-2 rounded-lg text-[12px] font-medium transition-opacity hover:opacity-70"
               style={{
-                background: "var(--bg-panel-alt)",
+                background: "rgba(255,255,255,0.08)",
                 color: "var(--text-secondary)",
-                border: "1px solid var(--border-medium)",
+                border: "1px solid rgba(255,255,255,0.18)",
               }}
             >
               Cancel
@@ -417,7 +577,7 @@ export function TradeForm({ account, onClose, onSaved }: Props) {
                 border: "1px solid var(--accent-border)",
               }}
             >
-              {saving ? "Saving…" : "Save Trade"}
+              {saving ? "Saving…" : isEdit ? "Save Changes" : "Save Trade"}
             </button>
           </div>
         </div>
@@ -442,29 +602,22 @@ function TradeTab({ values, set, rr, errors = {} }: TabProps) {
       {/* Opened / Closed */}
       <div className="grid grid-cols-2 gap-3">
         <FormField label="Opened at" required>
-          <Input
-            type="datetime-local"
-            value={values.openedAt}
-            onChange={(v) => set("openedAt", v)}
-          />
+          <DateTimeInput value={values.openedAt} onChange={(v) => set("openedAt", v)} />
           {errors.openedAt && <p className="text-[11px] mt-1" style={{ color: "#f87171" }}>{errors.openedAt}</p>}
         </FormField>
         <FormField label="Closed at">
-          <Input
-            type="datetime-local"
-            value={values.closedAt}
-            onChange={(v) => set("closedAt", v)}
-          />
+          <DateTimeInput value={values.closedAt} onChange={(v) => set("closedAt", v)} />
         </FormField>
       </div>
 
       {/* Instrument + Side */}
       <div className="grid grid-cols-2 gap-3">
         <FormField label="Instrument" required>
-          <Input
+          <SelectInput
             value={values.instrument}
-            onChange={(v) => set("instrument", v.toUpperCase())}
-            placeholder="EUR/USD"
+            onChange={(v) => set("instrument", v)}
+            options={MAJOR_PAIRS}
+            placeholder="Select pair…"
           />
           {errors.instrument && <p className="text-[11px] mt-1" style={{ color: "#f87171" }}>{errors.instrument}</p>}
         </FormField>
@@ -480,10 +633,10 @@ function TradeTab({ values, set, rr, errors = {} }: TabProps) {
                 style={{
                   background: values.side === s
                     ? s === "long" ? "rgba(34,197,94,0.18)" : "rgba(239,68,68,0.18)"
-                    : "var(--bg-panel-alt)",
+                    : "rgba(255,255,255,0.07)",
                   color: values.side === s
                     ? s === "long" ? "#4ade80" : "#f87171"
-                    : "var(--text-muted)",
+                    : "var(--text-secondary)",
                 }}
               >
                 {s === "long" ? <TrendingUp size={13} /> : <TrendingDown size={13} />}
@@ -511,9 +664,10 @@ function TradeTab({ values, set, rr, errors = {} }: TabProps) {
                 onClick={() => set("setupName", s)}
                 className="px-2 py-0.5 rounded-md text-[10px] transition-colors"
                 style={{
-                  background: values.setupName === s ? "var(--accent-dim)" : "var(--bg-panel-alt)",
-                  color: values.setupName === s ? "var(--accent-text)" : "var(--text-muted)",
-                  border: values.setupName === s ? "1px solid var(--accent-border)" : "1px solid var(--border-subtle)",
+                  background: values.setupName === s ? "var(--accent-dim)" : "rgba(255,255,255,0.08)",
+                  color: values.setupName === s ? "var(--accent-text)" : "var(--text-secondary)",
+                  border: values.setupName === s ? "1px solid var(--accent-border)" : "1px solid rgba(255,255,255,0.14)",
+                  fontSize: 11,
                 }}
               >
                 {s}
@@ -585,14 +739,45 @@ function TradeTab({ values, set, rr, errors = {} }: TabProps) {
       {/* Tags */}
       <FormField label="Tags" hint="comma separated">
         <div className="relative">
-          <div className="absolute left-3 top-1/2 -translate-y-1/2" style={{ color: "var(--text-muted)" }}>
+          <div className="absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" style={{ color: "var(--text-muted)", zIndex: 1 }}>
             <Tag size={13} />
           </div>
-          <Input
+          <input
+            type="text"
             value={values.tags}
-            onChange={(v) => set("tags", v)}
+            onChange={e => set("tags", e.target.value)}
             placeholder="breakout, london, high-rr"
+            className={inputClass}
+            style={{ ...inputStyle, paddingLeft: 32 }}
           />
+        </div>
+        {/* Quick-pick tag chips */}
+        <div className="flex flex-wrap gap-1 mt-2">
+          {TAG_SUGGESTIONS.map((tag) => {
+            const currentTags = values.tags.split(",").map(t => t.trim()).filter(Boolean);
+            const isActive = currentTags.includes(tag);
+            const toggle = () => {
+              const next = isActive
+                ? currentTags.filter(t => t !== tag)
+                : [...currentTags, tag];
+              set("tags", next.join(", "));
+            };
+            return (
+              <button
+                key={tag}
+                type="button"
+                onClick={toggle}
+                className="px-2 py-0.5 rounded-md text-[11px] transition-colors"
+                style={{
+                  background: isActive ? "var(--accent-dim)" : "rgba(255,255,255,0.08)",
+                  color: isActive ? "var(--accent-text)" : "var(--text-secondary)",
+                  border: isActive ? "1px solid var(--accent-border)" : "1px solid rgba(255,255,255,0.14)",
+                }}
+              >
+                {tag}
+              </button>
+            );
+          })}
         </div>
       </FormField>
     </div>

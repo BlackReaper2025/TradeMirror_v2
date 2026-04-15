@@ -1,5 +1,5 @@
 // ─── Typed query functions ────────────────────────────────────────────────────
-import { eq, desc, and, gte, lte, sql } from "drizzle-orm";
+import { eq, desc, and, gte, lte, lt, sql } from "drizzle-orm";
 import { getDb } from "./index";
 import {
   accounts,
@@ -57,6 +57,28 @@ export async function upsertSelectedAccount(accountId: string) {
 
 // ─── Accounts ─────────────────────────────────────────────────────────────────
 
+export async function createAccount(data: {
+  name: string;
+  brokerOrFirm: string;
+  startingBalance: number;
+  dailyTarget: number;
+  accountType: "prop" | "personal" | "challenge";
+}): Promise<Account> {
+  const db = getDb();
+  const id = `acc-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+  await db.insert(accounts).values({
+    id,
+    name:            data.name,
+    brokerOrFirm:    data.brokerOrFirm,
+    startingBalance: data.startingBalance,
+    currentBalance:  data.startingBalance,
+    dailyTarget:     data.dailyTarget,
+    accountType:     data.accountType,
+    isActive:        true,
+  });
+  return (await getAccount(id))!;
+}
+
 export async function getActiveAccounts(): Promise<Account[]> {
   const db = getDb();
   return db.select().from(accounts).where(eq(accounts.isActive, true));
@@ -108,18 +130,50 @@ export async function getAllTimeStats(accountId: string): Promise<AllTimeStats> 
   return { tradeCount, winCount, lossCount, winRate, avgWin, avgLoss, profitFactor };
 }
 
-// ─── Dashboard: today's stats ─────────────────────────────────────────────────
+// ─── Dashboard: today's stats — computed LIVE from trades table ───────────────
+// Reads directly from trades instead of daily_stats so the dashboard is always
+// accurate regardless of whether recalculateDailyStats has run for today yet.
 
+export interface TodayLiveStats {
+  totalPnl:   number;
+  tradeCount: number;
+  winCount:   number;
+  lossCount:  number;
+}
+
+export async function getTodayLiveStats(accountId: string): Promise<TodayLiveStats> {
+  const db    = getDb();
+  const today = localDateStr();
+  const rows  = await db
+    .select({ pnl: trades.pnl })
+    .from(trades)
+    .where(
+      and(
+        eq(trades.accountId, accountId),
+        gte(trades.openedAt, today + "T00:00:00"),
+        lte(trades.openedAt, today + "T23:59:59")
+      )
+    );
+
+  const wins   = rows.filter((t) => (t.pnl ?? 0) > 0);
+  const losses = rows.filter((t) => (t.pnl ?? 0) < 0);
+  return {
+    totalPnl:   rows.reduce((s, t) => s + (t.pnl ?? 0), 0),
+    tradeCount: rows.length,
+    winCount:   wins.length,
+    lossCount:  losses.length,
+  };
+}
+
+// Keep the old daily_stats reader for compatibility — used internally by equity curve etc.
 export async function getTodayStats(accountId: string) {
   const db = getDb();
   const today = localDateStr();
-  console.log("[getTodayStats] querying day:", today, "accountId:", accountId);
   const rows = await db
     .select()
     .from(dailyStats)
     .where(and(eq(dailyStats.accountId, accountId), eq(dailyStats.day, today)))
     .limit(1);
-  console.log("[getTodayStats] result:", rows[0] ?? null);
   return rows[0] ?? null;
 }
 
@@ -137,6 +191,21 @@ export async function getTodayTrades(accountId: string): Promise<Trade[]> {
         eq(trades.accountId, accountId),
         gte(trades.openedAt, today + "T00:00:00"),
         lte(trades.openedAt, today + "T23:59:59")
+      )
+    )
+    .orderBy(desc(trades.openedAt));
+}
+
+export async function getTradesByDate(accountId: string, dateStr: string): Promise<Trade[]> {
+  const db = getDb();
+  return db
+    .select()
+    .from(trades)
+    .where(
+      and(
+        eq(trades.accountId, accountId),
+        gte(trades.openedAt, dateStr + "T00:00:00"),
+        lte(trades.openedAt, dateStr + "T23:59:59")
       )
     )
     .orderBy(desc(trades.openedAt));
@@ -171,6 +240,135 @@ export async function getEquityCurve(
       balance: runningBalance,
     };
   });
+}
+
+// ─── Candle data for equity chart ─────────────────────────────────────────────
+
+export interface Candle {
+  time:  string;
+  open:  number;
+  high:  number;
+  low:   number;
+  close: number;
+}
+
+/** Hourly OHLC of the running account balance for today, built from individual trades. */
+export async function getHourlyCandles(accountId: string): Promise<Candle[]> {
+  const db       = getDb();
+  const account  = await getAccount(accountId);
+  if (!account) return [];
+
+  const todayStr = localDateStr();
+
+  const priorRows = await db
+    .select({ total: sql<number>`coalesce(sum(${dailyStats.totalPnl}), 0)` })
+    .from(dailyStats)
+    .where(and(eq(dailyStats.accountId, accountId), lt(dailyStats.day, todayStr)));
+
+  const balanceAtDayStart = account.startingBalance + (priorRows[0]?.total ?? 0);
+
+  const todayTrades = await db
+    .select()
+    .from(trades)
+    .where(and(
+      eq(trades.accountId, accountId),
+      gte(trades.openedAt, todayStr + "T00:00:00"),
+      lte(trades.openedAt, todayStr + "T23:59:59"),
+    ))
+    .orderBy(trades.openedAt);
+
+  if (todayTrades.length === 0) return [];
+
+  const hourMap = new Map<number, number[]>();
+  let running = balanceAtDayStart;
+
+  for (const trade of todayTrades) {
+    const hour = new Date(trade.openedAt).getHours();
+    if (!hourMap.has(hour)) hourMap.set(hour, [running]);
+    running += trade.pnl ?? 0;
+    hourMap.get(hour)!.push(running);
+  }
+
+  return Array.from(hourMap.keys())
+    .sort((a, b) => a - b)
+    .map(hour => {
+      const balances = hourMap.get(hour)!;
+      return {
+        time:  `${String(hour).padStart(2, "0")}:00`,
+        open:  balances[0],
+        high:  Math.max(...balances),
+        low:   Math.min(...balances),
+        close: balances[balances.length - 1],
+      };
+    });
+}
+
+/** Daily OHLC of the running account balance, with real intra-day wicks from trade sequence. */
+export async function getDailyCandles(accountId: string, days: number): Promise<Candle[]> {
+  const db      = getDb();
+  const account = await getAccount(accountId);
+  if (!account) return [];
+
+  const sinceDate = new Date();
+  sinceDate.setDate(sinceDate.getDate() - days);
+  const sinceStr = localDateStr(sinceDate);
+  const todayStr = localDateStr();
+
+  const priorRows = await db
+    .select({ total: sql<number>`coalesce(sum(${dailyStats.totalPnl}), 0)` })
+    .from(dailyStats)
+    .where(and(eq(dailyStats.accountId, accountId), lt(dailyStats.day, sinceStr)));
+
+  let running = account.startingBalance + (priorRows[0]?.total ?? 0);
+
+  const statRows = await db
+    .select()
+    .from(dailyStats)
+    .where(and(eq(dailyStats.accountId, accountId), gte(dailyStats.day, sinceStr)))
+    .orderBy(dailyStats.day);
+
+  if (statRows.length === 0) return [];
+
+  const periodTrades = await db
+    .select()
+    .from(trades)
+    .where(and(
+      eq(trades.accountId, accountId),
+      gte(trades.openedAt, sinceStr + "T00:00:00"),
+      lte(trades.openedAt, todayStr + "T23:59:59"),
+    ))
+    .orderBy(trades.openedAt);
+
+  const tradesByDay = new Map<string, typeof periodTrades>();
+  for (const trade of periodTrades) {
+    const day = trade.openedAt.slice(0, 10);
+    if (!tradesByDay.has(day)) tradesByDay.set(day, []);
+    tradesByDay.get(day)!.push(trade);
+  }
+
+  const candles: Candle[] = [];
+  for (const stat of statRows) {
+    const dayTrades = tradesByDay.get(stat.day) ?? [];
+    const balances  = [running];
+    for (const t of dayTrades) {
+      running += t.pnl ?? 0;
+      balances.push(running);
+    }
+    if (dayTrades.length === 0) {
+      running += stat.totalPnl ?? 0;
+      balances.push(running);
+    }
+    const d = new Date(stat.day + "T00:00:00");
+    candles.push({
+      time:  d.toLocaleDateString("en-US", { month: "short", day: "numeric" }),
+      open:  balances[0],
+      high:  Math.max(...balances),
+      low:   Math.min(...balances),
+      close: balances[balances.length - 1],
+    });
+  }
+
+  return candles;
 }
 
 // ─── Dashboard: calendar days ─────────────────────────────────────────────────
@@ -211,6 +409,61 @@ export async function getPortfolio() {
   }));
 }
 
+// ─── Dashboard: monthly stats — same shape as AllTimeStats, current month ─────
+
+export async function getMonthlyStats(accountId: string): Promise<AllTimeStats> {
+  const db  = getDb();
+  const now  = new Date();
+  const year = now.getFullYear();
+  const mm   = String(now.getMonth() + 1).padStart(2, "0");
+  // SQLite stores datetimes as "YYYY-MM-DDTHH:MM:SS" local strings — use 31 as
+  // a safe upper bound (lexicographically greater than any valid day in the month)
+  const start = `${year}-${mm}-01T00:00:00`;
+  const end   = `${year}-${mm}-31T23:59:59`;
+
+  const rows = await db
+    .select({ pnl: trades.pnl })
+    .from(trades)
+    .where(and(eq(trades.accountId, accountId), gte(trades.openedAt, start), lte(trades.openedAt, end)));
+
+  const wins   = rows.filter((t) => (t.pnl ?? 0) > 0);
+  const losses = rows.filter((t) => (t.pnl ?? 0) < 0);
+  const tradeCount   = rows.length;
+  const winCount     = wins.length;
+  const lossCount    = losses.length;
+  const winRate      = tradeCount > 0 ? (winCount / tradeCount) * 100 : 0;
+  const avgWin       = winCount  > 0 ? wins.reduce((s, t)   => s + (t.pnl ?? 0), 0) / winCount   : 0;
+  const avgLoss      = lossCount > 0 ? Math.abs(losses.reduce((s, t) => s + (t.pnl ?? 0), 0)) / lossCount : 0;
+  const profitFactor = avgLoss > 0 ? (avgWin * winCount) / (avgLoss * Math.max(lossCount, 1)) : 0;
+  return { tradeCount, winCount, lossCount, winRate, avgWin, avgLoss, profitFactor };
+}
+
+// ─── Dashboard: today full stats — AllTimeStats shape, current day only ───────
+
+export async function getTodayFullStats(accountId: string): Promise<AllTimeStats> {
+  const db    = getDb();
+  const today = localDateStr();
+  const rows  = await db
+    .select({ pnl: trades.pnl })
+    .from(trades)
+    .where(and(
+      eq(trades.accountId, accountId),
+      gte(trades.openedAt, today + "T00:00:00"),
+      lte(trades.openedAt, today + "T23:59:59"),
+    ));
+
+  const wins   = rows.filter((t) => (t.pnl ?? 0) > 0);
+  const losses = rows.filter((t) => (t.pnl ?? 0) < 0);
+  const tradeCount   = rows.length;
+  const winCount     = wins.length;
+  const lossCount    = losses.length;
+  const winRate      = tradeCount > 0 ? (winCount / tradeCount) * 100 : 0;
+  const avgWin       = winCount  > 0 ? wins.reduce((s, t)   => s + (t.pnl ?? 0), 0) / winCount   : 0;
+  const avgLoss      = lossCount > 0 ? Math.abs(losses.reduce((s, t) => s + (t.pnl ?? 0), 0)) / lossCount : 0;
+  const profitFactor = avgLoss > 0 ? (avgWin * winCount) / (avgLoss * Math.max(lossCount, 1)) : 0;
+  return { tradeCount, winCount, lossCount, winRate, avgWin, avgLoss, profitFactor };
+}
+
 // ─── Dashboard: quotes ────────────────────────────────────────────────────────
 
 export async function getActiveQuotes(): Promise<Array<{ text: string; author: string }>> {
@@ -218,6 +471,7 @@ export async function getActiveQuotes(): Promise<Array<{ text: string; author: s
   const rows = await db.select().from(quotes).where(eq(quotes.isActive, true));
   return rows.map((q) => ({ text: q.text, author: q.author }));
 }
+
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Phase 3 — Trade Log read/write
@@ -345,6 +599,138 @@ export async function createJournalEntry(input: CreateJournalInput): Promise<voi
   });
 }
 
+// ─── Update a trade ──────────────────────────────────────────────────────────
+
+export async function updateTrade(
+  id: string,
+  input: Omit<CreateTradeInput, "id" | "accountId">
+): Promise<void> {
+  const db = getDb();
+  await db
+    .update(trades)
+    .set({
+      openedAt:       input.openedAt,
+      closedAt:       input.closedAt ?? null,
+      instrument:     input.instrument,
+      side:           input.side,
+      setupName:      input.setupName ?? null,
+      entryPrice:     input.entryPrice ?? null,
+      stopPrice:      input.stopPrice ?? null,
+      targetPrice:    input.targetPrice ?? null,
+      size:           input.size ?? null,
+      fees:           input.fees ?? 0,
+      pnl:            input.pnl ?? 0,
+      technicalNotes: input.technicalNotes ?? null,
+      tags:           input.tags ?? null,
+    })
+    .where(eq(trades.id, id));
+}
+
+// ─── Upsert (create or update) a journal entry for an existing trade ─────────
+
+export async function upsertJournalEntry(
+  tradeId: string,
+  existingJournalId: string | null,
+  input: Omit<CreateJournalInput, "id" | "tradeId">
+): Promise<void> {
+  const db = getDb();
+
+  const hasContent =
+    input.emotionBefore  || input.emotionAfter  ||
+    input.mistakes       || input.lessons        ||
+    input.freeformNotes  ||
+    input.confidenceScore != null || input.disciplineScore != null;
+
+  if (!hasContent) {
+    // Remove journal if it existed and is now empty
+    if (existingJournalId) {
+      await db.delete(tradeJournal).where(eq(tradeJournal.id, existingJournalId));
+    }
+    return;
+  }
+
+  if (existingJournalId) {
+    await db
+      .update(tradeJournal)
+      .set({
+        emotionBefore:   input.emotionBefore   ?? null,
+        emotionAfter:    input.emotionAfter     ?? null,
+        mistakes:        input.mistakes         ?? null,
+        lessons:         input.lessons          ?? null,
+        confidenceScore: input.confidenceScore  ?? null,
+        disciplineScore: input.disciplineScore  ?? null,
+        freeformNotes:   input.freeformNotes    ?? null,
+      })
+      .where(eq(tradeJournal.id, existingJournalId));
+  } else {
+    const newId = `j-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    await db.insert(tradeJournal).values({
+      id:              newId,
+      tradeId,
+      emotionBefore:   input.emotionBefore   ?? null,
+      emotionAfter:    input.emotionAfter     ?? null,
+      mistakes:        input.mistakes         ?? null,
+      lessons:         input.lessons          ?? null,
+      confidenceScore: input.confidenceScore  ?? null,
+      disciplineScore: input.disciplineScore  ?? null,
+      freeformNotes:   input.freeformNotes    ?? null,
+    });
+  }
+}
+
+// ─── Delete a single trade + its journal entry ────────────────────────────────
+// Returns the { accountId, day } so the caller can recalculate stats.
+
+export async function deleteTradeById(
+  tradeId: string
+): Promise<{ accountId: string; day: string } | null> {
+  const db = getDb();
+
+  const rows = await db.select().from(trades).where(eq(trades.id, tradeId)).limit(1);
+  if (rows.length === 0) return null;
+  const trade = rows[0];
+  const day   = trade.openedAt.slice(0, 10); // "YYYY-MM-DD"
+
+  // Delete journal first (FK order)
+  await db.delete(tradeJournal).where(eq(tradeJournal.tradeId, tradeId));
+  await db.delete(trades).where(eq(trades.id, tradeId));
+
+  return { accountId: trade.accountId, day };
+}
+
+// ─── Clear ALL trades (+ journals + daily_stats) for an account ───────────────
+// Dev/testing only — resets the account balance back to starting balance.
+
+export async function clearAllTradesForAccount(accountId: string): Promise<void> {
+  const db = getDb();
+
+  // Get all trade IDs for FK-safe journal deletion
+  const accountTrades = await db
+    .select({ id: trades.id })
+    .from(trades)
+    .where(eq(trades.accountId, accountId));
+
+  if (accountTrades.length > 0) {
+    const ids = accountTrades.map((t) => t.id);
+    await db.delete(tradeJournal).where(
+      sql`${tradeJournal.tradeId} IN (${sql.join(ids.map((id) => sql`${id}`), sql`, `)})`
+    );
+    await db.delete(trades).where(eq(trades.accountId, accountId));
+  }
+
+  // Remove all daily_stats for this account
+  await db.delete(dailyStats).where(eq(dailyStats.accountId, accountId));
+
+  // Reset current_balance to starting_balance
+  const account = await getAccount(accountId);
+  if (account) {
+    await db
+      .update(accounts)
+      .set({ currentBalance: account.startingBalance })
+      .where(eq(accounts.id, accountId));
+  }
+}
+
 // ─── Update account current_balance from actual trade PnL ────────────────────
 // Recomputes: starting_balance + SUM(pnl) across all trades for that account.
 // Must be called after any trade is created, updated, or deleted.
@@ -417,36 +803,27 @@ export async function recalculateDailyStats(
   const profitFactor = avgLoss > 0 ? (avgWin * winCount) / (avgLoss * Math.max(lossCount, 1)) : 0;
   const maxDrawdown  = avgLoss;
 
+  // Delete any existing row for this (accountId, day) — including rows whose id
+  // was generated with a different pattern (e.g. old seed used "ds-acc1-" without
+  // the accountId hyphen). This prevents duplicate rows returning stale values.
+  await db
+    .delete(dailyStats)
+    .where(and(eq(dailyStats.accountId, accountId), eq(dailyStats.day, day)));
+
   const statsId = `ds-${accountId}-${day}`;
 
-  await db
-    .insert(dailyStats)
-    .values({
-      id: statsId,
-      accountId,
-      day,
-      totalPnl,
-      tradeCount,
-      winCount,
-      lossCount,
-      avgWin,
-      avgLoss,
-      winRate,
-      profitFactor,
-      maxDrawdown,
-    })
-    .onConflictDoUpdate({
-      target: dailyStats.id,
-      set: {
-        totalPnl,
-        tradeCount,
-        winCount,
-        lossCount,
-        avgWin,
-        avgLoss,
-        winRate,
-        profitFactor,
-        maxDrawdown,
-      },
-    });
+  await db.insert(dailyStats).values({
+    id: statsId,
+    accountId,
+    day,
+    totalPnl,
+    tradeCount,
+    winCount,
+    lossCount,
+    avgWin,
+    avgLoss,
+    winRate,
+    profitFactor,
+    maxDrawdown,
+  });
 }

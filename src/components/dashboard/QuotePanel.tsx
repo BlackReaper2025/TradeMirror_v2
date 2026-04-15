@@ -33,11 +33,11 @@ export function QuotePanel({ quotes }: Props) {
   const quote = quotes[idx] ?? { text: "Loading...", author: "" };
 
   return (
-    <Panel className="h-full flex flex-col justify-between">
+    <Panel state className="h-full flex flex-col justify-between">
       <div className="flex items-center justify-between mb-3">
         <div className="flex items-center gap-2">
           <QuoteIcon size={14} style={{ color: "var(--accent)" }} />
-          <span className="text-[11px] font-semibold uppercase tracking-widest" style={{ color: "var(--text-secondary)" }}>
+          <span className="text-[15px] font-semibold uppercase tracking-widest" style={{ color: "var(--accent-text)" }}>
             Psychology
           </span>
         </div>

@@ -1,42 +1,64 @@
+// ─── EquityChart — standalone equity curve panel with timeframe selector ──────
+import React, { useState, useMemo, useEffect } from "react";
 import {
-  AreaChart,
-  Area,
-  XAxis,
-  YAxis,
-  Tooltip,
-  ResponsiveContainer,
-  CartesianGrid,
+  AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
+  ComposedChart, useXAxisScale, useYAxisScale,
 } from "recharts";
-import { Panel, PanelHeader } from "../ui/Panel";
-import type { Account } from "../../db/queries";
+import { Panel } from "../ui/Panel";
+import type { Account, Candle } from "../../db/queries";
+import { getHourlyCandles, getDailyCandles } from "../../db/queries";
+import { useDatabase } from "../../db/DatabaseProvider";
 
-function formatBalance(n: number) {
-  if (n >= 1_000_000) return `$${(n / 1_000_000).toFixed(1)}M`;
-  if (n >= 1_000) return `$${(n / 1_000).toFixed(0)}K`;
+function fmtBalance(n: number) {
+  if (Math.abs(n) >= 1_000_000) return `$${(n / 1_000_000).toFixed(1)}M`;
+  if (Math.abs(n) >= 1_000)     return `$${(n / 1_000).toFixed(0)}K`;
   return `$${n}`;
 }
 
-interface CustomTooltipProps {
+// ─── Timeframe ─────────────────────────────────────────────────────────────────
+
+const TIMEFRAMES = ["1H", "1D", "1W", "1M", "3M", "YTD", "ALL"] as const;
+type Timeframe = (typeof TIMEFRAMES)[number];
+
+const CANDLE_TIMEFRAMES: Timeframe[] = ["1H", "1D"];
+
+function filterCurve(
+  curve: Array<{ date: string; balance: number }>,
+  tf: Timeframe,
+): Array<{ date: string; balance: number }> {
+  const cutoff = (days: number) => {
+    const d = new Date();
+    d.setDate(d.getDate() - days);
+    return d.toISOString().split("T")[0];
+  };
+  switch (tf) {
+    case "1H":
+    case "1D":  return []; // handled by CandleChart
+    case "1W":  return curve.filter(p => p.date >= cutoff(7));
+    case "1M":  return curve.filter(p => p.date >= cutoff(30));
+    case "3M":  return curve.filter(p => p.date >= cutoff(90));
+    case "YTD": return curve.filter(p => p.date >= `${new Date().getFullYear()}-01-01`);
+    case "ALL": return curve;
+  }
+}
+
+// ─── Tooltip ───────────────────────────────────────────────────────────────────
+
+interface TooltipProps {
   active?: boolean;
   payload?: Array<{ value: number }>;
   label?: string;
   startingBalance: number;
 }
 
-function CustomTooltip({ active, payload, label, startingBalance }: CustomTooltipProps) {
+function ChartTooltip({ active, payload, label, startingBalance }: TooltipProps) {
   if (!active || !payload?.length) return null;
-  const val = payload[0].value;
+  const val  = payload[0].value;
   const diff = val - startingBalance;
   const isPos = diff >= 0;
   return (
-    <div
-      className="px-3 py-2.5 rounded-xl text-[12px]"
-      style={{
-        background: "#0d1219",
-        border: "1px solid rgba(255,255,255,0.1)",
-        boxShadow: "0 8px 24px rgba(0,0,0,0.4)",
-      }}
-    >
+    <div className="px-3 py-2.5 rounded-xl text-[12px]"
+      style={{ background: "#0d1219", border: "1px solid rgba(255,255,255,0.1)", boxShadow: "0 8px 24px rgba(0,0,0,0.4)" }}>
       <div style={{ color: "#8899aa" }}>{label}</div>
       <div className="font-bold tabular-nums mt-0.5" style={{ color: "#dce6f4" }}>
         {new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(val)}
@@ -49,82 +71,236 @@ function CustomTooltip({ active, payload, label, startingBalance }: CustomToolti
   );
 }
 
+// ─── Candle tooltip ────────────────────────────────────────────────────────────
+
+function CandleTooltip({ active, payload }: { active?: boolean; payload?: Array<{ payload: Candle }> }) {
+  if (!active || !payload?.length) return null;
+  const d = payload[0].payload;
+  const diff  = d.close - d.open;
+  const isUp  = diff >= 0;
+  const fmt   = (n: number) => new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(n);
+  return (
+    <div className="px-3 py-2.5 rounded-xl text-[12px]"
+      style={{ background: "#0d1219", border: "1px solid rgba(255,255,255,0.1)", boxShadow: "0 8px 24px rgba(0,0,0,0.4)" }}>
+      <div style={{ color: "#8899aa" }}>{d.time}</div>
+      <div className="tabular-nums mt-0.5" style={{ color: "#8899aa", fontSize: 10 }}>
+        O {fmt(d.open)} · H {fmt(d.high)} · L {fmt(d.low)} · C {fmt(d.close)}
+      </div>
+      <div className="font-bold tabular-nums mt-0.5" style={{ color: isUp ? "#4ade80" : "#f87171" }}>
+        {isUp ? "+" : ""}{fmt(diff)}
+      </div>
+    </div>
+  );
+}
+
+// ─── Candle SVG layer — uses recharts 3 scale hooks ───────────────────────────
+
+function CandlesLayer({ candles }: { candles: Candle[] }) {
+  const xScale = useXAxisScale();
+  const yScale = useYAxisScale();
+  if (!xScale || !yScale || candles.length === 0) return null;
+
+  const bandwidth = (() => {
+    // Approximate bandwidth from spacing between first two ticks
+    if (candles.length < 2) return 40;
+    const x0 = xScale(candles[0].time);
+    const x1 = xScale(candles[1].time);
+    if (x0 == null || x1 == null) return 40;
+    return Math.abs(x1 - x0);
+  })();
+  const candleW = Math.max(4, Math.min(bandwidth * 0.55, 22));
+
+  return (
+    <g>
+      {candles.map((d, i) => {
+        const xLeft  = xScale(d.time, { position: "middle" });
+        const yOpen  = yScale(d.open);
+        const yClose = yScale(d.close);
+        const yHigh  = yScale(d.high);
+        const yLow   = yScale(d.low);
+        if (xLeft == null || yOpen == null || yClose == null || yHigh == null || yLow == null) return null;
+
+        const isUp      = d.close >= d.open;
+        const color     = isUp ? "#4ade80" : "#f87171";
+        const fillColor = isUp ? "rgba(74,222,128,0.85)" : "rgba(248,113,113,0.85)";
+        const bodyTop   = Math.min(yOpen, yClose);
+        const bodyH     = Math.max(Math.abs(yClose - yOpen), 1.5);
+
+        return (
+          <g key={i}>
+            {/* Wick */}
+            <line x1={xLeft} y1={yHigh} x2={xLeft} y2={yLow} stroke={color} strokeWidth={1.5} />
+            {/* Body */}
+            <rect x={xLeft - candleW / 2} y={bodyTop} width={candleW} height={bodyH} fill={fillColor} rx={1} />
+          </g>
+        );
+      })}
+    </g>
+  );
+}
+
+// ─── Candle chart wrapper ─────────────────────────────────────────────────────
+
+function CandleChart({ candles, startingBalance }: { candles: Candle[]; startingBalance: number }) {
+  if (candles.length === 0) {
+    return (
+      <div className="h-full flex items-center justify-center">
+        <span className="text-[13px]" style={{ color: "var(--text-muted)" }}>No trade data for this timeframe</span>
+      </div>
+    );
+  }
+  const allVals = candles.flatMap(c => [c.high, c.low]);
+  const minVal  = Math.min(...allVals);
+  const maxVal  = Math.max(...allVals);
+  const pad     = (maxVal - minVal) * 0.15 || 200;
+
+  return (
+    <ResponsiveContainer width="100%" height="100%">
+      <ComposedChart data={candles} margin={{ top: 8, right: 8, left: 0, bottom: 4 }}>
+        <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.035)" vertical={false} />
+        <XAxis dataKey="time" tick={{ fill: "#4a5568", fontSize: 10 }} axisLine={false} tickLine={false} />
+        <YAxis
+          domain={[minVal - pad, maxVal + pad]}
+          tick={{ fill: "#4a5568", fontSize: 10 }}
+          axisLine={false} tickLine={false}
+          tickFormatter={fmtBalance} width={52}
+        />
+        <Tooltip content={<CandleTooltip />} cursor={{ stroke: "rgba(255,255,255,0.07)", strokeWidth: 1 }} />
+        <CandlesLayer candles={candles} />
+      </ComposedChart>
+    </ResponsiveContainer>
+  );
+}
+
+// ─── Timeframe button ──────────────────────────────────────────────────────────
+
+function TfButton({ label, active, onClick }: { label: string; active: boolean; onClick: () => void }) {
+  return (
+    <button
+      onClick={onClick}
+      className="px-2 py-0.5 rounded text-[10px] font-semibold tracking-wide transition-colors"
+      style={{
+        background: active ? "var(--accent-dim)" : "rgba(8,12,18,0.70)",
+        border: `1px solid ${active ? "var(--accent-border)" : "rgba(255,255,255,0.07)"}`,
+        color: active ? "var(--accent-text)" : "var(--text-muted)",
+        backdropFilter: "blur(4px)",
+      }}
+      onMouseEnter={e => { if (!active) (e.currentTarget as HTMLElement).style.color = "var(--text-secondary)"; }}
+      onMouseLeave={e => { if (!active) (e.currentTarget as HTMLElement).style.color = "var(--text-muted)"; }}
+    >
+      {label}
+    </button>
+  );
+}
+
+// ─── Main component ────────────────────────────────────────────────────────────
+
 interface Props {
   equityCurve: Array<{ date: string; balance: number }>;
-  account: Account | null;
+  account:     Account | null;
 }
 
 export function EquityChart({ equityCurve, account }: Props) {
-  const startingBalance = account?.startingBalance ?? 0;
-  const allTimeGain = account ? account.currentBalance - account.startingBalance : 0;
-  const isPos = allTimeGain >= 0;
+  const [timeframe, setTimeframe] = useState<Timeframe>("ALL");
+  const [candles, setCandles]     = useState<Candle[]>([]);
+  const { ready }                 = useDatabase();
 
-  const min = equityCurve.length ? Math.min(...equityCurve.map((p) => p.balance)) : 0;
-  const max = equityCurve.length ? Math.max(...equityCurve.map((p) => p.balance)) : 0;
-  const padding = (max - min) * 0.15;
+  const isCandle = CANDLE_TIMEFRAMES.includes(timeframe);
+
+  useEffect(() => {
+    if (!isCandle || !account || !ready) { setCandles([]); return; }
+    const fetch = timeframe === "1H"
+      ? getHourlyCandles(account.id)
+      : getDailyCandles(account.id, 7);
+    fetch.then(setCandles).catch(() => setCandles([]));
+  }, [timeframe, account?.id, ready, isCandle]);
+
+  const startingBalance = account?.startingBalance ?? 0;
+  const allTimeGain     = account ? account.currentBalance - account.startingBalance : 0;
+  const isPos           = allTimeGain >= 0;
+
+  const filtered = useMemo(() => filterCurve(equityCurve, timeframe), [equityCurve, timeframe]);
+
+  const minBal   = filtered.length ? Math.min(...filtered.map(p => p.balance)) : 0;
+  const maxBal   = filtered.length ? Math.max(...filtered.map(p => p.balance)) : 0;
+  const yPadding = (maxBal - minBal) * 0.15 || 200;
 
   return (
-    <Panel className="h-full flex flex-col">
-      <PanelHeader label="Equity Curve">
-        <span className="text-[11px] tabular-nums" style={{ color: isPos ? "var(--accent-text)" : "#f87171" }}>
-          {isPos ? "+" : ""}
-          {new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(allTimeGain)} all time
-        </span>
-      </PanelHeader>
+    <div style={{ position: "relative", height: "100%" }}>
+      <div style={{ position: "absolute", inset: 0, borderRadius: "14px", padding: "1.5px", pointerEvents: "none", zIndex: 1, background: "rgba(255,255,255,0.12)", WebkitMask: "linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0)", WebkitMaskComposite: "xor", maskComposite: "exclude" } as React.CSSProperties} />
+    <Panel state className="h-full flex flex-col gap-0 p-0 overflow-hidden" style={{ border: "none", borderRadius: "14px", background: "radial-gradient(ellipse at top left, rgba(255,255,255,0.07) 0%, transparent 60%), rgba(8,12,18,0.55)", backdropFilter: "blur(10px)", WebkitBackdropFilter: "blur(10px)", boxShadow: "none" } as React.CSSProperties}>
 
-      <div className="flex-1" style={{ minHeight: 0 }}>
-        <ResponsiveContainer width="100%" height="100%">
-          <AreaChart
-            data={equityCurve}
-            margin={{ top: 4, right: 4, left: 0, bottom: 0 }}
-          >
-            <defs>
-              <linearGradient id="equityGradient" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stopColor="var(--chart-line)" stopOpacity={0.2} />
-                <stop offset="100%" stopColor="var(--chart-line)" stopOpacity={0} />
-              </linearGradient>
-            </defs>
-
-            <CartesianGrid
-              strokeDasharray="3 3"
-              stroke="rgba(255,255,255,0.04)"
-              vertical={false}
-            />
-
-            <XAxis
-              dataKey="date"
-              tick={{ fill: "#374151", fontSize: 11 }}
-              axisLine={false}
-              tickLine={false}
-              interval={4}
-            />
-
-            <YAxis
-              domain={[min - padding, max + padding]}
-              tick={{ fill: "#374151", fontSize: 11 }}
-              axisLine={false}
-              tickLine={false}
-              tickFormatter={formatBalance}
-              width={52}
-            />
-
-            <Tooltip
-              content={<CustomTooltip startingBalance={startingBalance} />}
-              cursor={{ stroke: "rgba(255,255,255,0.08)", strokeWidth: 1 }}
-            />
-
-            <Area
-              type="monotone"
-              dataKey="balance"
-              stroke="var(--chart-line)"
-              strokeWidth={2}
-              fill="url(#equityGradient)"
-              dot={false}
-              activeDot={{ r: 4, fill: "var(--chart-line)", strokeWidth: 0 }}
-            />
-          </AreaChart>
-        </ResponsiveContainer>
+      {/* ── Header ── */}
+      <div
+        className="flex items-center justify-between px-5 py-3 shrink-0"
+        style={{ borderBottom: "1px solid var(--border-subtle)" }}
+      >
+        <div className="flex items-center gap-3">
+          <span className="text-[14px] font-semibold uppercase tracking-widest" style={{ color: "var(--text-secondary)" }}>
+            Equity Curve
+          </span>
+          <span className="text-[11px] tabular-nums font-medium" style={{ color: isPos ? "var(--accent-text)" : "#f87171" }}>
+            {isPos ? "+" : ""}
+            {new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(allTimeGain)} all time
+          </span>
+        </div>
+        <div className="flex items-center gap-1">
+          {TIMEFRAMES.map(tf => (
+            <TfButton key={tf} label={tf} active={timeframe === tf} onClick={() => setTimeframe(tf)} />
+          ))}
+        </div>
       </div>
+
+      {/* ── Chart — flex-1 ── */}
+      <div className="flex-1 relative" style={{ minHeight: 0 }}>
+        {isCandle ? (
+          <CandleChart candles={candles} startingBalance={startingBalance} />
+        ) : filtered.length < 2 ? (
+          <div className="h-full flex items-center justify-center">
+            <span className="text-[13px]" style={{ color: "var(--text-muted)" }}>
+              Not enough data for this timeframe
+            </span>
+          </div>
+        ) : (
+          <ResponsiveContainer width="100%" height="100%">
+            <AreaChart data={filtered} margin={{ top: 8, right: 8, left: 0, bottom: 4 }}>
+              <defs>
+                <linearGradient id="equityGrad" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%"   stopColor="var(--chart-line)" stopOpacity={0.26} />
+                  <stop offset="60%"  stopColor="var(--chart-line)" stopOpacity={0.06} />
+                  <stop offset="100%" stopColor="var(--chart-line)" stopOpacity={0} />
+                </linearGradient>
+              </defs>
+              <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.035)" vertical={false} />
+              <XAxis
+                dataKey="date"
+                tick={{ fill: "#4a5568", fontSize: 10 }}
+                axisLine={false} tickLine={false}
+                interval="preserveStartEnd"
+              />
+              <YAxis
+                domain={[minBal - yPadding, maxBal + yPadding]}
+                tick={{ fill: "#4a5568", fontSize: 10 }}
+                axisLine={false} tickLine={false}
+                tickFormatter={fmtBalance} width={52}
+              />
+              <Tooltip
+                content={<ChartTooltip startingBalance={startingBalance} />}
+                cursor={{ stroke: "rgba(255,255,255,0.07)", strokeWidth: 1 }}
+              />
+              <Area
+                type="monotone" dataKey="balance"
+                stroke="var(--chart-line)" strokeWidth={2.5}
+                fill="url(#equityGrad)" dot={false}
+                activeDot={{ r: 5, fill: "var(--chart-line)", stroke: "var(--bg-panel)", strokeWidth: 2 }}
+              />
+            </AreaChart>
+          </ResponsiveContainer>
+        )}
+
+      </div>
+
     </Panel>
+    </div>
   );
 }

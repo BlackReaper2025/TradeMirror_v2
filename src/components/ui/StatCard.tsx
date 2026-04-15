@@ -6,7 +6,7 @@ interface StatCardProps {
   label: string;
   value: string;
   sub?: string;
-  accent?: boolean;    // highlights value in accent color
+  accent?: boolean;    // highlights value in accent color + applies state glow
   positive?: boolean;
   negative?: boolean;
   icon?: ReactNode;
@@ -23,23 +23,23 @@ export function StatCard({ label, value, sub, accent, positive, negative, icon, 
     : "var(--text-primary)";
 
   return (
-    <Panel className={clsx("flex flex-col gap-1", className)}>
-      <div className="flex items-center justify-between">
+    <Panel padded={false} className={clsx("flex flex-col justify-between p-4", className)}>
+      <div className="flex items-center justify-between gap-1">
         <span
-          className="text-[11px] font-semibold uppercase tracking-widest"
-          style={{ color: "var(--text-secondary)" }}
+          className="text-[14px] font-semibold uppercase tracking-widest leading-tight"
+          style={{ color: "var(--accent-text)" }}
         >
           {label}
         </span>
         {icon && (
-          <span style={{ color: "var(--text-muted)" }}>
+          <span className="shrink-0" style={{ color: "var(--text-muted)" }}>
             {icon}
           </span>
         )}
       </div>
 
       <span
-        className="text-2xl font-bold tabular-nums leading-tight mt-1"
+        className="text-[19px] font-bold tabular-nums leading-tight break-all"
         style={{ color: valueColor }}
       >
         {value}
@@ -47,7 +47,7 @@ export function StatCard({ label, value, sub, accent, positive, negative, icon, 
 
       {sub && (
         <span
-          className="text-[12px]"
+          className="text-[11px] leading-tight"
           style={{ color: "var(--text-secondary)" }}
         >
           {sub}

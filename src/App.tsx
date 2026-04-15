@@ -2,6 +2,7 @@ import { ThemeProvider } from "./theme/ThemeContext";
 import { AppShell } from "./components/layout/AppShell";
 import { Dashboard } from "./pages/Dashboard";
 import { TradeLog } from "./pages/TradeLog";
+import { Settings } from "./pages/Settings";
 import { DatabaseProvider } from "./db/DatabaseProvider";
 
 function App() {
@@ -15,6 +16,8 @@ function App() {
               return <Dashboard />;
             case "trade-log":
               return <TradeLog />;
+            case "settings":
+              return <Settings />;
             default:
               return (
                 <div

@@ -204,7 +204,7 @@ async function doSeed(): Promise<void> {
       const avgWin = pnl > 0 ? (pnl / Math.max(winCount, 1)) * 1.5 : 300;
       const avgLoss = pnl < 0 ? Math.abs(pnl) / Math.max(lossCount, 1) : 150;
       return {
-        id: `ds-acc1-${day}`,
+        id: `ds-acc-1-${day}`,
         accountId: "acc-1",
         day,
         totalPnl: pnl,
@@ -223,7 +223,7 @@ async function doSeed(): Promise<void> {
     });
 
   const todayStats = {
-    id: `ds-acc1-${today}`,
+    id: `ds-acc-1-${today}`,
     accountId: "acc-1",
     day: today,
     totalPnl: 1_240,

@@ -1,27 +1,29 @@
-import { useState, useEffect, useRef } from "react";
-import { Timer, Play, Pause, RotateCcw, X } from "lucide-react";
-import { Panel, PanelHeader } from "../ui/Panel";
+import React, { useState, useEffect, useRef } from "react";
+import { Play, Pause, RotateCcw, X, ChevronRight } from "lucide-react";
+import { Panel } from "../ui/Panel";
 
-const PRESETS = [30, 60, 90, 120]; // minutes
+// Cycle order for the single duration button
+const DURATIONS = [60, 90, 120, 180] as const;
+const DEFAULT_IDX = 2; // 120 minutes
 
 function pad(n: number) { return String(n).padStart(2, "0"); }
 
 export function FatigueTimer() {
-  const [totalSecs, setTotalSecs] = useState(60 * 60); // 60 min default
-  const [remaining, setRemaining] = useState(60 * 60);
-  const [running, setRunning] = useState(false);
+  const [durIdx,      setDurIdx]      = useState(DEFAULT_IDX);
+  const [remaining,   setRemaining]   = useState(DURATIONS[DEFAULT_IDX] * 60);
+  const [running,     setRunning]     = useState(false);
   const [showOverlay, setShowOverlay] = useState(false);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
+  const totalSecs  = DURATIONS[durIdx] * 60;
+  const durationMins = DURATIONS[durIdx];
+
+  // Tick
   useEffect(() => {
     if (running) {
       intervalRef.current = setInterval(() => {
         setRemaining((r) => {
-          if (r <= 1) {
-            setRunning(false);
-            setShowOverlay(true);
-            return 0;
-          }
+          if (r <= 1) { setRunning(false); setShowOverlay(true); return 0; }
           return r - 1;
         });
       }, 1000);
@@ -33,90 +35,145 @@ export function FatigueTimer() {
 
   const reset = (mins: number) => {
     setRunning(false);
-    setTotalSecs(mins * 60);
     setRemaining(mins * 60);
   };
 
-  const pct = totalSecs > 0 ? ((totalSecs - remaining) / totalSecs) * 100 : 0;
-  const hours = Math.floor(remaining / 3600);
-  const mins = Math.floor((remaining % 3600) / 60);
-  const secs = remaining % 60;
-  const timeStr = hours > 0 ? `${pad(hours)}:${pad(mins)}:${pad(secs)}` : `${pad(mins)}:${pad(secs)}`;
+  // Cycle to next duration and reset timer
+  const cycleDuration = () => {
+    const next = (durIdx + 1) % DURATIONS.length;
+    setDurIdx(next);
+    reset(DURATIONS[next]);
+  };
 
+  const pct   = totalSecs > 0 ? ((totalSecs - remaining) / totalSecs) * 100 : 0;
+  const hrs   = Math.floor(remaining / 3600);
+  const mins  = Math.floor((remaining % 3600) / 60);
+  const secs  = remaining % 60;
+  const timeStr = hrs > 0
+    ? `${pad(hrs)}:${pad(mins)}:${pad(secs)}`
+    : `${pad(mins)}:${pad(secs)}`;
+
+  const minsLeft     = Math.ceil(remaining / 60);
   const warningLevel = remaining < 300 ? "red" : remaining < 600 ? "yellow" : "normal";
+  const ringColor    = warningLevel === "red" ? "#ef4444" : warningLevel === "yellow" ? "#f59e0b" : "var(--accent)";
+  const timeColor    = warningLevel === "red" ? "#f87171" : warningLevel === "yellow" ? "#fbbf24" : "var(--text-primary)";
 
   return (
     <>
-      <Panel className="h-full flex flex-col">
-        <PanelHeader label="Fatigue Timer">
-          <Timer size={14} style={{ color: "var(--text-muted)" }} />
-        </PanelHeader>
+      <div style={{ height: "100%", display: "flex", flexDirection: "column", position: "relative" }}>
+        <div style={{ position: "absolute", inset: 0, borderRadius: "14px", padding: "1.5px", pointerEvents: "none", zIndex: 1, background: "rgba(255,255,255,0.12)", WebkitMask: "linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0)", WebkitMaskComposite: "xor", maskComposite: "exclude" } as React.CSSProperties} />
+      <Panel state className="flex-1 flex flex-col gap-0 p-0 overflow-hidden" style={{ border: "none", borderRadius: "14px", background: "radial-gradient(ellipse at top left, rgba(255,255,255,0.07) 0%, transparent 60%), rgba(8,12,18,0.55)", backdropFilter: "blur(10px)", WebkitBackdropFilter: "blur(10px)", boxShadow: "none" } as React.CSSProperties}>
 
-        {/* Time display */}
-        <div className="flex-1 flex flex-col items-center justify-center gap-4">
-          {/* Circular progress */}
-          <div className="relative w-24 h-24">
-            <svg className="w-full h-full -rotate-90" viewBox="0 0 96 96">
-              <circle cx="48" cy="48" r="40" fill="none" stroke="var(--border-subtle)" strokeWidth="6" />
-              <circle
-                cx="48" cy="48" r="40" fill="none"
-                stroke={warningLevel === "red" ? "#ef4444" : warningLevel === "yellow" ? "#f59e0b" : "var(--accent)"}
-                strokeWidth="6"
-                strokeLinecap="round"
-                strokeDasharray={`${2 * Math.PI * 40}`}
-                strokeDashoffset={`${2 * Math.PI * 40 * (1 - pct / 100)}`}
-                style={{ transition: "stroke-dashoffset 1s linear, stroke 0.5s ease" }}
-              />
-            </svg>
-            <div className="absolute inset-0 flex flex-col items-center justify-center">
-              <span
-                className="text-[18px] font-bold tabular-nums leading-none"
-                style={{ color: warningLevel === "red" ? "#f87171" : warningLevel === "yellow" ? "#fbbf24" : "var(--text-primary)" }}
-              >
-                {timeStr}
-              </span>
-            </div>
-          </div>
+        {/* Header — label left, controls right */}
+        <div
+          className="flex items-center justify-between px-5 pt-4 pb-3 shrink-0 gap-3"
+          style={{ borderBottom: "1px solid var(--border-subtle)" }}
+        >
+          <span className="text-[14px] font-semibold uppercase tracking-widest shrink-0" style={{ color: "var(--text-secondary)" }}>
+            Fatigue Timer
+          </span>
 
-          {/* Controls */}
+          {/* Controls inline in header */}
           <div className="flex items-center gap-2">
+
+            {/* Duration cycle */}
             <button
-              onClick={() => reset(totalSecs / 60)}
-              className="w-8 h-8 rounded-lg flex items-center justify-center transition-colors"
-              style={{ background: "var(--bg-panel-alt)", border: "1px solid var(--border-subtle)", color: "var(--text-secondary)" }}
-            >
-              <RotateCcw size={13} />
-            </button>
-            <button
-              onClick={() => setRunning((r) => !r)}
-              className="w-10 h-10 rounded-xl flex items-center justify-center font-medium transition-all"
+              onClick={cycleDuration}
+              title="Cycle duration (60 → 90 → 120 → 180m)"
+              className="flex items-center gap-1 px-2 h-7 rounded-lg transition-colors"
               style={{
-                background: running ? "var(--accent-dim)" : "var(--accent)",
-                border: `1px solid var(--accent-border)`,
-                color: running ? "var(--accent-text)" : "#000",
+                background: "var(--bg-panel-alt)",
+                border: "1px solid var(--border-subtle)",
+                color: "var(--text-secondary)",
+              }}
+              onMouseEnter={(e) => {
+                (e.currentTarget as HTMLElement).style.borderColor = "var(--accent-border)";
+                (e.currentTarget as HTMLElement).style.color = "var(--accent-text)";
+              }}
+              onMouseLeave={(e) => {
+                (e.currentTarget as HTMLElement).style.borderColor = "var(--border-subtle)";
+                (e.currentTarget as HTMLElement).style.color = "var(--text-secondary)";
               }}
             >
-              {running ? <Pause size={15} /> : <Play size={15} />}
+              <span className="text-[11px] font-semibold tabular-nums">{durationMins}m</span>
+              <ChevronRight size={10} style={{ opacity: 0.6 }} />
             </button>
-          </div>
 
-          {/* Preset buttons */}
-          <div className="flex gap-1.5">
-            {PRESETS.map((m) => (
-              <button
-                key={m}
-                onClick={() => reset(m)}
-                className="px-2 py-1 rounded-lg text-[11px] font-medium transition-colors"
-                style={{ background: "var(--bg-panel-alt)", border: "1px solid var(--border-subtle)", color: "var(--text-secondary)" }}
-                onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.color = "var(--text-primary)"; }}
-                onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.color = "var(--text-secondary)"; }}
-              >
-                {m}m
-              </button>
-            ))}
+            {/* Reset */}
+            <button
+              onClick={() => reset(durationMins)}
+              title="Reset"
+              className="w-7 h-7 rounded-lg flex items-center justify-center transition-colors"
+              style={{
+                background: "var(--bg-panel-alt)",
+                border: "1px solid var(--border-subtle)",
+                color: "var(--text-secondary)",
+              }}
+              onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.color = "var(--text-primary)"; }}
+              onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.color = "var(--text-secondary)"; }}
+            >
+              <RotateCcw size={11} />
+            </button>
+
+            {/* Start / Pause */}
+            <button
+              onClick={() => setRunning((r) => !r)}
+              className="w-7 h-7 rounded-lg flex items-center justify-center transition-all"
+              style={{
+                background: running ? "var(--accent-dim)" : "var(--accent)",
+                border: "1px solid var(--accent-border)",
+                color: running ? "var(--accent-text)" : "#000",
+                boxShadow: running ? "none" : "0 0 12px var(--accent-glow)",
+              }}
+            >
+              {running ? <Pause size={12} /> : <Play size={12} />}
+            </button>
+
           </div>
         </div>
+
+        {/* Body — large time + progress bar */}
+        <div className="flex-1 flex flex-col justify-center px-5 py-4 gap-3">
+
+          {/* Time display */}
+          <div className="flex items-end justify-between">
+            <span
+              className="font-bold tabular-nums leading-none"
+              style={{ color: timeColor, fontSize: 42, letterSpacing: "-0.03em", transition: "color 0.5s ease" }}
+            >
+              {timeStr}
+            </span>
+            <span className="text-[11px] mb-1" style={{ color: "var(--text-muted)" }}>
+              {minsLeft}m left
+            </span>
+          </div>
+
+          {/* Progress bar */}
+          <div className="w-full rounded-full overflow-hidden" style={{ height: 6, background: "var(--border-subtle)" }}>
+            <div
+              className="h-full rounded-full"
+              style={{
+                width: `${pct}%`,
+                background: ringColor,
+                transition: "width 1s linear, background 0.5s ease",
+              }}
+            />
+          </div>
+
+          {/* Duration dots */}
+          <div className="flex gap-2">
+            {DURATIONS.map((d, i) => (
+              <div
+                key={d}
+                className="w-1.5 h-1.5 rounded-full"
+                style={{ background: i === durIdx ? "var(--accent)" : "var(--border-subtle)" }}
+              />
+            ))}
+          </div>
+
+        </div>
       </Panel>
+      </div>
 
       {/* Fatigue overlay */}
       {showOverlay && (
@@ -136,11 +193,11 @@ export function FatigueTimer() {
               Your session timer has ended. Mental fatigue is a real risk.
             </p>
             <p className="text-[14px] mb-8" style={{ color: "#64748b" }}>
-              Step away, rest, and return with a fresh perspective. Protect your edge.
+              Step away, rest, and return with a fresh perspective.
             </p>
             <div className="flex flex-col gap-3">
               <button
-                onClick={() => { setShowOverlay(false); reset(60); }}
+                onClick={() => { setShowOverlay(false); reset(durationMins); }}
                 className="w-full py-3 rounded-xl font-semibold text-[14px] transition-opacity hover:opacity-90"
                 style={{ background: "rgba(239,68,68,0.15)", border: "1px solid rgba(239,68,68,0.25)", color: "#f87171" }}
               >
@@ -155,11 +212,7 @@ export function FatigueTimer() {
               </button>
             </div>
           </div>
-          <button
-            onClick={() => setShowOverlay(false)}
-            className="absolute top-6 right-6 p-2 rounded-lg"
-            style={{ color: "var(--text-muted)" }}
-          >
+          <button onClick={() => setShowOverlay(false)} className="absolute top-6 right-6 p-2 rounded-lg" style={{ color: "var(--text-muted)" }}>
             <X size={20} />
           </button>
         </div>

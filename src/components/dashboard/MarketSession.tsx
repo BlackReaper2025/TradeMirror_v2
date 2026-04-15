@@ -37,7 +37,7 @@ export function MarketSession() {
   const activeColor = session ? SESSION_COLORS[session.name] ?? "#8899aa" : "#374151";
 
   return (
-    <Panel className="h-full flex flex-col">
+    <Panel state className="h-full flex flex-col">
       <PanelHeader label="Market Session" />
 
       {/* Active session */}

@@ -39,7 +39,7 @@ export function PortfolioPanel({ portfolio }: Props) {
   const total = portfolio.reduce((s, p) => s + p.value, 0);
 
   return (
-    <Panel className="h-full flex flex-col">
+    <Panel state className="h-full flex flex-col">
       <PanelHeader label="Portfolio">
         <span
           className="text-[13px] font-bold tabular-nums"
@@ -50,15 +50,15 @@ export function PortfolioPanel({ portfolio }: Props) {
       </PanelHeader>
 
       {/* Donut */}
-      <div style={{ height: 160 }}>
+      <div className="flex-1" style={{ minHeight: 0 }}>
         <ResponsiveContainer width="100%" height="100%">
-          <PieChart>
+          <PieChart margin={{ top: 4, right: 4, bottom: 4, left: 4 }}>
             <Pie
               data={portfolio}
               cx="50%"
               cy="50%"
-              innerRadius={52}
-              outerRadius={72}
+              innerRadius={48}
+              outerRadius={66}
               paddingAngle={3}
               dataKey="value"
               strokeWidth={0}
@@ -73,7 +73,7 @@ export function PortfolioPanel({ portfolio }: Props) {
       </div>
 
       {/* Legend */}
-      <div className="flex flex-col gap-2 mt-2">
+      <div className="flex flex-col gap-2 shrink-0">
         {portfolio.map((item) => {
           const pct = total > 0 ? ((item.value / total) * 100).toFixed(1) : "0.0";
           return (

@@ -1,34 +1,53 @@
 import { useEffect, useState } from "react";
 import { Panel } from "../ui/Panel";
+import { getTimeFormat, type TimeFormat } from "../../lib/preferences";
 
 function pad(n: number) { return String(n).padStart(2, "0"); }
 
-function getTimeDisplay() {
+function buildTimeStr(now: Date, fmt: TimeFormat): string {
+  if (fmt === "24h") {
+    return `${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
+  }
+  let h = now.getHours();
+  const ampm = h >= 12 ? "PM" : "AM";
+  h = h % 12 || 12;
+  return `${pad(h)}:${pad(now.getMinutes())}:${pad(now.getSeconds())} ${ampm}`;
+}
+
+function getTimeDisplay(fmt: TimeFormat) {
   const now = new Date();
-  const hh = pad(now.getHours());
-  const mm = pad(now.getMinutes());
-  const ss = pad(now.getSeconds());
   const date = now.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", year: "numeric" });
   const utc = now.toLocaleString("en-US", { timeZone: "UTC", hour: "2-digit", minute: "2-digit", hour12: false });
-  return { time: `${hh}:${mm}:${ss}`, date, utc };
+  return { time: buildTimeStr(now, fmt), date, utc };
 }
 
 export function ClockPanel() {
-  const [display, setDisplay] = useState(getTimeDisplay);
+  const [fmt, setFmt] = useState<TimeFormat>(getTimeFormat);
+  const [display, setDisplay] = useState(() => getTimeDisplay(fmt));
 
+  // Re-read format when preferences change
   useEffect(() => {
-    const id = setInterval(() => setDisplay(getTimeDisplay()), 1000);
-    return () => clearInterval(id);
+    const handler = () => {
+      const f = getTimeFormat();
+      setFmt(f);
+    };
+    window.addEventListener("tm:prefs-changed", handler);
+    return () => window.removeEventListener("tm:prefs-changed", handler);
   }, []);
 
+  useEffect(() => {
+    const id = setInterval(() => setDisplay(getTimeDisplay(fmt)), 1000);
+    return () => clearInterval(id);
+  }, [fmt]);
+
   return (
-    <Panel className="h-full flex flex-col justify-between">
-      <div className="text-[11px] font-semibold uppercase tracking-widest" style={{ color: "var(--text-secondary)" }}>
+    <Panel state className="h-full flex flex-col justify-between">
+      <div className="text-[15px] font-semibold uppercase tracking-widest" style={{ color: "var(--accent-text)" }}>
         Local Time
       </div>
 
       <div className="flex-1 flex flex-col justify-center">
-        <div className="text-[38px] font-bold tabular-nums leading-none" style={{ color: "var(--text-primary)" }}>
+        <div className="text-[32px] font-bold tabular-nums leading-none" style={{ color: "var(--text-primary)" }}>
           {display.time}
         </div>
         <div className="text-[12px] mt-2" style={{ color: "var(--text-secondary)" }}>
