@@ -6,6 +6,9 @@ import { Panel } from "../ui/Panel";
 const DURATIONS = [60, 90, 120, 180] as const;
 const DEFAULT_IDX = 2; // 120 minutes
 
+// Fixed waveform heights for the drain visualiser (20 bars, percent of container height)
+const BAR_HEIGHTS = [65, 85, 45, 95, 58, 75, 40, 88, 52, 78, 48, 92, 42, 70, 60, 82, 50, 68, 90, 62];
+
 function pad(n: number) { return String(n).padStart(2, "0"); }
 
 export function FatigueTimer() {
@@ -132,32 +135,41 @@ export function FatigueTimer() {
           </div>
         </div>
 
-        {/* Body — large time + progress bar */}
-        <div className="flex-1 flex flex-col justify-center px-5 py-4 gap-3">
+        {/* Body */}
+        <div className="flex-1 flex flex-col justify-center px-5 py-3 gap-4">
 
           {/* Time display */}
-          <div className="flex items-end justify-between">
+          <div className="flex items-baseline justify-between">
             <span
               className="font-bold tabular-nums leading-none"
-              style={{ color: timeColor, fontSize: 42, letterSpacing: "-0.03em", transition: "color 0.5s ease" }}
+              style={{ color: timeColor, fontSize: 40, letterSpacing: "-0.03em", transition: "color 0.5s ease" }}
             >
               {timeStr}
             </span>
-            <span className="text-[11px] mb-1" style={{ color: "var(--text-muted)" }}>
+            <span className="text-[11px]" style={{ color: "var(--text-muted)" }}>
               {minsLeft}m left
             </span>
           </div>
 
-          {/* Progress bar */}
-          <div className="w-full rounded-full overflow-hidden" style={{ height: 6, background: "var(--border-subtle)" }}>
-            <div
-              className="h-full rounded-full"
-              style={{
-                width: `${pct}%`,
-                background: ringColor,
-                transition: "width 1s linear, background 0.5s ease",
-              }}
-            />
+          {/* Waveform drain */}
+          <div className="flex items-end" style={{ height: 44, gap: 3 }}>
+            {BAR_HEIGHTS.map((h, i) => {
+              const elapsed = totalSecs > 0 ? (totalSecs - remaining) / totalSecs : 1;
+              const active  = i / BAR_HEIGHTS.length >= elapsed;
+              return (
+                <div
+                  key={i}
+                  className="flex-1"
+                  style={{
+                    height: `${h}%`,
+                    borderRadius: 3,
+                    background: active ? ringColor : "rgba(255,255,255,0.06)",
+                    boxShadow:  active ? `0 0 6px ${ringColor}55` : "none",
+                    transition: "background 0.5s ease, box-shadow 0.5s ease",
+                  }}
+                />
+              );
+            })}
           </div>
 
           {/* Duration dots */}

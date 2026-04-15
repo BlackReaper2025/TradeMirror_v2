@@ -3,7 +3,7 @@ import { Plus, Check, Trash2, FolderOpen } from "lucide-react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { Panel, PanelHeader } from "../components/ui/Panel";
 import { getTimeFormat, setTimeFormat, type TimeFormat } from "../lib/preferences";
-import { getBrokerageUrl, setBrokerageUrl, getMusicUrl, setMusicUrl, getSlideshowFolder, setSlideshowFolder } from "../lib/preferences";
+import { getBrokerageUrl, setBrokerageUrl, getMusicUrl, setMusicUrl, getSlideshowFolder, setSlideshowFolder, getSlideshowInterval, setSlideshowInterval } from "../lib/preferences";
 import {
   getSettings,
   getActiveAccounts,
@@ -128,18 +128,39 @@ function SaveButton({
 }: {
   onClick: () => void; disabled?: boolean; children: React.ReactNode;
 }) {
+  const [saved, setSaved] = useState(false);
+
+  function handleClick() {
+    onClick();
+    setSaved(true);
+    setTimeout(() => setSaved(false), 1500);
+  }
+
   return (
     <button
-      onClick={onClick}
+      onClick={handleClick}
       disabled={disabled}
       className="px-4 py-2 rounded-lg text-[12px] font-semibold transition-all disabled:opacity-50"
       style={{
-        background: "var(--accent-dim)",
-        border: "1px solid var(--accent-border)",
-        color: "var(--accent-text)",
+        background: saved ? "rgba(74,222,128,0.15)" : "var(--accent-dim)",
+        border: `1px solid ${saved ? "rgba(74,222,128,0.4)" : "var(--accent-border)"}`,
+        color: saved ? "#4ade80" : "var(--accent-text)",
+        minWidth: 60,
+      }}
+      onMouseEnter={e => {
+        if (disabled || saved) return;
+        const el = e.currentTarget as HTMLElement;
+        el.style.background = "var(--accent)";
+        el.style.color = "#fff";
+      }}
+      onMouseLeave={e => {
+        if (disabled || saved) return;
+        const el = e.currentTarget as HTMLElement;
+        el.style.background = "var(--accent-dim)";
+        el.style.color = "var(--accent-text)";
       }}
     >
-      {children}
+      {saved ? "Saved ✓" : children}
     </button>
   );
 }
@@ -160,7 +181,8 @@ export function Settings() {
   // ── External URLs ──
   const [brokerUrl,       setBrokerLocal]       = useState(getBrokerageUrl);
   const [musicUrl,        setMusicLocal]        = useState(getMusicUrl);
-  const [slideshowFolder, setSlideshowLocal]    = useState(getSlideshowFolder);
+  const [slideshowFolder,   setSlideshowLocal]   = useState(getSlideshowFolder);
+  const [slideshowInterval, setSlideshowInterval_] = useState(() => String(getSlideshowInterval()));
 
   function saveBrokerUrl() {
     setBrokerageUrl(brokerUrl.trim());
@@ -170,6 +192,10 @@ export function Settings() {
   }
   function saveSlideshowFolder() {
     setSlideshowFolder(slideshowFolder.trim());
+  }
+  function saveSlideshowInterval() {
+    const n = parseInt(slideshowInterval, 10);
+    setSlideshowInterval(isNaN(n) || n < 1 ? 60 : n);
   }
   async function browseSlideshowFolder() {
     const selected = await openDialog({ directory: true, multiple: false });
@@ -621,6 +647,17 @@ export function Settings() {
                 <FolderOpen size={13} /> Browse
               </button>
               <SaveButton onClick={saveSlideshowFolder}>Save</SaveButton>
+            </div>
+            <div className="flex items-end gap-3 mt-2">
+              <div style={{ width: 140 }}>
+                <FieldInput
+                  label="Slide Interval (seconds)"
+                  value={slideshowInterval}
+                  onChange={setSlideshowInterval_}
+                  placeholder="60"
+                />
+              </div>
+              <SaveButton onClick={saveSlideshowInterval}>Save</SaveButton>
             </div>
           </div>
         </Panel>

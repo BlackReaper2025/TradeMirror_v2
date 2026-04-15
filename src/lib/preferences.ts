@@ -5,10 +5,11 @@
 export type TimeFormat = "12h" | "24h";
 
 const KEYS = {
-  timeFormat:       "tm_time_format",
-  brokerageUrl:     "tm_brokerage_url",
-  musicUrl:         "tm_music_url",
-  slideshowFolder:  "tm_slideshow_folder",
+  timeFormat:        "tm_time_format",
+  brokerageUrl:      "tm_brokerage_url",
+  musicUrl:          "tm_music_url",
+  slideshowFolder:   "tm_slideshow_folder",
+  slideshowInterval: "tm_slideshow_interval",
 } as const;
 
 export function getTimeFormat(): TimeFormat {
@@ -40,5 +41,15 @@ export function getSlideshowFolder(): string {
 }
 export function setSlideshowFolder(path: string): void {
   localStorage.setItem(KEYS.slideshowFolder, path);
+  window.dispatchEvent(new CustomEvent("tm:prefs-changed"));
+}
+
+export function getSlideshowInterval(): number {
+  const raw = localStorage.getItem(KEYS.slideshowInterval);
+  const n   = raw !== null ? parseInt(raw, 10) : NaN;
+  return isNaN(n) || n < 1 ? 60 : n;
+}
+export function setSlideshowInterval(seconds: number): void {
+  localStorage.setItem(KEYS.slideshowInterval, String(seconds));
   window.dispatchEvent(new CustomEvent("tm:prefs-changed"));
 }
