@@ -17,23 +17,16 @@ function fmt(n: number, decimals = 2) {
 // ─── sub-components ───────────────────────────────────────────────────────────
 
 function DirBtn({
-  label, active, color, onClick,
-}: { label: string; active: boolean; color: "green" | "red"; onClick: () => void }) {
-  const g = color === "green";
+  label, active, onClick,
+}: { label: string; active: boolean; onClick: () => void }) {
   return (
     <button
       onClick={onClick}
       className="flex-1 py-1 rounded-lg text-[12px] font-semibold transition-colors"
       style={{
-        background: active
-          ? g ? "rgba(34,197,94,0.18)" : "rgba(239,68,68,0.18)"
-          : "rgba(255,255,255,0.10)",
-        border: active
-          ? g ? "1px solid rgba(34,197,94,0.55)" : "1px solid rgba(239,68,68,0.55)"
-          : "1px solid rgba(255,255,255,0.18)",
-        color: active
-          ? g ? "#4ade80" : "#f87171"
-          : "var(--text-secondary)",
+        background: active ? "var(--accent-dim)" : "rgba(255,255,255,0.06)",
+        border:     active ? "1px solid var(--accent-border)" : "1px solid rgba(255,255,255,0.10)",
+        color:      active ? "var(--accent-text)" : "var(--text-secondary)",
       }}
     >
       {label}
@@ -214,8 +207,8 @@ export function RiskCalculatorPlaceholder() {
 
           {/* Direction */}
           <div className="flex gap-2">
-            <DirBtn label="▲  Long"  active={direction === "long"}  color="green" onClick={() => setDirection("long")}  />
-            <DirBtn label="▼  Short" active={direction === "short"} color="red"   onClick={() => setDirection("short")} />
+            <DirBtn label="▲  Long"  active={direction === "long"}  onClick={() => setDirection("long")}  />
+            <DirBtn label="▼  Short" active={direction === "short"} onClick={() => setDirection("short")} />
           </div>
 
           {/* Entry + Stop Loss side by side */}

@@ -75,23 +75,21 @@ function fmtPnl(n: number): string {
 
 function cellBg(pnl: number, isToday: boolean): string {
   if (isToday && pnl === 0) return "rgba(255,255,255,0.02)";
-  if (pnl > 500)  return "rgba(34,197,94,0.20)";
-  if (pnl > 0)    return "rgba(34,197,94,0.10)";
-  if (pnl < -300) return "rgba(239,68,68,0.20)";
-  if (pnl < 0)    return "rgba(239,68,68,0.10)";
+  if (pnl > 0)  return "var(--accent-dim)";
+  if (pnl < 0)  return "rgba(255,255,255,0.04)";
   return "rgba(255,255,255,0.02)";
 }
 
 function cellBorder(pnl: number, isToday: boolean): string {
   if (isToday) return "1px solid var(--accent-border)";
-  if (pnl > 0)  return "1px solid rgba(34,197,94,0.18)";
-  if (pnl < 0)  return "1px solid rgba(239,68,68,0.18)";
+  if (pnl > 0) return "1px solid var(--accent-border)";
+  if (pnl < 0) return "1px solid rgba(255,255,255,0.08)";
   return "1px solid transparent";
 }
 
 function pnlColor(pnl: number): string {
-  if (pnl > 0) return "#4ade80";
-  if (pnl < 0) return "#f87171";
+  if (pnl > 0) return "var(--accent-text)";
+  if (pnl < 0) return "var(--text-secondary)";
   return "var(--text-muted)";
 }
 
@@ -200,16 +198,12 @@ export function CalendarPanel({ calendarDays, selectedDate, onSelectDate }: Prop
             const holiday      = MARKET_HOLIDAYS.get(cell.date) ?? null;
 
             // Determine the natural border color for selection highlight
-            const selectedBorder = isToday
-              ? "var(--accent-border)"
-              : pnl > 0  ? "rgba(34,197,94,0.7)"
-              : pnl < 0  ? "rgba(239,68,68,0.7)"
-              : "rgba(255,255,255,0.35)";
+            const selectedBorder = "var(--accent-border)";
 
             const borderStyle = isSelected
-              ? `1.5px solid ${selectedBorder}`
+              ? `2px solid ${selectedBorder}`
               : holiday
-              ? "1px solid rgba(239,68,68,0.6)"
+              ? "1px solid rgba(255,255,255,0.15)"
               : cellBorder(pnl, isToday);
 
             return (
@@ -242,7 +236,7 @@ export function CalendarPanel({ calendarDays, selectedDate, onSelectDate }: Prop
                   {holiday && (
                     <span
                       className="text-[8px] font-semibold leading-tight text-right"
-                      style={{ color: "#f87171", lineHeight: 1.2 }}
+                      style={{ color: "var(--text-muted)", lineHeight: 1.2 }}
                     >
                       {holiday}
                     </span>

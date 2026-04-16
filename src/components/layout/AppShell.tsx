@@ -2,6 +2,7 @@ import { useState, ReactNode } from "react";
 import { Maximize2, Minimize2 } from "lucide-react";
 import { Sidebar, Page } from "./Sidebar";
 import { useFullscreen } from "../../hooks/useFullscreen";
+import { RadialGlowBackground } from "../backgrounds/RadialGlowBackground";
 
 interface AppShellProps {
   children: (page: Page) => ReactNode;
@@ -15,7 +16,7 @@ export function AppShell({ children }: AppShellProps) {
   return (
     <div
       className="flex h-screen w-screen overflow-hidden"
-      style={{ background: "var(--bg-base)" }}
+      style={{ background: "var(--bg-base)", position: "relative" }}
     >
       <Sidebar
         activePage={activePage}
@@ -26,7 +27,9 @@ export function AppShell({ children }: AppShellProps) {
 
       <main
         className="flex-1 overflow-hidden flex flex-col min-w-0"
+        style={{ position: "relative", zIndex: 1 }}
       >
+        <RadialGlowBackground />
         {children(activePage)}
       </main>
 

@@ -223,11 +223,11 @@ export function TradeLogPreview({ trades, selectedDate, onTradeChanged }: Props)
                   {/* Side icon */}
                   <div
                     className="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0"
-                    style={{ background: isWin ? "rgba(34,197,94,0.12)" : "rgba(239,68,68,0.12)" }}
+                    style={{ background: isWin ? "var(--accent-dim)" : "rgba(255,255,255,0.06)" }}
                   >
                     {trade.side === "long"
-                      ? <ArrowUpRight size={14} style={{ color: isWin ? "#4ade80" : "#f87171" }} />
-                      : <ArrowDownRight size={14} style={{ color: isWin ? "#4ade80" : "#f87171" }} />
+                      ? <ArrowUpRight size={14} style={{ color: isWin ? "var(--accent-text)" : "var(--text-muted)" }} />
+                      : <ArrowDownRight size={14} style={{ color: isWin ? "var(--accent-text)" : "var(--text-muted)" }} />
                     }
                   </div>
 
@@ -239,7 +239,7 @@ export function TradeLogPreview({ trades, selectedDate, onTradeChanged }: Props)
                       </span>
                       <Badge
                         label={trade.side === "long" ? "Long" : "Short"}
-                        color={trade.side === "long" ? "green" : "red"}
+                        color="neutral"
                       />
                     </div>
                     <div className="text-[11px] truncate mt-0.5" style={{ color: "var(--text-secondary)" }}>
@@ -251,7 +251,7 @@ export function TradeLogPreview({ trades, selectedDate, onTradeChanged }: Props)
                   <div className="flex flex-col items-end gap-2 flex-shrink-0">
                     <div
                       className="text-[14px] font-bold tabular-nums"
-                      style={{ color: isWin ? "#4ade80" : "#f87171" }}
+                      style={{ color: isWin ? "var(--accent-text)" : "var(--text-secondary)" }}
                     >
                       {pnlStr}
                     </div>
@@ -297,6 +297,7 @@ export function TradeLogPreview({ trades, selectedDate, onTradeChanged }: Props)
         <TradeForm
           account={account}
           existingTrade={editTrade}
+          defaultDate={editTrade ? undefined : (selectedDate ?? undefined)}
           onClose={() => { setShowForm(false); setEditTrade(null); }}
           onSaved={editTrade ? handleEditSave : handleSave}
         />

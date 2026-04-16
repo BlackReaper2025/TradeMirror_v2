@@ -70,8 +70,9 @@ function nowTimeLocal() {
   return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
-function makeEmpty(): TradeFormValues {
-  const now = `${todayLocal()}T${nowTimeLocal()}`;
+function makeEmpty(defaultDate?: string): TradeFormValues {
+  const date = defaultDate ?? todayLocal();
+  const now  = `${date}T${nowTimeLocal()}`;
   return {
     openedAt: now,
     closedAt: now,
@@ -388,16 +389,17 @@ function ScoreInput({
 interface Props {
   account: Account;
   existingTrade?: TradeWithJournal | null;
+  defaultDate?: string;
   onClose: () => void;
   onSaved: (values: TradeFormValues) => Promise<void>;
 }
 
 type Tab = "trade" | "journal";
 
-export function TradeForm({ account, existingTrade, onClose, onSaved }: Props) {
+export function TradeForm({ account, existingTrade, defaultDate, onClose, onSaved }: Props) {
   const isEdit = existingTrade != null;
   const [values, setValues]   = useState<TradeFormValues>(() =>
-    isEdit ? tradeToFormValues(existingTrade!) : makeEmpty()
+    isEdit ? tradeToFormValues(existingTrade!) : makeEmpty(defaultDate)
   );
   const [tab, setTab]         = useState<Tab>("trade");
   const [saving, setSaving]   = useState(false);
