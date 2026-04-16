@@ -39,17 +39,20 @@ body {
   --text-muted:       #4a5568;   /* was #374151 — lifted one step */
   --text-label:       #8899aa;
 
-  /* ── Accent: green (default / target hit) ── */
-  --accent:           #22c55e;
-  --accent-dim:       rgba(34, 197, 94, 0.18);
-  --accent-glow:      rgba(34, 197, 94, 0.13);   /* outer bloom — panel glow */
-  --accent-border:    rgba(34, 197, 94, 0.24);   /* panel border ring */
-  --accent-text:      #4ade80;
+  /* ── Accent: green (default / target hit) — yellow-green ── */
+  /* ── Accent: green (default / target hit) — yellow-green ── */
+  /* ── Accent: green (default / target hit) — yellow-green ── */
+  /* ── Accent: green (default / target hit) — yellow-green ── */
+  --accent:           #7ed62e;
+  --accent-dim:       rgba(126, 214, 46, 0.18);
+  --accent-glow:      rgba(126, 214, 46, 0.13);  /* outer bloom — panel glow */
+  --accent-border:    rgba(126, 214, 46, 0.24);  /* panel border ring */
+  --accent-text:      #96e048;
 
   /* Chart */
-  --chart-line:       #22c55e;
-  --chart-fill-from:  rgba(34, 197, 94, 0.22);
-  --chart-fill-to:    rgba(34, 197, 94, 0.00);
+  --chart-line:       #7ed62e;
+  --chart-fill-from:  rgba(126, 214, 46, 0.22);
+  --chart-fill-to:    rgba(126, 214, 46, 0.00);
 }
 
 /* ─── Yellow theme (positive, target not hit) ─────── */

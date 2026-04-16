@@ -498,7 +498,7 @@ export async function getCalendarDays(
 
 // ─── Dashboard: portfolio ─────────────────────────────────────────────────────
 
-const ACCOUNT_COLORS = ["#22c55e", "#3b82f6", "#8b5cf6", "#f59e0b", "#ec4899"];
+const ACCOUNT_COLORS = ["#8fd63e", "#3b82f6", "#8b5cf6", "#f59e0b", "#ec4899"];
 
 export async function getPortfolio() {
   const db = getDb();

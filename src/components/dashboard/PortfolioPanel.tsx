@@ -1,3 +1,4 @@
+import { useMemo } from "react";
 import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer } from "recharts";
 import { Panel, PanelHeader } from "../ui/Panel";
 
@@ -31,12 +32,34 @@ function CustomTooltip({ active, payload, total }: CustomTooltipProps) {
   );
 }
 
+// Darker shades of the accent — each step reduces lightness by ~18%
+const SHADE_OPACITY = [1, 0.70, 0.48, 0.32, 0.20];
+
 interface Props {
   portfolio: PortfolioSlice[];
 }
 
 export function PortfolioPanel({ portfolio }: Props) {
   const total = portfolio.reduce((s, p) => s + p.value, 0);
+
+  // Read --accent from CSS at render time — always in sync with the theme
+  const accent = useMemo(
+    () => getComputedStyle(document.documentElement).getPropertyValue("--accent").trim() || "#96e030",
+    // re-read whenever portfolio changes (theme may have changed too)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [portfolio],
+  );
+
+  // Sort largest first, then assign accent shades by rank
+  const slices = useMemo(() => {
+    const sorted = [...portfolio].sort((a, b) => b.value - a.value);
+    return sorted.map((p, i) => ({
+      ...p,
+      color: i === 0
+        ? accent
+        : `color-mix(in srgb, ${accent} ${Math.round(SHADE_OPACITY[Math.min(i, SHADE_OPACITY.length - 1)] * 100)}%, #080c12)`,
+    }));
+  }, [portfolio, accent]);
 
   return (
     <Panel state className="h-full flex flex-col">
@@ -54,7 +77,7 @@ export function PortfolioPanel({ portfolio }: Props) {
         <ResponsiveContainer width="100%" height="100%">
           <PieChart margin={{ top: 4, right: 4, bottom: 4, left: 4 }}>
             <Pie
-              data={portfolio}
+              data={slices}
               cx="50%"
               cy="50%"
               innerRadius={48}
@@ -63,7 +86,7 @@ export function PortfolioPanel({ portfolio }: Props) {
               dataKey="value"
               strokeWidth={0}
             >
-              {portfolio.map((entry, i) => (
+              {slices.map((entry, i) => (
                 <Cell key={i} fill={entry.color} />
               ))}
             </Pie>
@@ -74,7 +97,7 @@ export function PortfolioPanel({ portfolio }: Props) {
 
       {/* Legend */}
       <div className="flex flex-col gap-2 shrink-0">
-        {portfolio.map((item) => {
+        {slices.map((item) => {
           const pct = total > 0 ? ((item.value / total) * 100).toFixed(1) : "0.0";
           return (
             <div key={item.name} className="flex items-center justify-between">

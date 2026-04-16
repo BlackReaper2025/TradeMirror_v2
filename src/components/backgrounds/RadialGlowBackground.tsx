@@ -6,7 +6,7 @@ export function RadialGlowBackground() {
         zIndex: 0,
         backgroundImage: [
           /* top-centre — primary bloom */
-          "radial-gradient(circle 900px at 50% 0%,   var(--accent-dim)  0%, var(--accent-glow) 40%, transparent 70%)",
+          "radial-gradient(circle 900px at 50% -15%,   var(--accent-dim)  0%, var(--accent-glow) 40%, transparent 70%)",
           /* bottom-left — soft secondary */
           "radial-gradient(circle 600px at 10% 100%, var(--accent-glow) 0%, transparent 65%)",
           /* bottom-right — soft secondary */
