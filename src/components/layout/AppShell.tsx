@@ -26,11 +26,6 @@ export function AppShell({ children }: AppShellProps) {
 
       <main
         className="flex-1 overflow-hidden flex flex-col min-w-0"
-        style={{
-          backgroundImage: "url('/Background1.jpg')",
-          backgroundSize: "50%",
-          backgroundRepeat: "repeat",
-        }}
       >
         {children(activePage)}
       </main>
