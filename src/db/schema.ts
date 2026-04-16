@@ -13,6 +13,7 @@ export const accounts = sqliteTable("accounts", {
   accountType: text("account_type", {
     enum: ["prop", "personal", "challenge"],
   }).notNull(),
+  brokerUrl: text("broker_url"),
   isActive: integer("is_active", { mode: "boolean" }).notNull().default(true),
 });
 

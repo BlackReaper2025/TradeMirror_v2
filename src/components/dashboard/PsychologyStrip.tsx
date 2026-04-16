@@ -28,7 +28,7 @@ export function PsychologyStrip({ quotes }: Props) {
     /* Use panel class so it gets the same border + glow treatment as every other panel */
     <div
       className="panel flex items-center gap-0"
-      style={{ minHeight: 48, padding: "0 16px" }}
+      style={{ minHeight: 48, padding: "8px 16px" }}
     >
       {/* Label */}
       <div className="flex items-center gap-2 shrink-0 pr-4" style={{ borderRight: "1px solid var(--border-subtle)" }}>

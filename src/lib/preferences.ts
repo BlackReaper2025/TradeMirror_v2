@@ -28,6 +28,15 @@ export function setBrokerageUrl(url: string): void {
   window.dispatchEvent(new CustomEvent("tm:prefs-changed"));
 }
 
+// Per-account brokerage URLs — keyed by account ID
+export function getAccountBrokerUrl(accountId: string): string {
+  return localStorage.getItem(`tm_broker_url_${accountId}`) ?? "";
+}
+export function setAccountBrokerUrl(accountId: string, url: string): void {
+  localStorage.setItem(`tm_broker_url_${accountId}`, url.trim());
+  window.dispatchEvent(new CustomEvent("tm:prefs-changed"));
+}
+
 export function getMusicUrl(): string {
   return localStorage.getItem(KEYS.musicUrl) ?? "";
 }

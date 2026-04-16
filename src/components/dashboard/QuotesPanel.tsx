@@ -64,15 +64,17 @@ export function QuotesPanel({ quotes }: Props) {
             color: "var(--text-primary)",
             overflow: "hidden",
             display: "-webkit-box",
-            WebkitLineClamp: 2,
+            WebkitLineClamp: 4,
             WebkitBoxOrient: "vertical",
           }}
         >
           {q.text}
         </p>
-        <p className="text-[11px] font-bold mt-0.5" style={{ color: "var(--text-muted)" }}>
-          — {q.author}
-        </p>
+        {q.author && (
+          <p className="text-[11px] font-bold mt-0.5" style={{ color: "var(--text-muted)" }}>
+            — {q.author}
+          </p>
+        )}
       </div>
 
       {/* ── Controls ── */}

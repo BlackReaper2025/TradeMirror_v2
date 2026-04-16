@@ -7,6 +7,7 @@ import * as schema from "./schema";
 export type AppDb = ReturnType<typeof drizzle<typeof schema>>;
 
 let _db: AppDb | null = null;
+let _sqlite: Database | null = null;
 // Shared promise so React StrictMode double-invocation shares one open call.
 let _initPromise: Promise<AppDb> | null = null;
 
@@ -35,6 +36,7 @@ async function openDb(): Promise<AppDb> {
 
   console.log("[db] Calling Database.load('sqlite:trademirror.db') …");
   const sqlite = await Database.load("sqlite:trademirror.db");
+  _sqlite = sqlite;
   console.log("[db] Connection established. Building Drizzle proxy …");
 
   _db = drizzle(
@@ -72,4 +74,9 @@ export async function initDb(): Promise<AppDb> {
 export function getDb(): AppDb {
   if (!_db) throw new Error("[db] Not ready — call initDb() first.");
   return _db;
+}
+
+export function getRawSqlite(): Database {
+  if (!_sqlite) throw new Error("[db] Not ready — call initDb() first.");
+  return _sqlite;
 }

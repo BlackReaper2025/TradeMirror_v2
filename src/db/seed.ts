@@ -32,7 +32,6 @@ async function devResetIfRequested(): Promise<boolean> {
   console.warn("[seed] DEV RESET requested — clearing all tables …");
   const db = getDb();
   // Delete in FK-safe order
-  await db.delete(quotes);
   await db.delete(tradeJournal);
   await db.delete(dailyStats);
   await db.delete(trades);
@@ -68,6 +67,7 @@ async function doSeed(): Promise<void> {
       currentBalance: 102_340,
       dailyTarget: 1_000,
       accountType: "challenge" as const,
+      brokerUrl: "https://mt5demo.ftmo.oanda.com/?_gl=1*rjsr60*_gcl_au*MTA0MTkzMzMzMy4xNzc1MDI2NDM5LjYzNDcxMjg0Ny4xNzc1MDI2NDczLjE3NzUwMjY1MTQ.*trader_oanda_ga*MTA2MTUxODQwNi4xNzc1MDI2NDM5*trader_oanda_ga_K8N84T0NCP*czE3NzUwMjY0NTckbzEkZzEkdDE3NzUwMjY3NzMkajIkbDAkaDA.*_ga*MTA2MTUxODQwNi4xNzc1MDI2NDM5*_ga_QNHG9RT9Q8*czE3NzUwMjY0MzkkbzEkZzEkdDE3NzUwMjY3ODYkajQ0JGwwJGgw",
       isActive: true,
     },
     {
@@ -78,6 +78,7 @@ async function doSeed(): Promise<void> {
       currentBalance: 48_750,
       dailyTarget: 500,
       accountType: "prop" as const,
+      brokerUrl: "https://e8x.e8markets.com/account-overview/forex",
       isActive: true,
     },
     {
@@ -224,8 +225,12 @@ async function doSeed(): Promise<void> {
   ]).onConflictDoNothing();
   console.log("[seed] ✓ 48h trades inserted: 20");
 
-  // ── Quotes ────────────────────────────────────────────────────────────────────
+  // ── Quotes — only seed if table is empty (preserves user-added quotes) ───────
   console.log("[seed] → quotes");
+  const existingQuotes = await db.select().from(quotes).limit(1);
+  if (existingQuotes.length > 0) {
+    console.log("[seed] ✓ quotes already exist — skipping to preserve user data");
+  } else {
   await db.insert(quotes).values([
     {
       text: "The goal of a successful trader is to make the best trades. Money is secondary.",
@@ -271,6 +276,7 @@ async function doSeed(): Promise<void> {
     },
   ]);
   console.log("[seed] ✓ quotes inserted");
+  } // end else (quotes were empty)
 
   console.log("[seed] ✓ All demo data seeded successfully.");
 }

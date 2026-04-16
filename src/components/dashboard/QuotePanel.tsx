@@ -54,7 +54,7 @@ export function QuotePanel({ quotes }: Props) {
       </div>
 
       <div
-        className="flex-1 flex flex-col justify-center"
+        className="flex-1 flex flex-col justify-center overflow-y-auto"
         style={{
           opacity: visible ? 1 : 0,
           transition: "opacity 0.25s ease",
@@ -62,7 +62,7 @@ export function QuotePanel({ quotes }: Props) {
       >
         <p
           className="text-[14px] leading-relaxed font-medium"
-          style={{ color: "var(--text-primary)" }}
+          style={{ color: "var(--text-primary)", whiteSpace: "normal", overflow: "visible" }}
         >
           "{quote.text}"
         </p>

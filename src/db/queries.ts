@@ -63,6 +63,7 @@ export async function createAccount(data: {
   startingBalance: number;
   dailyTarget: number;
   accountType: "prop" | "personal" | "challenge";
+  brokerUrl?: string;
 }): Promise<Account> {
   const db = getDb();
   const id = `acc-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
@@ -74,6 +75,7 @@ export async function createAccount(data: {
     currentBalance:  data.startingBalance,
     dailyTarget:     data.dailyTarget,
     accountType:     data.accountType,
+    brokerUrl:       data.brokerUrl ?? null,
     isActive:        true,
   });
   return (await getAccount(id))!;

@@ -1,5 +1,5 @@
 // ─── SessionClockPanel — Local Time top, Market Session bottom ─────────────────
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { Panel } from "../ui/Panel";
 import { getTimeFormat, type TimeFormat } from "../../lib/preferences";
 
@@ -169,6 +169,19 @@ export function SessionClockPanel() {
   const overlapPeers      = overlap.filter(s => s !== display.session);
   const sessionProgress   = isOpen ? getSessionProgress(new Date(), displayedSession) : 0;
 
+  // Disable the width transition when the displayed session changes (snap, not animate)
+  const prevSessionRef  = useRef(displayedSession);
+  const [barTransition, setBarTransition] = useState("width 1s linear");
+  useEffect(() => {
+    if (prevSessionRef.current !== displayedSession) {
+      setBarTransition("none");
+      prevSessionRef.current = displayedSession;
+      // Re-enable smooth transition after the snap has rendered
+      const id = setTimeout(() => setBarTransition("width 1s linear"), 50);
+      return () => clearTimeout(id);
+    }
+  }, [displayedSession]);
+
   return (
     <div style={{ position: "relative" }}>
     {/* Gradient border overlay — zero layout impact via CSS mask */}
@@ -274,7 +287,7 @@ export function SessionClockPanel() {
                 style={{
                   width: `${sessionProgress * 100}%`,
                   background: style.color,
-                  transition: "width 1s linear",
+                  transition: barTransition,
                 }}
               />
             </div>

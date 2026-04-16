@@ -3,7 +3,7 @@ import { Plus, Check, Trash2, FolderOpen, Pencil } from "lucide-react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { Panel, PanelHeader } from "../components/ui/Panel";
 import { getTimeFormat, setTimeFormat, type TimeFormat } from "../lib/preferences";
-import { getBrokerageUrl, setBrokerageUrl, getMusicUrl, setMusicUrl, getSlideshowFolder, setSlideshowFolder, getSlideshowInterval, setSlideshowInterval } from "../lib/preferences";
+import { getBrokerageUrl, setBrokerageUrl, getMusicUrl, setMusicUrl, getSlideshowFolder, setSlideshowFolder, getSlideshowInterval, setSlideshowInterval, getAccountBrokerUrl, setAccountBrokerUrl } from "../lib/preferences";
 import {
   getSettings,
   getActiveAccounts,
@@ -213,6 +213,7 @@ export function Settings() {
   const [acctName,       setAcctName]       = useState("");
   const [startBal,       setStartBal]       = useState("");
   const [dailyTgt,       setDailyTgt]       = useState("");
+  const [acctBrokerUrl,  setAcctBrokerUrl]  = useState("");
   const [acctSaving,     setAcctSaving]     = useState(false);
   const [acctSaved,      setAcctSaved]      = useState(false);
 
@@ -237,6 +238,7 @@ export function Settings() {
       setAcctName(acc.name);
       setStartBal(String(acc.startingBalance));
       setDailyTgt(String(acc.dailyTarget));
+      setAcctBrokerUrl(getAccountBrokerUrl(acc.id));
     }
   }
   useEffect(() => { loadAccounts(); }, [ready]);
@@ -251,6 +253,7 @@ export function Settings() {
       setAcctName(acc.name);
       setStartBal(String(acc.startingBalance));
       setDailyTgt(String(acc.dailyTarget));
+      setAcctBrokerUrl(getAccountBrokerUrl(acc.id));
     }
     tradeEvents.notify();
   }
@@ -267,6 +270,7 @@ export function Settings() {
         startingBalance: newStart,
         dailyTarget:     newTarget,
       }).where(eq(accounts.id, account.id));
+      setAccountBrokerUrl(account.id, acctBrokerUrl);
       tradeEvents.notify();
       setAcctSaved(true);
       setTimeout(() => setAcctSaved(false), 2500);
@@ -600,6 +604,7 @@ export function Settings() {
                   </div>
                 </div>
               </div>
+              <FieldInput label="Brokerage URL" value={acctBrokerUrl} onChange={setAcctBrokerUrl} placeholder="https://your-broker.com/dashboard" />
               <div className="flex items-center justify-between pt-1">
                 <span className="text-[11px]" style={{ color: "var(--text-muted)" }}>
                   Current balance: <span style={{ color: "var(--text-secondary)" }}>${account.currentBalance.toLocaleString("en-US", { minimumFractionDigits: 2 })}</span>
@@ -627,20 +632,12 @@ export function Settings() {
         {/* ── External Links ── */}
         <SectionTitle>External Links</SectionTitle>
         <Panel>
-          <PanelHeader label="Brokerage &amp; Music" />
-          <div className="flex flex-col gap-4">
-            <div className="flex items-end gap-3">
-              <div className="flex-1">
-                <FieldInput label="Brokerage / Prop Firm URL" value={brokerUrl} onChange={setBrokerLocal} placeholder="https://your-broker.com/dashboard" />
-              </div>
-              <SaveButton onClick={saveBrokerUrl}>Save</SaveButton>
+          <PanelHeader label="Music" />
+          <div className="flex items-end gap-3">
+            <div className="flex-1">
+              <FieldInput label="Music Playlist URL" value={musicUrl} onChange={setMusicLocal} placeholder="https://music.youtube.com/playlist?list=..." />
             </div>
-            <div className="flex items-end gap-3">
-              <div className="flex-1">
-                <FieldInput label="Music Playlist URL" value={musicUrl} onChange={setMusicLocal} placeholder="https://music.youtube.com/playlist?list=..." />
-              </div>
-              <SaveButton onClick={saveMusicUrl}>Save</SaveButton>
-            </div>
+            <SaveButton onClick={saveMusicUrl}>Save</SaveButton>
           </div>
         </Panel>
 

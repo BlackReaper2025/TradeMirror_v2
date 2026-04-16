@@ -7,6 +7,7 @@ import {
   type ReactNode,
 } from "react";
 import { initDb } from "./index";
+import { runMigrations } from "./migrations";
 import { seedIfEmpty } from "./seed";
 
 interface DbContextValue {
@@ -38,7 +39,9 @@ export function DatabaseProvider({ children }: { children: ReactNode }) {
       try {
         console.log("[DatabaseProvider] Starting DB init …");
         await initDb();
-        console.log("[DatabaseProvider] DB open. Running seed check …");
+        console.log("[DatabaseProvider] DB open. Running migrations …");
+        await runMigrations();
+        console.log("[DatabaseProvider] Running seed check …");
         await seedIfEmpty();
         console.log("[DatabaseProvider] Boot complete — setting ready.");
         if (!cancelled) setReady(true);

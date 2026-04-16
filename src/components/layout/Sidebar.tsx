@@ -10,7 +10,7 @@ import { useDatabase } from "../../db/DatabaseProvider";
 import { tradeEvents } from "../../lib/tradeEvents";
 import { getSettings, getAccount, getPortfolio, type Account } from "../../db/queries";
 import { logoSrc } from "../../config/branding";
-import { getBrokerageUrl, getMusicUrl } from "../../lib/preferences";
+import { getMusicUrl, getAccountBrokerUrl } from "../../lib/preferences";
 import { useTheme } from "../../theme/ThemeContext";
 import { openUrl as openExternal } from "@tauri-apps/plugin-opener";
 
@@ -230,7 +230,6 @@ export function Sidebar({ activePage, onNavigate, collapsed, onToggleCollapse }:
   const { ready } = useDatabase();
   const [account,      setAccount]      = useState<Account | null>(null);
   const [portfolio,    setPortfolio]    = useState<PortfolioItem[]>([]);
-  const [brokerageUrl, setBrokerageUrl] = useState(getBrokerageUrl);
   const [musicUrl,     setMusicUrl]     = useState(getMusicUrl);
 
   const loadData = async () => {
@@ -252,10 +251,7 @@ export function Sidebar({ activePage, onNavigate, collapsed, onToggleCollapse }:
   useEffect(() => { if (!ready) return; return tradeEvents.subscribe(loadData); }, [ready]);
 
   useEffect(() => {
-    const handler = () => {
-      setBrokerageUrl(getBrokerageUrl());
-      setMusicUrl(getMusicUrl());
-    };
+    const handler = () => setMusicUrl(getMusicUrl());
     window.addEventListener("tm:prefs-changed", handler);
     return () => window.removeEventListener("tm:prefs-changed", handler);
   }, []);
@@ -375,9 +371,12 @@ export function Sidebar({ activePage, onNavigate, collapsed, onToggleCollapse }:
         <div style={{ padding: collapsed ? "0 4px 0" : "0 8px 0", display: "flex", flexDirection: "column", gap: 2 }}>
           <IconBtn
             icon={ExternalLink}
-            label={brokerageUrl ? "Brokerage" : "Brokerage (set URL in Settings)"}
+            label="Brokerage"
             collapsed={collapsed}
-            onClick={() => brokerageUrl ? openUrl(brokerageUrl) : onNavigate("settings")}
+            onClick={() => {
+              const url = account ? getAccountBrokerUrl(account.id) : "";
+              url ? openUrl(url) : onNavigate("settings");
+            }}
           />
           <IconBtn
             icon={Music}
