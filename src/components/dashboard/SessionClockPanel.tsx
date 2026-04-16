@@ -11,7 +11,7 @@ const SESSION_STYLES: Record<SessionName, { color: string; hours: string }> = {
   "Sydney":        { color: "#eab308", hours: "5:00 PM – 2:00 AM"         },
   "Tokyo":         { color: "#8b5cf6", hours: "7:00 PM – 4:00 AM"         },
   "London":        { color: "#3b82f6", hours: "3:00 AM – 12:00 PM"        },
-  "New York":      { color: "#22c55e", hours: "8:00 AM – 5:00 PM"         },
+  "New York":      { color: "#7ed62e", hours: "8:00 AM – 5:00 PM"         },
   "Rollover Hour": { color: "#ef4444", hours: "5:00 PM – 6:00 PM"         },
 };
 
