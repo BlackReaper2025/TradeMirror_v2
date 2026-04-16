@@ -3,7 +3,7 @@
 // Shared promise guards against React StrictMode double-invocation.
 
 import { getDb } from "./index";
-import { accounts, trades, dailyStats, quotes, appSettings } from "./schema";
+import { accounts, trades, tradeJournal, dailyStats, quotes, appSettings } from "./schema";
 
 let _seedPromise: Promise<void> | null = null;
 
@@ -33,6 +33,7 @@ async function devResetIfRequested(): Promise<boolean> {
   const db = getDb();
   // Delete in FK-safe order
   await db.delete(quotes);
+  await db.delete(tradeJournal);
   await db.delete(dailyStats);
   await db.delete(trades);
   await db.delete(appSettings);
@@ -108,143 +109,120 @@ async function doSeed(): Promise<void> {
   });
   console.log("[seed] ✓ app_settings inserted");
 
-  // ── Trades ───────────────────────────────────────────────────────────────────
-  console.log("[seed] → trades");
-  const today = "2026-04-08";
-  await db.insert(trades).values([
-    {
-      id: "t-1",
-      accountId: "acc-1",
-      openedAt: `${today}T08:12:00Z`,
-      closedAt: `${today}T08:47:00Z`,
-      instrument: "EUR/USD",
-      side: "long" as const,
-      setupName: "London Open Break",
-      size: 2.0,
-      pnl: 523,
-      fees: 0,
-    },
-    {
-      id: "t-2",
-      accountId: "acc-1",
-      openedAt: `${today}T09:05:00Z`,
-      closedAt: `${today}T09:22:00Z`,
-      instrument: "GBP/USD",
-      side: "short" as const,
-      setupName: "Rejection Wick",
-      size: 1.5,
-      pnl: -221,
-      fees: 0,
-    },
-    {
-      id: "t-3",
-      accountId: "acc-1",
-      openedAt: `${today}T10:14:00Z`,
-      closedAt: `${today}T10:51:00Z`,
-      instrument: "NAS100",
-      side: "long" as const,
-      setupName: "Break & Retest",
-      size: 0.5,
-      pnl: 451,
-      fees: 0,
-    },
-    {
-      id: "t-4",
-      accountId: "acc-1",
-      openedAt: `${today}T11:30:00Z`,
-      closedAt: `${today}T11:58:00Z`,
-      instrument: "GBP/JPY",
-      side: "long" as const,
-      setupName: "Fib Retracement",
-      size: 1.0,
-      pnl: 487,
-      fees: 0,
-    },
-  ]);
-  console.log("[seed] ✓ trades inserted");
+  // ── 3 months of trade history (Jan 15 – Apr 15, 2026) ────────────────────────
+  // Every weekday gets exactly 2 trades. Daily stats derived from those trades.
+  console.log("[seed] → 3-month trade history");
 
-  // ── Daily stats ───────────────────────────────────────────────────────────────
-  console.log("[seed] → daily_stats");
-  const pnlByDay: Record<string, number> = {};
-
-  const rawReturns = [
-    0, 340, 820, 1050, 720, 1340, 980, 1600, 1220, 900,
-    1100, 1480, 1020, 1780, 2100, 1850, 2340, 2100, 1900, 2500,
-    2200, 2700, 2400, 2900, 2650, 3100, 2850, 3300, 2900, 2340,
+  const INSTRUMENTS = ["EUR/USD", "GBP/USD", "NAS100", "GBP/JPY", "USD/JPY", "GOLD", "US30"];
+  const SETUPS = [
+    "London Open Break", "Rejection Wick", "Break & Retest", "Fib Retracement",
+    "Order Block", "Fair Value Gap", "Liquidity Sweep", "NY Session Open",
   ];
-  for (let i = 0; i < rawReturns.length; i++) {
-    const d = new Date(2026, 3, 8);
-    d.setDate(d.getDate() - (29 - i));
-    pnlByDay[d.toISOString().split("T")[0]] =
-      i === 0 ? 0 : rawReturns[i] - rawReturns[i - 1];
-  }
 
-  const calData = [
-    240, 0, -120, 580, 320, 0, 0,
-    0, 450, -80, 720, 0, 280, 0,
-    0, 390, 510, -150, 620, 310, 0,
-    0, 0, 280, 490, -90, 530, 420,
-    0, 640, -110, 410, 380, 510, 0,
+  // Fixed cycle of [morning pnl, afternoon pnl] per day — varied but deterministic
+  const PNL_CYCLE: [number, number][] = [
+    [ 342, -187], [ 521,  298], [-142,  415], [ 267, -231], [ 523, -221],
+    [ 478,  312], [-167,  543], [ 291, -213], [ 467, -156], [ 334,  289],
+    [ 389, -198], [ 610,  -95], [-230,  480], [ 315,  175], [ 540,  -88],
+    [-175,  380], [ 425,  260], [ 193, -140], [ 680,  -55], [ 310,  490],
+    [-220,  355], [ 445,  -72], [ 275,  510], [-185,  430], [ 365,  210],
+    [ 590,  -65], [-145,  420], [ 325,  480], [ 155,  -90], [ 475,  335],
+    [-200,  390], [ 555,  -78], [ 285,  330], [-165,  445], [ 398,  220],
+    [ 512,  -88], [-138,  465], [ 348,  282], [ 175, -112], [ 530,  -65],
+    [-195,  415], [ 440,  275], [ 268, -155], [ 610,  -92], [ 385,  230],
+    [ 455,  -82], [-170,  490], [ 325,  368], [ 190, -125], [ 572,  -45],
+    [-215,  435], [ 468,  295], [ 238, -148], [ 645,  -98], [ 395,  248],
+    [ 478,  -75], [-158,  510], [ 362,  315], [ 205, -118], [ 545,  -58],
+    [-205,  452], [ 492,  285], [ 248, -162], [ 628,  -85], [ 412,  255],
   ];
-  for (let i = 0; i < calData.length; i++) {
-    const d = new Date(2026, 2, 5);
-    d.setDate(d.getDate() + i);
-    const key = d.toISOString().split("T")[0];
-    if (!(key in pnlByDay)) pnlByDay[key] = calData[i];
-  }
 
-  const statsRows = Object.entries(pnlByDay)
-    .filter(([, pnl]) => pnl !== 0)
-    .map(([day, pnl]) => {
-      const tradeCount = Math.floor(Math.random() * 4) + 1;
-      const winCount = pnl > 0
-        ? Math.ceil(tradeCount * 0.65)
-        : Math.floor(tradeCount * 0.35);
-      const lossCount = tradeCount - winCount;
-      const avgWin = pnl > 0 ? (pnl / Math.max(winCount, 1)) * 1.5 : 300;
-      const avgLoss = pnl < 0 ? Math.abs(pnl) / Math.max(lossCount, 1) : 150;
-      return {
-        id: `ds-acc-1-${day}`,
-        accountId: "acc-1",
-        day,
-        totalPnl: pnl,
-        tradeCount,
-        winCount,
-        lossCount,
-        avgWin,
-        avgLoss,
-        winRate: tradeCount > 0 ? (winCount / tradeCount) * 100 : 0,
-        profitFactor:
-          avgLoss > 0
-            ? (avgWin * winCount) / (avgLoss * Math.max(lossCount, 1))
-            : 0,
-        maxDrawdown: avgLoss,
-      };
+  const allTrades:     (typeof trades.$inferInsert)[]     = [];
+  const allDailyStats: (typeof dailyStats.$inferInsert)[] = [];
+
+  const rangeStart = new Date(Date.UTC(2026, 0, 15)); // Jan 15
+  const rangeEnd   = new Date(Date.UTC(2026, 3, 15)); // Apr 15
+
+  let dayIndex = 0;
+  let tradeNum = 1;
+
+  for (let d = new Date(rangeStart); d <= rangeEnd; d.setUTCDate(d.getUTCDate() + 1)) {
+    if (d.getUTCDay() === 0 || d.getUTCDay() === 6) continue;
+
+    const dateStr       = d.toISOString().split("T")[0];
+    const [pnl1, pnl2]  = PNL_CYCLE[dayIndex % PNL_CYCLE.length];
+    const instr1        = INSTRUMENTS[(dayIndex * 3)     % INSTRUMENTS.length];
+    const instr2        = INSTRUMENTS[(dayIndex * 5 + 2) % INSTRUMENTS.length];
+    const setup1        = SETUPS[(dayIndex * 2)     % SETUPS.length];
+    const setup2        = SETUPS[(dayIndex * 3 + 1) % SETUPS.length];
+    dayIndex++;
+
+    allTrades.push(
+      { id: `t-3m-${tradeNum++}`, accountId: "acc-1", openedAt: `${dateStr}T08:10:00Z`, closedAt: `${dateStr}T08:52:00Z`, instrument: instr1, side: pnl1 > 0 ? "long" : "short", setupName: setup1, size: 1.5, pnl: pnl1, fees: 0 },
+      { id: `t-3m-${tradeNum++}`, accountId: "acc-1", openedAt: `${dateStr}T10:30:00Z`, closedAt: `${dateStr}T11:15:00Z`, instrument: instr2, side: pnl2 > 0 ? "long" : "short", setupName: setup2, size: 1.0, pnl: pnl2, fees: 0 },
+    );
+
+    const wins    = [pnl1, pnl2].filter(p => p > 0);
+    const losses  = [pnl1, pnl2].filter(p => p < 0);
+    const sumWins = wins.reduce((a, b) => a + b, 0);
+    const sumLoss = losses.reduce((a, b) => a + Math.abs(b), 0);
+
+    allDailyStats.push({
+      id:           `ds-3m-${dateStr}`,
+      accountId:    "acc-1",
+      day:          dateStr,
+      totalPnl:     pnl1 + pnl2,
+      tradeCount:   2,
+      winCount:     wins.length,
+      lossCount:    losses.length,
+      avgWin:       wins.length  > 0 ? sumWins / wins.length   : 0,
+      avgLoss:      losses.length > 0 ? sumLoss / losses.length : 0,
+      winRate:      wins.length * 50,
+      profitFactor: sumLoss > 0 ? sumWins / sumLoss : sumWins > 0 ? 99 : 0,
+      maxDrawdown:  losses.length > 0 ? sumLoss / losses.length : 0,
     });
-
-  const todayStats = {
-    id: `ds-acc-1-${today}`,
-    accountId: "acc-1",
-    day: today,
-    totalPnl: 1_240,
-    tradeCount: 4,
-    winCount: 3,
-    lossCount: 1,
-    avgWin: 487,
-    avgLoss: 221,
-    winRate: 75,
-    profitFactor: 2.21,
-    maxDrawdown: 221,
-  };
-  const todayIdx = statsRows.findIndex((r) => r.day === today);
-  if (todayIdx >= 0) statsRows[todayIdx] = todayStats;
-  else statsRows.push(todayStats);
-
-  // Single bulk INSERT
-  if (statsRows.length > 0) {
-    await db.insert(dailyStats).values(statsRows).onConflictDoNothing();
   }
-  console.log("[seed] ✓ daily_stats inserted", statsRows.length, "rows");
+
+  await db.insert(trades).values(allTrades);
+  await db.insert(dailyStats).values(allDailyStats).onConflictDoNothing();
+  console.log("[seed] ✓ 3-month trades:", allTrades.length, "/ daily_stats:", allDailyStats.length);
+
+  // ── 20 trades across the last 48 hours (Apr 14–15, 2026) ────────────────────
+  console.log("[seed] → 48h trades");
+  await db.insert(trades).values([
+    // Apr 14 — morning
+    { id: "t-48h1",  accountId: "acc-1", openedAt: "2026-04-14T07:05:00Z", closedAt: "2026-04-14T07:38:00Z", instrument: "EUR/USD", side: "long",  setupName: "London Open Break", size: 2.0, pnl:  312, fees: 0 },
+    { id: "t-48h2",  accountId: "acc-1", openedAt: "2026-04-14T08:20:00Z", closedAt: "2026-04-14T08:55:00Z", instrument: "GBP/USD", side: "short", setupName: "Rejection Wick",    size: 1.5, pnl: -148, fees: 0 },
+    { id: "t-48h3",  accountId: "acc-1", openedAt: "2026-04-14T09:10:00Z", closedAt: "2026-04-14T09:52:00Z", instrument: "GOLD",    side: "long",  setupName: "Order Block",        size: 1.0, pnl:  476, fees: 0 },
+    { id: "t-48h4",  accountId: "acc-1", openedAt: "2026-04-14T10:30:00Z", closedAt: "2026-04-14T11:05:00Z", instrument: "NAS100",  side: "long",  setupName: "Break & Retest",    size: 0.5, pnl:  389, fees: 0 },
+    // Apr 14 — midday
+    { id: "t-48h5",  accountId: "acc-1", openedAt: "2026-04-14T11:45:00Z", closedAt: "2026-04-14T12:20:00Z", instrument: "USD/JPY", side: "short", setupName: "Fair Value Gap",     size: 1.5, pnl: -203, fees: 0 },
+    { id: "t-48h6",  accountId: "acc-1", openedAt: "2026-04-14T13:00:00Z", closedAt: "2026-04-14T13:44:00Z", instrument: "GBP/JPY", side: "long",  setupName: "Fib Retracement",   size: 1.0, pnl:  267, fees: 0 },
+    { id: "t-48h7",  accountId: "acc-1", openedAt: "2026-04-14T14:15:00Z", closedAt: "2026-04-14T14:58:00Z", instrument: "EUR/USD", side: "short", setupName: "NY Session Open",    size: 2.0, pnl:  431, fees: 0 },
+    // Apr 14 — afternoon
+    { id: "t-48h8",  accountId: "acc-1", openedAt: "2026-04-14T15:30:00Z", closedAt: "2026-04-14T16:10:00Z", instrument: "US30",    side: "long",  setupName: "Liquidity Sweep",   size: 0.5, pnl: -175, fees: 0 },
+    { id: "t-48h9",  accountId: "acc-1", openedAt: "2026-04-14T17:00:00Z", closedAt: "2026-04-14T17:40:00Z", instrument: "NAS100",  side: "short", setupName: "Order Block",        size: 0.5, pnl:  358, fees: 0 },
+    { id: "t-48h10", accountId: "acc-1", openedAt: "2026-04-14T18:20:00Z", closedAt: "2026-04-14T18:55:00Z", instrument: "GOLD",    side: "short", setupName: "Rejection Wick",    size: 1.0, pnl: -122, fees: 0 },
+    // Apr 15 — morning
+    { id: "t-48h11", accountId: "acc-1", openedAt: "2026-04-15T07:10:00Z", closedAt: "2026-04-15T07:48:00Z", instrument: "GBP/USD", side: "long",  setupName: "London Open Break", size: 2.0, pnl:  524, fees: 0 },
+    { id: "t-48h12", accountId: "acc-1", openedAt: "2026-04-15T08:25:00Z", closedAt: "2026-04-15T09:05:00Z", instrument: "EUR/USD", side: "long",  setupName: "Fair Value Gap",     size: 1.5, pnl:  298, fees: 0 },
+    { id: "t-48h13", accountId: "acc-1", openedAt: "2026-04-15T09:40:00Z", closedAt: "2026-04-15T10:15:00Z", instrument: "USD/JPY", side: "short", setupName: "Break & Retest",    size: 1.0, pnl: -187, fees: 0 },
+    { id: "t-48h14", accountId: "acc-1", openedAt: "2026-04-15T10:50:00Z", closedAt: "2026-04-15T11:28:00Z", instrument: "GBP/JPY", side: "long",  setupName: "Order Block",        size: 1.5, pnl:  412, fees: 0 },
+    // Apr 15 — midday
+    { id: "t-48h15", accountId: "acc-1", openedAt: "2026-04-15T11:55:00Z", closedAt: "2026-04-15T12:35:00Z", instrument: "NAS100",  side: "long",  setupName: "NY Session Open",    size: 0.5, pnl:  347, fees: 0 },
+    { id: "t-48h16", accountId: "acc-1", openedAt: "2026-04-15T13:10:00Z", closedAt: "2026-04-15T13:50:00Z", instrument: "GOLD",    side: "long",  setupName: "Fib Retracement",   size: 1.0, pnl:  289, fees: 0 },
+    { id: "t-48h17", accountId: "acc-1", openedAt: "2026-04-15T14:20:00Z", closedAt: "2026-04-15T15:00:00Z", instrument: "EUR/USD", side: "short", setupName: "Liquidity Sweep",   size: 2.0, pnl: -164, fees: 0 },
+    // Apr 15 — afternoon
+    { id: "t-48h18", accountId: "acc-1", openedAt: "2026-04-15T15:35:00Z", closedAt: "2026-04-15T16:15:00Z", instrument: "US30",    side: "long",  setupName: "Rejection Wick",    size: 0.5, pnl:  378, fees: 0 },
+    { id: "t-48h19", accountId: "acc-1", openedAt: "2026-04-15T17:00:00Z", closedAt: "2026-04-15T17:42:00Z", instrument: "GBP/USD", side: "short", setupName: "Order Block",        size: 1.5, pnl:  445, fees: 0 },
+    { id: "t-48h20", accountId: "acc-1", openedAt: "2026-04-15T18:30:00Z", closedAt: "2026-04-15T19:05:00Z", instrument: "NAS100",  side: "short", setupName: "Fair Value Gap",     size: 0.5, pnl: -139, fees: 0 },
+  ]);
+
+  // Daily stats for the 48h trades
+  await db.insert(dailyStats).values([
+    { id: "ds-48h-2026-04-14", accountId: "acc-1", day: "2026-04-14", totalPnl: 1508, tradeCount: 10, winCount: 7, lossCount: 3, avgWin: 376, avgLoss: 183, winRate: 70, profitFactor: 4.80, maxDrawdown: 183 },
+    { id: "ds-48h-2026-04-15", accountId: "acc-1", day: "2026-04-15", totalPnl: 1803, tradeCount: 10, winCount: 7, lossCount: 3, avgWin: 385, avgLoss: 163, winRate: 70, profitFactor: 5.52, maxDrawdown: 163 },
+  ]).onConflictDoNothing();
+  console.log("[seed] ✓ 48h trades inserted: 20");
 
   // ── Quotes ────────────────────────────────────────────────────────────────────
   console.log("[seed] → quotes");

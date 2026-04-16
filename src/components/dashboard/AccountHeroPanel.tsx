@@ -298,7 +298,7 @@ export function AccountHeroPanel({ account, todayStats, allTimeStats, equityCurv
                 </linearGradient>
               </defs>
               <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.035)" vertical={false} />
-              <XAxis dataKey="date" tick={{ fill: "#4a5568", fontSize: 10 }} axisLine={false} tickLine={false} interval="preserveStartEnd" />
+              <XAxis dataKey="date" tick={{ fill: "#4a5568", fontSize: 10 }} axisLine={false} tickLine={false} interval="preserveStartEnd" tickFormatter={(iso: string) => { const d = new Date(iso + "T00:00:00"); return d.toLocaleDateString("en-US", { month: "short", day: "numeric" }); }} />
               <YAxis
                 domain={[minBal - yPadding, maxBal + yPadding]}
                 tick={{ fill: "#4a5568", fontSize: 10 }}

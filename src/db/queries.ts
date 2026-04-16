@@ -234,9 +234,8 @@ export async function getEquityCurve(
   let runningBalance = account.startingBalance;
   return rows.map((row) => {
     runningBalance += row.totalPnl ?? 0;
-    const d = new Date(row.day + "T00:00:00");
     return {
-      date: d.toLocaleDateString("en-US", { month: "short", day: "numeric" }),
+      date: row.day,   // ISO "YYYY-MM-DD" — components format for display
       balance: runningBalance,
     };
   });
@@ -369,6 +368,106 @@ export async function getDailyCandles(accountId: string, days: number): Promise<
   }
 
   return candles;
+}
+
+/** Running balance after each trade within the last `hours` hours (intraday line chart). */
+export async function getIntradayCurve(
+  accountId: string,
+  hours: number
+): Promise<Array<{ date: string; balance: number }>> {
+  const db      = getDb();
+  const account = await getAccount(accountId);
+  if (!account) return [];
+
+  const todayStr = localDateStr();
+
+  const priorRows = await db
+    .select({ total: sql<number>`coalesce(sum(${dailyStats.totalPnl}), 0)` })
+    .from(dailyStats)
+    .where(and(eq(dailyStats.accountId, accountId), lt(dailyStats.day, todayStr)));
+
+  let running = account.startingBalance + (priorRows[0]?.total ?? 0);
+
+  const allTodayTrades = await db
+    .select()
+    .from(trades)
+    .where(and(eq(trades.accountId, accountId), gte(trades.openedAt, todayStr + "T00:00:00")))
+    .orderBy(trades.closedAt);
+
+  if (allTodayTrades.length === 0) return [];
+
+  const windowStart = new Date(Date.now() - hours * 60 * 60 * 1000);
+  const windowStartStr = windowStart.toISOString().slice(0, 19);
+
+  // Accumulate balance for trades before the window
+  const inWindow: typeof allTodayTrades = [];
+  for (const t of allTodayTrades) {
+    const closeStr = (t.closedAt ?? t.openedAt).slice(0, 19);
+    if (closeStr < windowStartStr) running += t.pnl ?? 0;
+    else inWindow.push(t);
+  }
+
+  if (inWindow.length === 0) return [];
+
+  const points: Array<{ date: string; balance: number }> = [
+    { date: windowStartStr.slice(11, 16), balance: running },
+  ];
+  for (const t of inWindow) {
+    running += t.pnl ?? 0;
+    points.push({ date: (t.closedAt ?? t.openedAt).slice(11, 16), balance: running });
+  }
+  return points;
+}
+
+/** 15-minute OHLC candles of today's running balance, built from individual trades. */
+export async function get15MinCandles(accountId: string): Promise<Candle[]> {
+  const db      = getDb();
+  const account = await getAccount(accountId);
+  if (!account) return [];
+
+  const todayStr = localDateStr();
+
+  const priorRows = await db
+    .select({ total: sql<number>`coalesce(sum(${dailyStats.totalPnl}), 0)` })
+    .from(dailyStats)
+    .where(and(eq(dailyStats.accountId, accountId), lt(dailyStats.day, todayStr)));
+
+  const balanceAtDayStart = account.startingBalance + (priorRows[0]?.total ?? 0);
+
+  const todayTrades = await db
+    .select()
+    .from(trades)
+    .where(and(
+      eq(trades.accountId, accountId),
+      gte(trades.openedAt, todayStr + "T00:00:00"),
+      lte(trades.openedAt, todayStr + "T23:59:59"),
+    ))
+    .orderBy(trades.closedAt);
+
+  if (todayTrades.length === 0) return [];
+
+  const bucketMap = new Map<string, number[]>();
+  let running = balanceAtDayStart;
+
+  for (const trade of todayTrades) {
+    const closeTime = new Date(trade.closedAt ?? trade.openedAt);
+    const h = closeTime.getHours();
+    const m = Math.floor(closeTime.getMinutes() / 15) * 15;
+    const key = `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+    if (!bucketMap.has(key)) bucketMap.set(key, [running]);
+    running += trade.pnl ?? 0;
+    bucketMap.get(key)!.push(running);
+  }
+
+  return Array.from(bucketMap.entries())
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([key, balances]) => ({
+      time:  key,
+      open:  balances[0],
+      high:  Math.max(...balances),
+      low:   Math.min(...balances),
+      close: balances[balances.length - 1],
+    }));
 }
 
 // ─── Dashboard: calendar days ─────────────────────────────────────────────────

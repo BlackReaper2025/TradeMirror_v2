@@ -4,12 +4,12 @@ import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { getSlideshowFolder, getSlideshowInterval } from "../../lib/preferences";
 import {
   AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
-  ComposedChart, useXAxisScale, useYAxisScale,
+  ComposedChart, Customized,
 } from "recharts";
 import { Images, ChevronLeft, ChevronRight, Play, Pause } from "lucide-react";
 import { Panel } from "../ui/Panel";
 import type { Account, Candle } from "../../db/queries";
-import { getHourlyCandles, getDailyCandles } from "../../db/queries";
+import { getHourlyCandles, getDailyCandles, get15MinCandles, getIntradayCurve } from "../../db/queries";
 import { useDatabase } from "../../db/DatabaseProvider";
 
 function fmtBalance(n: number) {
@@ -23,7 +23,7 @@ function fmtBalance(n: number) {
 const TIMEFRAMES = ["1H", "1D", "1W", "1M", "3M", "YTD", "ALL"] as const;
 type Timeframe = (typeof TIMEFRAMES)[number];
 
-const CANDLE_TIMEFRAMES: Timeframe[] = ["1H", "1D"];
+const CANDLE_TIMEFRAMES: Timeframe[] = ["1H"]; // 1D now uses intraday line chart
 
 function filterCurve(
   curve: Array<{ date: string; balance: number }>,
@@ -35,8 +35,8 @@ function filterCurve(
     return d.toISOString().split("T")[0];
   };
   switch (tf) {
-    case "1H":
-    case "1D":  return []; // handled by CandleChart
+    case "1H":  return []; // handled by CandleChart
+    case "1D":  return []; // handled by intraday line chart
     case "1W":  return curve.filter(p => p.date >= cutoff(7));
     case "1M":  return curve.filter(p => p.date >= cutoff(30));
     case "3M":  return curve.filter(p => p.date >= cutoff(90));
@@ -96,32 +96,33 @@ function CandleTooltip({ active, payload }: { active?: boolean; payload?: Array<
   );
 }
 
-// ─── Candle SVG layer — uses recharts 3 scale hooks ───────────────────────────
+// ─── Candle SVG layer — receives scales via Recharts Customized props ─────────
 
-function CandlesLayer({ candles }: { candles: Candle[] }) {
-  const xScale = useXAxisScale();
-  const yScale = useYAxisScale();
-  if (!xScale || !yScale || candles.length === 0) return null;
+function CandlesLayer({ candles, xAxisMap, yAxisMap }: {
+  candles: Candle[];
+  xAxisMap?: Record<string, { scale: (v: string) => number; bandwidth?: () => number }>;
+  yAxisMap?: Record<string, { scale: (v: number) => number }>;
+}) {
+  const xAxis = xAxisMap?.[0];
+  const yAxis = yAxisMap?.[0];
+  if (!xAxis || !yAxis || candles.length === 0) return null;
 
-  const bandwidth = (() => {
-    // Approximate bandwidth from spacing between first two ticks
+  const xScale    = xAxis.scale;
+  const yScale    = yAxis.scale;
+  const bandwidth = xAxis.bandwidth?.() ?? (() => {
     if (candles.length < 2) return 40;
-    const x0 = xScale(candles[0].time);
-    const x1 = xScale(candles[1].time);
-    if (x0 == null || x1 == null) return 40;
-    return Math.abs(x1 - x0);
+    return Math.abs(xScale(candles[1].time) - xScale(candles[0].time));
   })();
-  const candleW = Math.max(4, Math.min(bandwidth * 0.55, 22));
+  const candleW = Math.max(4, Math.min(bandwidth * 0.6, 22));
 
   return (
     <g>
       {candles.map((d, i) => {
-        const xLeft  = xScale(d.time, { position: "middle" });
+        const xMid   = xScale(d.time) + bandwidth / 2;
         const yOpen  = yScale(d.open);
         const yClose = yScale(d.close);
         const yHigh  = yScale(d.high);
         const yLow   = yScale(d.low);
-        if (xLeft == null || yOpen == null || yClose == null || yHigh == null || yLow == null) return null;
 
         const isUp      = d.close >= d.open;
         const color     = isUp ? "#4ade80" : "#f87171";
@@ -131,10 +132,8 @@ function CandlesLayer({ candles }: { candles: Candle[] }) {
 
         return (
           <g key={i}>
-            {/* Wick */}
-            <line x1={xLeft} y1={yHigh} x2={xLeft} y2={yLow} stroke={color} strokeWidth={1.5} />
-            {/* Body */}
-            <rect x={xLeft - candleW / 2} y={bodyTop} width={candleW} height={bodyH} fill={fillColor} rx={1} />
+            <line x1={xMid} y1={yHigh} x2={xMid} y2={yLow} stroke={color} strokeWidth={1.5} />
+            <rect x={xMid - candleW / 2} y={bodyTop} width={candleW} height={bodyH} fill={fillColor} rx={1} />
           </g>
         );
       })}
@@ -169,7 +168,7 @@ function CandleChart({ candles, startingBalance }: { candles: Candle[]; starting
           tickFormatter={fmtBalance} width={52}
         />
         <Tooltip content={<CandleTooltip />} cursor={{ stroke: "rgba(255,255,255,0.07)", strokeWidth: 1 }} />
-        <CandlesLayer candles={candles} />
+        <Customized component={(props: object) => <CandlesLayer candles={candles} {...(props as Parameters<typeof CandlesLayer>[0])} />} />
       </ComposedChart>
     </ResponsiveContainer>
   );
@@ -296,8 +295,9 @@ interface Props {
 }
 
 export function EquityChart({ equityCurve, account }: Props) {
-  const [timeframe, setTimeframe]   = useState<Timeframe>("ALL");
-  const [candles, setCandles]       = useState<Candle[]>([]);
+  const [timeframe, setTimeframe]     = useState<Timeframe>("ALL");
+  const [candles, setCandles]         = useState<Candle[]>([]);
+  const [intradayCurve, setIntraday]  = useState<Array<{ date: string; balance: number }>>([]);
   const [viewMode, setViewMode]     = useState<"chart" | "slideshow">("chart");
   const [ssImages,  setSsImages]    = useState<string[]>([]);
   const [ssIdx,     setSsIdx]       = useState(0);
@@ -315,20 +315,26 @@ export function EquityChart({ equityCurve, account }: Props) {
 
   useEffect(() => {
     if (!isCandle || !account || !ready) { setCandles([]); return; }
-    const fetch = timeframe === "1H"
-      ? getHourlyCandles(account.id)
-      : getDailyCandles(account.id, 7);
-    fetch.then(setCandles).catch(() => setCandles([]));
+    getHourlyCandles(account.id).then(setCandles).catch(() => setCandles([]));
   }, [timeframe, account?.id, ready, isCandle]);
+
+  useEffect(() => {
+    if (timeframe !== "1D" || !account || !ready) { setIntraday([]); return; }
+    getIntradayCurve(account.id, 24).then(setIntraday).catch(() => setIntraday([]));
+  }, [timeframe, account?.id, ready]);
 
   const startingBalance = account?.startingBalance ?? 0;
   const allTimeGain     = account ? account.currentBalance - account.startingBalance : 0;
   const isPos           = allTimeGain >= 0;
 
-  const filtered = useMemo(() => filterCurve(equityCurve, timeframe), [equityCurve, timeframe]);
+  const filtered     = useMemo(() => filterCurve(equityCurve, timeframe), [equityCurve, timeframe]);
+  const displayData  = timeframe === "1D" ? intradayCurve : filtered;
+  const tickInterval = timeframe === "1W"
+    ? 0
+    : Math.max(1, Math.floor(displayData.length / 6));
 
-  const minBal   = filtered.length ? Math.min(...filtered.map(p => p.balance)) : 0;
-  const maxBal   = filtered.length ? Math.max(...filtered.map(p => p.balance)) : 0;
+  const minBal   = displayData.length ? Math.min(...displayData.map(p => p.balance)) : 0;
+  const maxBal   = displayData.length ? Math.max(...displayData.map(p => p.balance)) : 0;
   const yPadding = (maxBal - minBal) * 0.15 || 200;
 
   return (
@@ -412,15 +418,15 @@ export function EquityChart({ equityCurve, account }: Props) {
         </div>
         {isCandle ? (
           <CandleChart candles={candles} startingBalance={startingBalance} />
-        ) : filtered.length < 2 ? (
+        ) : displayData.length < 2 ? (
           <div className="h-full flex items-center justify-center">
             <span className="text-[13px]" style={{ color: "var(--text-muted)" }}>
-              Not enough data for this timeframe
+              No trade data for this timeframe
             </span>
           </div>
         ) : (
           <ResponsiveContainer width="100%" height="100%">
-            <AreaChart data={filtered} margin={{ top: 8, right: 8, left: 0, bottom: 4 }}>
+            <AreaChart data={displayData} margin={{ top: 8, right: 8, left: 0, bottom: 4 }}>
               <defs>
                 <linearGradient id="equityGrad" x1="0" y1="0" x2="0" y2="1">
                   <stop offset="0%"   stopColor="var(--chart-line)" stopOpacity={0.26} />
@@ -433,7 +439,12 @@ export function EquityChart({ equityCurve, account }: Props) {
                 dataKey="date"
                 tick={{ fill: "#4a5568", fontSize: 10 }}
                 axisLine={false} tickLine={false}
-                interval="preserveStartEnd"
+                interval={tickInterval}
+                tickFormatter={(val: string) => {
+                  if (!val.includes("-")) return val; // already "HH:MM"
+                  const d = new Date(val + "T00:00:00");
+                  return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+                }}
               />
               <YAxis
                 domain={[minBal - yPadding, maxBal + yPadding]}
