@@ -113,8 +113,8 @@ export function Dashboard() {
           <EquityChart equityCurve={data.equityCurve} account={data.account} />
         </div>
 
-        {/* SessionClock — compact right-top, rows 1–5 */}
-        <div style={{ gridColumn: "10 / 13", gridRow: "1 / 6" }}>
+        {/* SessionClock — compact right-top, rows 1–4 */}
+        <div style={{ gridColumn: "10 / 13", gridRow: "1 / 5" }}>
           <SessionClockPanel />
         </div>
 
@@ -123,8 +123,8 @@ export function Dashboard() {
           <QuotesPanel quotes={data.quotes} />
         </div>
 
-        {/* FatigueTimer — right column, rows 6–9 (gap between SessionClock and Calendar) */}
-        <div style={{ gridColumn: "10 / 13", gridRow: "5 / 8", marginTop: "-65px", height: "calc(100% + 65px)" }}>
+        {/* FatigueTimer — right column, rows 5–8 */}
+        <div style={{ gridColumn: "10 / 13", gridRow: "5 / 8", marginTop: "-54px", height: "calc(100% + 54px)" }}>
           <FatigueTimer />
         </div>
 

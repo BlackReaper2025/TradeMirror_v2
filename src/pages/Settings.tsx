@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { Plus, Check, Trash2, FolderOpen } from "lucide-react";
+import { Plus, Check, Trash2, FolderOpen, Pencil } from "lucide-react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { Panel, PanelHeader } from "../components/ui/Panel";
 import { getTimeFormat, setTimeFormat, type TimeFormat } from "../lib/preferences";
@@ -13,6 +13,7 @@ import {
   getAllQuotes,
   addQuote,
   deleteQuote,
+  updateQuote,
   getAllTradesForExport,
   type Account,
 } from "../db/queries";
@@ -332,6 +333,33 @@ export function Settings() {
   const [newQuoteAuthor, setNewQuoteAuthor] = useState("");
   const [quoteAdding,    setQuoteAdding]    = useState(false);
   const [showAddQuote,   setShowAddQuote]   = useState(false);
+  const [editingId,      setEditingId]      = useState<number | null>(null);
+  const [editText,       setEditText]       = useState("");
+  const [editAuthor,     setEditAuthor]     = useState("");
+  const [quoteSaving,    setQuoteSaving]    = useState(false);
+
+  function startEdit(q: { id: number; text: string; author: string }) {
+    setEditingId(q.id);
+    setEditText(q.text);
+    setEditAuthor(q.author);
+  }
+  function cancelEdit() {
+    setEditingId(null);
+    setEditText("");
+    setEditAuthor("");
+  }
+  async function handleSaveQuote() {
+    if (!editText.trim() || editingId === null) return;
+    setQuoteSaving(true);
+    try {
+      await updateQuote(editingId, editText.trim(), editAuthor.trim());
+      cancelEdit();
+      await loadQuotes();
+      tradeEvents.notify();
+    } finally {
+      setQuoteSaving(false);
+    }
+  }
 
   async function loadQuotes() {
     if (!ready) return;
@@ -341,7 +369,7 @@ export function Settings() {
   useEffect(() => { loadQuotes(); }, [ready]);
 
   async function handleAddQuote() {
-    if (!newQuoteText.trim() || !newQuoteAuthor.trim()) return;
+    if (!newQuoteText.trim()) return;
     setQuoteAdding(true);
     try {
       await addQuote(newQuoteText.trim(), newQuoteAuthor.trim());
@@ -684,7 +712,7 @@ export function Settings() {
           {showAddQuote && (
             <div className="flex flex-col gap-3 mb-4 pb-4" style={{ borderBottom: "1px solid var(--border-subtle)" }}>
               <FieldInput label="Quote" value={newQuoteText} onChange={setNewQuoteText} placeholder="Enter the quote text…" />
-              <FieldInput label="Author" value={newQuoteAuthor} onChange={setNewQuoteAuthor} placeholder="e.g. Mark Douglas" />
+              <FieldInput label="Author (optional)" value={newQuoteAuthor} onChange={setNewQuoteAuthor} placeholder="e.g. Mark Douglas" />
               <div className="flex justify-end gap-2">
                 <button
                   onClick={() => { setShowAddQuote(false); setNewQuoteText(""); setNewQuoteAuthor(""); }}
@@ -695,7 +723,7 @@ export function Settings() {
                 </button>
                 <SaveButton
                   onClick={handleAddQuote}
-                  disabled={quoteAdding || !newQuoteText.trim() || !newQuoteAuthor.trim()}
+                  disabled={quoteAdding || !newQuoteText.trim()}
                 >
                   {quoteAdding ? "Adding…" : "Add Quote"}
                 </SaveButton>
@@ -711,22 +739,66 @@ export function Settings() {
             {allQuotes.map(q => (
               <div
                 key={q.id}
-                className="flex items-start justify-between gap-3 px-4 py-3 rounded-lg"
-                style={{ background: "var(--bg-panel-alt)", border: "1px solid var(--border-subtle)" }}
+                className="flex flex-col gap-2 px-4 py-3 rounded-lg"
+                style={{ background: "var(--bg-panel-alt)", border: `1px solid ${editingId === q.id ? "var(--accent-border)" : "var(--border-subtle)"}` }}
               >
-                <div className="flex-1 min-w-0">
-                  <p className="text-[13px] leading-snug" style={{ color: "var(--text-primary)" }}>{q.text}</p>
-                  <p className="text-[11px] mt-0.5 font-medium" style={{ color: "var(--text-muted)" }}>— {q.author}</p>
-                </div>
-                <button
-                  onClick={() => handleDeleteQuote(q.id)}
-                  className="shrink-0 w-6 h-6 rounded flex items-center justify-center transition-colors mt-0.5"
-                  style={{ color: "var(--text-muted)" }}
-                  onMouseEnter={e => (e.currentTarget as HTMLElement).style.color = "#f87171"}
-                  onMouseLeave={e => (e.currentTarget as HTMLElement).style.color = "var(--text-muted)"}
-                >
-                  <Trash2 size={13} />
-                </button>
+                {editingId === q.id ? (
+                  <>
+                    <textarea
+                      value={editText}
+                      onChange={e => setEditText(e.target.value)}
+                      rows={2}
+                      className="w-full rounded-lg px-3 py-2 text-[13px] resize-none"
+                      style={{ background: "var(--bg-base)", border: "1px solid var(--border-subtle)", color: "var(--text-primary)", outline: "none" }}
+                    />
+                    <input
+                      value={editAuthor}
+                      onChange={e => setEditAuthor(e.target.value)}
+                      placeholder="Author (optional)"
+                      className="w-full rounded-lg px-3 py-2 text-[12px]"
+                      style={{ background: "var(--bg-base)", border: "1px solid var(--border-subtle)", color: "var(--text-primary)", outline: "none" }}
+                    />
+                    <div className="flex justify-end gap-2">
+                      <button
+                        onClick={cancelEdit}
+                        className="px-3 py-1.5 rounded-lg text-[12px] font-semibold"
+                        style={{ background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.12)", color: "var(--text-secondary)" }}
+                      >
+                        Cancel
+                      </button>
+                      <SaveButton onClick={handleSaveQuote} disabled={quoteSaving || !editText.trim()}>
+                        {quoteSaving ? "Saving…" : "Save"}
+                      </SaveButton>
+                    </div>
+                  </>
+                ) : (
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="flex-1 min-w-0">
+                      <p className="text-[13px] leading-snug" style={{ color: "var(--text-primary)" }}>{q.text}</p>
+                      {q.author && <p className="text-[11px] mt-0.5 font-medium" style={{ color: "var(--text-muted)" }}>— {q.author}</p>}
+                    </div>
+                    <div className="flex items-center gap-1 shrink-0 mt-0.5">
+                      <button
+                        onClick={() => startEdit(q)}
+                        className="w-6 h-6 rounded flex items-center justify-center transition-colors"
+                        style={{ color: "var(--text-muted)" }}
+                        onMouseEnter={e => (e.currentTarget as HTMLElement).style.color = "var(--text-primary)"}
+                        onMouseLeave={e => (e.currentTarget as HTMLElement).style.color = "var(--text-muted)"}
+                      >
+                        <Pencil size={12} />
+                      </button>
+                      <button
+                        onClick={() => handleDeleteQuote(q.id)}
+                        className="w-6 h-6 rounded flex items-center justify-center transition-colors"
+                        style={{ color: "var(--text-muted)" }}
+                        onMouseEnter={e => (e.currentTarget as HTMLElement).style.color = "#f87171"}
+                        onMouseLeave={e => (e.currentTarget as HTMLElement).style.color = "var(--text-muted)"}
+                      >
+                        <Trash2 size={13} />
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
             ))}
           </div>

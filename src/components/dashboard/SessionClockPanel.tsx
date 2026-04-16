@@ -68,6 +68,28 @@ const ALL_TRANSITIONS: { label: string; session: SessionName; days: number[]; h:
   { label: "New York Open", session: "New York",      days: [1,2,3,4,5],h:  8, m: 0 },
 ];
 
+function getSessionProgress(now: Date, session: SessionName): number {
+  const mins = now.getHours() * 60 + now.getMinutes() + now.getSeconds() / 60;
+  const clamp = (v: number) => Math.min(1, Math.max(0, v));
+
+  switch (session) {
+    case "New York":      return clamp((mins - 8 * 60)  / (9 * 60));   // 8AM–5PM  (9h)
+    case "London":        return clamp((mins - 3 * 60)  / (9 * 60));   // 3AM–12PM (9h)
+    case "Rollover Hour": return clamp((mins - 17 * 60) / 60);         // 5PM–6PM  (1h)
+    case "Tokyo": {
+      const start = 19 * 60, duration = 9 * 60;                        // 7PM–4AM  (9h)
+      const elapsed = mins >= start ? mins - start : (24 * 60 - start) + mins;
+      return clamp(elapsed / duration);
+    }
+    case "Sydney": {
+      const start = 17 * 60, duration = 9 * 60;                        // 5PM–2AM  (9h)
+      const elapsed = mins >= start ? mins - start : (24 * 60 - start) + mins;
+      return clamp(elapsed / duration);
+    }
+    default: return 0;
+  }
+}
+
 function getNextOpenInfo(now: Date, active: SessionName[]): string | null {
   const nowMs = now.getTime();
   let best: { ms: number; label: string } | null = null;
@@ -145,6 +167,7 @@ export function SessionClockPanel() {
   const style             = SESSION_STYLES[displayedSession];
   const isOpen            = displayedSession !== "Closed";
   const overlapPeers      = overlap.filter(s => s !== display.session);
+  const sessionProgress   = isOpen ? getSessionProgress(new Date(), displayedSession) : 0;
 
   return (
     <div style={{ position: "relative" }}>
@@ -217,7 +240,7 @@ export function SessionClockPanel() {
 
         {/* Session badge — fades between sessions during overlap */}
         <div
-          className="flex items-center gap-2.5 px-3 py-2.5 rounded-xl mb-1"
+          className="flex flex-col gap-2.5 px-3 py-2.5 rounded-xl mb-1"
           style={{
             background:  style.color + "18",
             border:      `1px solid ${style.color}30`,
@@ -225,21 +248,37 @@ export function SessionClockPanel() {
             transition:  "opacity 0.25s ease, background 0.25s ease, border-color 0.25s ease",
           }}
         >
-          <span
-            className={`w-2 h-2 rounded-full shrink-0${isOpen ? " pulse-dot" : ""}`}
-            style={{ background: style.color }}
-          />
-          <div className="flex-1 min-w-0">
-            <div className="text-[17px] font-bold leading-tight" style={{ color: style.color, transition: "color 0.25s ease" }}>
-              {displayedSession}
-            </div>
-            <div className="text-[11px] mt-0.5" style={{ color: "var(--text-muted)" }}>
-              {isOpen ? "Market open" : "Market closed"}
-            </div>
-            <div className="text-[11px] font-medium tabular-nums mt-1" style={{ color: "var(--text-secondary)" }}>
-              {style.hours}
+          <div className="flex items-center gap-2.5">
+            <span
+              className={`w-2 h-2 rounded-full shrink-0${isOpen ? " pulse-dot" : ""}`}
+              style={{ background: style.color }}
+            />
+            <div className="flex-1 min-w-0">
+              <div className="text-[17px] font-bold leading-tight" style={{ color: style.color, transition: "color 0.25s ease" }}>
+                {displayedSession}
+              </div>
+              <div className="text-[11px] mt-0.5" style={{ color: "var(--text-muted)" }}>
+                {isOpen ? "Market open" : "Market closed"}
+              </div>
+              <div className="text-[11px] font-medium tabular-nums mt-1" style={{ color: "var(--text-secondary)" }}>
+                {style.hours}
+              </div>
             </div>
           </div>
+
+          {/* Session progress bar */}
+          {isOpen && (
+            <div className="w-full rounded-full overflow-hidden" style={{ height: 3, background: `${style.color}22` }}>
+              <div
+                className="h-full rounded-full"
+                style={{
+                  width: `${sessionProgress * 100}%`,
+                  background: style.color,
+                  transition: "width 1s linear",
+                }}
+              />
+            </div>
+          )}
         </div>
 
         {/* Next session countdown */}

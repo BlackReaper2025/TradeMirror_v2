@@ -488,6 +488,11 @@ export async function deleteQuote(id: number): Promise<void> {
   await db.delete(quotes).where(eq(quotes.id, id));
 }
 
+export async function updateQuote(id: number, text: string, author: string): Promise<void> {
+  const db = getDb();
+  await db.update(quotes).set({ text, author }).where(eq(quotes.id, id));
+}
+
 // ─── Export: all trades across all accounts as CSV ────────────────────────────
 
 export async function getAllTradesForExport(): Promise<TradeWithJournal[]> {
