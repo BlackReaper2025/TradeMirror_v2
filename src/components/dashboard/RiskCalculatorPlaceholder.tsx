@@ -151,7 +151,7 @@ export function RiskCalculatorPlaceholder() {
       ? parseFloat(riskVal) || 0
       : accountBalance * (parseFloat(riskVal) || 0) / 100;
 
-    const volume  = riskDollars && slDist ? riskDollars / slDist : 0;
+    const volume  = riskDollars && slDist ? (riskDollars / slDist) / 100_000 : 0;
     const maxLoss = riskDollars;
     const maxGain = rr != null
       ? riskDollars * rr
@@ -279,14 +279,14 @@ export function RiskCalculatorPlaceholder() {
             <div className="flex gap-3">
               <div className="flex-1 flex flex-col gap-0.5">
                 <span className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: "var(--text-muted)" }}>R:R Ratio</span>
-                <span className="text-[12px] font-semibold tabular-nums" style={{ color: stats?.rr == null ? "var(--text-primary)" : stats.rr >= 2 ? "#4ade80" : stats.rr >= 1 ? "var(--text-primary)" : "#f87171" }}>
+                <span className="text-[12px] font-semibold tabular-nums" style={{ color: stats?.rr == null ? "var(--text-primary)" : stats.rr >= 1 ? "var(--accent-text)" : "var(--text-secondary)" }}>
                   {stats?.rr != null ? `1 : ${fmt(stats.rr)}` : "—"}
                 </span>
               </div>
               <div className="flex-1 flex flex-col gap-0.5">
                 <span className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: "var(--text-muted)" }}>Volume (lots)</span>
                 <span className="text-[12px] font-semibold tabular-nums" style={{ color: "var(--text-primary)" }}>
-                  {stats?.volume ? fmt(stats.volume, 4) : "—"}
+                  {stats?.volume ? fmt(stats.volume, 2) : "—"}
                 </span>
               </div>
             </div>
@@ -294,13 +294,13 @@ export function RiskCalculatorPlaceholder() {
             <div className="flex gap-3">
               <div className="flex-1 flex flex-col gap-0.5">
                 <span className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: "var(--text-muted)" }}>Max Loss</span>
-                <span className="text-[12px] font-semibold tabular-nums" style={{ color: stats?.maxLoss ? "#f87171" : "var(--text-primary)" }}>
+                <span className="text-[12px] font-semibold tabular-nums" style={{ color: stats?.maxLoss ? "var(--text-secondary)" : "var(--text-primary)" }}>
                   {stats?.maxLoss ? `-$${fmt(stats.maxLoss)}` : "—"}
                 </span>
               </div>
               <div className="flex-1 flex flex-col gap-0.5">
                 <span className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: "var(--text-muted)" }}>Max Gain</span>
-                <span className="text-[12px] font-semibold tabular-nums" style={{ color: stats?.maxGain ? "#4ade80" : "var(--text-primary)" }}>
+                <span className="text-[12px] font-semibold tabular-nums" style={{ color: stats?.maxGain ? "var(--accent-text)" : "var(--text-primary)" }}>
                   {stats?.maxGain ? `+$${fmt(stats.maxGain)}` : "—"}
                 </span>
               </div>
