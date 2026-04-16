@@ -142,7 +142,7 @@ export function FatigueTimer() {
           <div className="flex items-baseline justify-between">
             <span
               className="font-bold tabular-nums leading-none"
-              style={{ color: timeColor, fontSize: 40, letterSpacing: "-0.03em", transition: "color 0.5s ease" }}
+              style={{ color: timeColor, fontSize: 32, letterSpacing: "-0.03em", transition: "color 0.5s ease" }}
             >
               {timeStr}
             </span>
@@ -152,7 +152,7 @@ export function FatigueTimer() {
           </div>
 
           {/* Waveform drain */}
-          <div className="flex items-end" style={{ height: 44, gap: 3 }}>
+          <div className="flex items-end" style={{ height: 34, gap: 3 }}>
             {BAR_HEIGHTS.map((h, i) => {
               const elapsed = totalSecs > 0 ? (totalSecs - remaining) / totalSecs : 1;
               const active  = i / BAR_HEIGHTS.length >= elapsed;
