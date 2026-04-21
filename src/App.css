@@ -72,15 +72,15 @@ body {
 
 /* ─── Red theme (negative day) ──────────────────────  */
 .theme-red {
-  --accent:           #ef4444;
-  --accent-dim:       rgba(239, 68, 68, 0.18);
-  --accent-glow:      rgba(239, 68, 68, 0.18);
-  --accent-border:    rgba(239, 68, 68, 0.34);
-  --accent-text:      #f87171;
+  --accent:           #f03a3a;
+  --accent-dim:       rgba(240, 58, 58, 0.18);
+  --accent-glow:      rgba(240, 58, 58, 0.18);
+  --accent-border:    rgba(240, 58, 58, 0.34);
+  --accent-text:      #f76868;
 
-  --chart-line:       #ef4444;
-  --chart-fill-from:  rgba(239, 68, 68, 0.22);
-  --chart-fill-to:    rgba(239, 68, 68, 0.00);
+  --chart-line:       #f03a3a;
+  --chart-fill-from:  rgba(240, 58, 58, 0.22);
+  --chart-fill-to:    rgba(240, 58, 58, 0.00);
 }
 
 /* ─── Scrollbar ─────────────────────────────────────── */
@@ -146,6 +146,27 @@ body {
 
 .pulse-dot { animation: pulse-dot 2s ease-in-out infinite; }
 .fade-in   { animation: fade-in 0.4s ease forwards; }
+
+/* ─── Splash Screen ─────────────────────────────────── */
+@keyframes splash-logo-enter {
+  from { opacity: 0; transform: translateY(22px); }
+  to   { opacity: 1; transform: translateY(0);    }
+}
+
+@keyframes splash-line-grow {
+  from { transform: scaleX(0); }
+  to   { transform: scaleX(1); }
+}
+
+@keyframes splash-version-enter {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0);   }
+}
+
+@keyframes splash-fade-out {
+  from { opacity: 1; }
+  to   { opacity: 0; }
+}
 
 /* ─── Number rendering ──────────────────────────────── */
 .tabular-nums {

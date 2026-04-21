@@ -1,8 +1,9 @@
 // ─── TradeTable — lists all trades for the selected account ──────────────────
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { ArrowUpRight, ArrowDownRight, BookOpen, Pencil, Trash2 } from "lucide-react";
 import { Badge } from "../ui/Badge";
 import type { TradeWithJournal } from "../../db/queries";
+import { getTimeFormat } from "../../lib/preferences";
 
 interface Props {
   trades: TradeWithJournal[];
@@ -30,8 +31,8 @@ function fmtDate(iso: string) {
   return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
 }
 
-function fmtTime(iso: string) {
-  return new Date(iso).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: false });
+function fmtTime(iso: string, hour12: boolean) {
+  return new Date(iso).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12 });
 }
 
 function calcRR(t: TradeWithJournal): string {
@@ -60,8 +61,14 @@ const COL_HEADERS = [
 ];
 
 export function TradeTable({ trades, onNewTrade, onEditTrade, onDeleteTrade }: Props) {
-  // confirmDeleteId: trade whose delete button was first-clicked; second click confirms.
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const [hour12, setHour12] = useState(() => getTimeFormat() === "12h");
+
+  useEffect(() => {
+    const handler = () => setHour12(getTimeFormat() === "12h");
+    window.addEventListener("tm:prefs-changed", handler);
+    return () => window.removeEventListener("tm:prefs-changed", handler);
+  }, []);
 
   function handleDeleteClick(e: React.MouseEvent, tradeId: string) {
     e.stopPropagation(); // don't open the edit drawer
@@ -143,7 +150,7 @@ export function TradeTable({ trades, onNewTrade, onEditTrade, onDeleteTrade }: P
                     {fmtDate(trade.openedAt)}
                   </div>
                   <div className="text-[11px]" style={{ color: "var(--text-muted)" }}>
-                    {fmtTime(trade.openedAt)}
+                    {fmtTime(trade.openedAt, hour12)}
                   </div>
                 </td>
 

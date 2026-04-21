@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from "react";
+import React, { useState, useCallback, useEffect } from "react";
 import { ArrowUpRight, ArrowDownRight, Plus, Pencil, Trash2 } from "lucide-react";
 import { Panel } from "../ui/Panel";
 import { Badge } from "../ui/Badge";
@@ -19,9 +19,15 @@ import {
 } from "../../db/queries";
 import { tradeEvents } from "../../lib/tradeEvents";
 import { useDatabase } from "../../db/DatabaseProvider";
+import { getTimeFormat } from "../../lib/preferences";
 
-function formatTime(iso: string) {
-  return new Date(iso).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: false });
+function formatTime(iso: string, hour12: boolean) {
+  return new Date(iso).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12 });
+}
+
+function fmtPrice(n: number | null | undefined) {
+  if (n == null) return null;
+  return n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 5 });
 }
 
 function todayDateStr(): string {
@@ -49,6 +55,13 @@ export function TradeLogPreview({ trades, selectedDate, onTradeChanged }: Props)
   const [showForm,   setShowForm]   = useState(false);
   const [editTrade,  setEditTrade]  = useState<TradeWithJournal | null>(null);
   const [account,    setAccount]    = useState<Account | null>(null);
+  const [hour12,     setHour12]     = useState(() => getTimeFormat() === "12h");
+
+  useEffect(() => {
+    const handler = () => setHour12(getTimeFormat() === "12h");
+    window.addEventListener("tm:prefs-changed", handler);
+    return () => window.removeEventListener("tm:prefs-changed", handler);
+  }, []);
 
   // Load account once when form is about to open
   const loadAccount = useCallback(async () => {
@@ -243,8 +256,25 @@ export function TradeLogPreview({ trades, selectedDate, onTradeChanged }: Props)
                       />
                     </div>
                     <div className="text-[11px] truncate mt-0.5" style={{ color: "var(--text-secondary)" }}>
-                      {trade.setupName} · {formatTime(trade.openedAt)}
+                      {trade.setupName} · {formatTime(trade.openedAt, hour12)}
                     </div>
+                    {(trade.entryPrice != null || trade.targetPrice != null) && (
+                      <div className="flex items-center gap-2 mt-1">
+                        {fmtPrice(trade.entryPrice) && (
+                          <span className="text-[10px] tabular-nums" style={{ color: "var(--text-muted)" }}>
+                            Entry <span style={{ color: "var(--text-secondary)" }}>{fmtPrice(trade.entryPrice)}</span>
+                          </span>
+                        )}
+                        {fmtPrice(trade.entryPrice) && fmtPrice(trade.targetPrice) && (
+                          <span style={{ color: "var(--text-muted)", fontSize: "9px" }}>→</span>
+                        )}
+                        {fmtPrice(trade.targetPrice) && (
+                          <span className="text-[10px] tabular-nums" style={{ color: "var(--text-muted)" }}>
+                            Target <span style={{ color: "var(--text-secondary)" }}>{fmtPrice(trade.targetPrice)}</span>
+                          </span>
+                        )}
+                      </div>
+                    )}
                   </div>
 
                   {/* P&L + actions */}

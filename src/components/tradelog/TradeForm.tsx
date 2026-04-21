@@ -37,7 +37,7 @@ const EMOTION_OPTIONS = [
 ];
 
 const SETUP_SUGGESTIONS = [
-  "Supply & Demand Zone", "Liquidity Sweep", "Wyckoff",
+  "Supply Zone", "Demand Zone", "Liquidity Sweep", "Wyckoff",
   "Break & Retest", "Rejection Wick", "Fib Retracement",
   "Range Breakout", "Fair Value Gap",
 ];

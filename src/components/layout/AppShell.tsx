@@ -29,7 +29,7 @@ export function AppShell({ children }: AppShellProps) {
         className="flex-1 overflow-hidden flex flex-col min-w-0"
         style={{ position: "relative", zIndex: 1 }}
       >
-        <RadialGlowBackground />
+        {activePage !== "analytics" && activePage !== "inspiration" && <RadialGlowBackground />}
         {children(activePage)}
       </main>
 
