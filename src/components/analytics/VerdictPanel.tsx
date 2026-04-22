@@ -1,8 +1,9 @@
 import { TrendingUp, TrendingDown } from "lucide-react";
 import { Panel } from "../ui/Panel";
-import { analysisResult, signalTags, signalHistory, historicalAccuracy } from "../../data/analyticsData";
+import { useAnalytics } from "../../data/analyticsData";
 
 export function VerdictPanel() {
+  const { analysisResult, signalTags, signalHistory, historicalAccuracy } = useAnalytics();
   const { direction, confidence, longScore, shortScore } = analysisResult;
   const confHighlight = confidence >= 65;
   const last10 = signalHistory.slice(-10);
@@ -12,10 +13,16 @@ export function VerdictPanel() {
 
       {/* ── Left: Direction ─────────────────────────────────────── */}
       <div
-        className="flex shrink-0"
+        className="flex shrink-0 relative"
         style={{ minWidth: "240px", borderRight: "1px solid var(--border-subtle)" }}
       >
-        <div className="flex flex-col items-center justify-center px-7 gap-3">
+        <span
+          className="absolute text-[11px] font-black uppercase tracking-widest"
+          style={{ top: "-3px", left: "-4px", color: "var(--text-secondary)" }}
+        >
+          Score
+        </span>
+        <div className="flex flex-col items-center justify-center px-7 gap-3" style={{ paddingTop: "20px", paddingLeft: "40px" }}>
           <div className="relative flex items-center justify-center">
             <div className="absolute" style={{ right: "calc(100% + 8px)" }}>
               {direction === "LONG"
@@ -81,9 +88,10 @@ export function VerdictPanel() {
                 key={tag.label}
                 className="text-[10px] px-2 py-0.5 rounded-md font-semibold"
                 style={{
-                  background: tag.active ? `${color}12` : "transparent",
-                  color:      tag.active ? color         : "var(--text-muted)",
-                  border:     `1px solid ${tag.active ? `${color}35` : "var(--border-subtle)"}`,
+                  background:  tag.active ? `${color}12` : "transparent",
+                  color:       tag.active ? color        : "var(--text-muted)",
+                  border:      `1px solid ${tag.active ? `${color}35` : "var(--border-subtle)"}`,
+                  boxShadow:   tag.active ? `0 0 8px ${color}55` : "none",
                 }}
               >
                 {tag.active ? "✓" : "✗"} {tag.label}

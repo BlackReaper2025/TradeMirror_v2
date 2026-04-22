@@ -5,13 +5,16 @@
 //  Row 2         — Evidence: 5 equal group cards (Trend, MACD, Momentum, Volatility, Directional)
 //  Row 3         — Detail:   Entry/Exit plan | Signal history dots | Live indicator bars
 //
+import { useEffect, useState }   from "react";
 import { VerdictPanel }          from "../components/analytics/VerdictPanel";
 import { EvidenceCards }         from "../components/analytics/EvidenceCards";
 import { EntryExitPanel }        from "../components/analytics/EntryExitPanel";
 import { HistoryDotsPanel }      from "../components/analytics/HistoryDotsPanel";
 import { LiveIndicatorPanel }    from "../components/analytics/LiveIndicatorPanel";
 import { PairSelector }          from "../components/analytics/PairSelector";
-import { analysisResult, eurusdSnapshot } from "../data/analyticsData";
+import { useAnalytics, setLiveAnalytics, signalHistory, historicalAccuracy } from "../data/analyticsData";
+import { fetchSheetRows }        from "../lib/googleSheets";
+import { analyze }               from "../lib/brain/analyzer";
 
 function formatDataDate(iso: string): string {
   const d = new Date(iso);
@@ -61,6 +64,17 @@ const VERDICT_COLORS: Record<"long" | "short" | "neutral", VerdictPalette> = {
 };
 
 export function Analytics() {
+  const { analysisResult, eurusdSnapshot } = useAnalytics();
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    fetchSheetRows(50)
+      .then(rows => {
+        setLiveAnalytics({ ...analyze(rows), signalHistory, historicalAccuracy });
+      })
+      .catch(err => setError(String(err)));
+  }, []);
+
   const verdict =
     analysisResult.direction === "LONG"  ? "long"    :
     analysisResult.direction === "SHORT" ? "short"   :
@@ -76,6 +90,14 @@ export function Analytics() {
         ...VERDICT_COLORS[verdict].vars,
       }}
     >
+
+      {/* ── Sheet fetch error ─────────────────────────────────────── */}
+      {error && (
+        <div className="shrink-0 px-4 py-2 rounded-xl text-[11px]"
+          style={{ background: "rgba(248,113,113,0.12)", border: "1px solid rgba(248,113,113,0.3)", color: "#f87171" }}>
+          Google Sheets error: {error}
+        </div>
+      )}
 
       {/* ── Top bar: Pair Selector + Data date ────────────────────── */}
       <div className="flex items-center gap-3 shrink-0" style={{ height: "40px" }}>
@@ -101,7 +123,7 @@ export function Analytics() {
       </div>
 
       {/* ── Row 2: Evidence cards ──────────────────────────────────── */}
-      <div className="shrink-0" style={{ height: "296px" }}>
+      <div className="shrink-0" style={{ height: "360px" }}>
         <EvidenceCards />
       </div>
 

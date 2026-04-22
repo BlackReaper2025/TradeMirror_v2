@@ -1,5 +1,5 @@
 import { Panel } from "../ui/Panel";
-import { analysisResult, eurusdSnapshot } from "../../data/analyticsData";
+import { useAnalytics } from "../../data/analyticsData";
 
 const fmt  = (p: number) => p.toFixed(4);
 const pips = (a: number, b: number) => Math.round(Math.abs(a - b) * 10000);
@@ -36,6 +36,7 @@ function LevelRow({
 }
 
 export function EntryExitPanel() {
+  const { analysisResult, eurusdSnapshot } = useAnalytics();
   const { entry, stopLoss, tp1, tp2, tp3, riskReward } = analysisResult;
   const { atr14 } = eurusdSnapshot;
 

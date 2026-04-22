@@ -1,3 +1,5 @@
+import { useSyncExternalStore } from 'react';
+
 export interface SignalGroup {
   bias: "bullish" | "bearish" | "neutral";
   score: number;
@@ -254,10 +256,11 @@ export const evidenceCards: EvidenceCard[] = [
 
 // ─── Directional chart data (20 bars, H4, +DI > -DI, ADX rising) ─────────────
 export interface DirectionalPoint {
-  i:      number;
-  diPlus: number;
+  i:       number;
+  date?:   string;
+  diPlus:  number;
   diMinus: number;
-  adx:    number;
+  adx:     number;
 }
 
 export const directionalChartData: DirectionalPoint[] = [
@@ -286,6 +289,7 @@ export const directionalChartData: DirectionalPoint[] = [
 // ─── Volatility chart data (20 bars, H4, Bollinger Bands) ────────────────────
 export interface VolatilityPoint {
   i:        number;
+  date?:    string;
   price:    number;
   bbUpper:  number;
   bbMiddle: number;
@@ -318,6 +322,7 @@ export const volatilityChartData: VolatilityPoint[] = [
 // ─── Momentum chart data (20 bars, H4, rising RSI + StochRSI) ────────────────
 export interface MomentumPoint {
   i:        number;
+  date?:    string;
   rsi14:    number;
   rsi9:     number;
   stochRsi: number;
@@ -349,6 +354,7 @@ export const momentumChartData: MomentumPoint[] = [
 // ─── MACD chart data (20 bars, H4, bullish crossover) ────────────────────────
 export interface MacdPoint {
   i:         number;
+  date?:     string;
   macd:      number;
   signal:    number;
   histogram: number;
@@ -380,11 +386,27 @@ export const macdChartData: MacdPoint[] = [
 // ─── EMA stack chart data (20 bars, H4, bullish stack) ────────────────────────
 export interface EmaPoint {
   i:      number;
+  date?:  string;
   price:  number;
   ema9:   number;
   ema20:  number;
   ema50:  number;
   ema200: number;
+}
+
+// ─── Live data store (populated from Google Sheets) ──────────────────────────
+export interface LiveAnalyticsData {
+  eurusdSnapshot:       EurusdSnapshot;
+  analysisResult:       AnalysisResult;
+  signalTags:           Array<{ label: string; active: boolean; bias: 'bullish' | 'bearish' | 'neutral' }>;
+  signalHistory:        SignalOutcome[];
+  historicalAccuracy:   number;
+  evidenceCards:        EvidenceCard[];
+  emaStackData:         EmaPoint[];
+  macdChartData:        MacdPoint[];
+  momentumChartData:    MomentumPoint[];
+  volatilityChartData:  VolatilityPoint[];
+  directionalChartData: DirectionalPoint[];
 }
 
 export const emaStackData: EmaPoint[] = [
@@ -409,3 +431,52 @@ export const emaStackData: EmaPoint[] = [
   { i: 19, price: 1.0841, ema9: 1.0835, ema20: 1.0817, ema50: 1.0757, ema200: 1.0681 },
   { i: 20, price: 1.0857, ema9: 1.0845, ema20: 1.0826, ema50: 1.0763, ema200: 1.0684 },
 ];
+
+// ─── Live data store ──────────────────────────────────────────────────────────
+// Declared after all static arrays so _defaultData can be a stable const,
+// which is required by useSyncExternalStore (uses Object.is for change detection).
+
+export interface LiveAnalyticsData {
+  eurusdSnapshot:       EurusdSnapshot;
+  analysisResult:       AnalysisResult;
+  signalTags:           Array<{ label: string; active: boolean; bias: 'bullish' | 'bearish' | 'neutral' }>;
+  signalHistory:        SignalOutcome[];
+  historicalAccuracy:   number;
+  evidenceCards:        EvidenceCard[];
+  emaStackData:         EmaPoint[];
+  macdChartData:        MacdPoint[];
+  momentumChartData:    MomentumPoint[];
+  volatilityChartData:  VolatilityPoint[];
+  directionalChartData: DirectionalPoint[];
+}
+
+const _defaultData: LiveAnalyticsData = {
+  eurusdSnapshot,
+  analysisResult,
+  signalTags,
+  signalHistory,
+  historicalAccuracy,
+  evidenceCards,
+  emaStackData,
+  macdChartData,
+  momentumChartData,
+  volatilityChartData,
+  directionalChartData,
+};
+
+type Listener = () => void;
+const _listeners = new Set<Listener>();
+let _liveData: LiveAnalyticsData | null = null;
+
+export function setLiveAnalytics(data: LiveAnalyticsData): void {
+  _liveData = data;
+  _listeners.forEach(l => l());
+}
+
+export function useAnalytics(): LiveAnalyticsData {
+  return useSyncExternalStore(
+    (cb) => { _listeners.add(cb); return () => { _listeners.delete(cb); }; },
+    () => _liveData ?? _defaultData,
+    () => _liveData ?? _defaultData,
+  );
+}

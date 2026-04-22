@@ -5,6 +5,41 @@
   box-sizing: border-box;
 }
 
+svg:focus,
+svg *:focus,
+.recharts-wrapper:focus,
+.recharts-wrapper *:focus,
+.recharts-surface:focus {
+  outline: none !important;
+}
+
+/* Momentum scrollbar */
+input.momentum-scroll {
+  -webkit-appearance: none;
+  appearance: none;
+  display: block;
+  width: calc(100% - 16px);
+  margin: 2px 8px;
+  height: 4px;
+  background: rgba(255,255,255,0.08);
+  border-radius: 2px;
+  outline: none;
+  border: none;
+  cursor: pointer;
+}
+input.momentum-scroll::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 28px;
+  height: 4px;
+  border-radius: 2px;
+  background: rgba(255,255,255,0.30);
+  cursor: pointer;
+}
+input.momentum-scroll::-webkit-slider-thumb:hover {
+  background: rgba(255,255,255,0.45);
+}
+
 html, body, #root {
   height: 100%;
   margin: 0;

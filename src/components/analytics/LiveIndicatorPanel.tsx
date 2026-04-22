@@ -1,5 +1,6 @@
 import { Panel } from "../ui/Panel";
-import { eurusdSnapshot, analysisResult } from "../../data/analyticsData";
+import { useAnalytics } from "../../data/analyticsData";
+import type { EurusdSnapshot } from "../../data/analyticsData";
 
 interface Indicator {
   label:   string;
@@ -7,7 +8,7 @@ interface Indicator {
   percent: number;
 }
 
-function buildIndicators(d: typeof eurusdSnapshot): Indicator[] {
+function buildIndicators(d: EurusdSnapshot): Indicator[] {
   const volRatio = ((d.volume - d.volumeSma20) / d.volumeSma20) * 100;
   const bbPos    = ((d.close - d.bbLower) / (d.bbUpper - d.bbLower)) * 100;
 
@@ -18,7 +19,7 @@ function buildIndicators(d: typeof eurusdSnapshot): Indicator[] {
     { label: "CCI",           value: `+${d.cci.toFixed(0)}`,                              percent: Math.min(((d.cci + 200) / 400) * 100, 100) },
     { label: "+DI",           value: d.diPlus.toFixed(1),                                 percent: Math.min((d.diPlus / 50) * 100, 100) },
     { label: "−DI",           value: d.diMinus.toFixed(1),                                percent: Math.min((d.diMinus / 50) * 100, 100) },
-    { label: "MACD Line",     value: `+${d.macd.toFixed(5)}`,                             percent: Math.min((Math.abs(d.macd) / 0.003) * 100, 100) },
+    { label: "MACD Line",     value: `+${(d.macd * 10000).toFixed(1)}`,                    percent: Math.min((Math.abs(d.macd) / 0.003) * 100, 100) },
     { label: "Volume vs Avg", value: `${volRatio >= 0 ? "+" : ""}${volRatio.toFixed(0)}%`, percent: Math.min(Math.abs(volRatio) + 50, 100) },
     { label: "BB Position",   value: `${bbPos.toFixed(0)}%`,                              percent: bbPos },
   ];
@@ -42,6 +43,7 @@ function Bar({ ind, color }: { ind: Indicator; color: string }) {
 }
 
 export function LiveIndicatorPanel() {
+  const { eurusdSnapshot, analysisResult } = useAnalytics();
   const indicators = buildIndicators(eurusdSnapshot);
   const barColor =
     analysisResult.direction === "LONG"  ? "#60a5fa" :

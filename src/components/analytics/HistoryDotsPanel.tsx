@@ -1,7 +1,8 @@
 import { Panel } from "../ui/Panel";
-import { signalHistory, analysisResult } from "../../data/analyticsData";
+import { useAnalytics } from "../../data/analyticsData";
 
 export function HistoryDotsPanel() {
+  const { signalHistory, analysisResult } = useAnalytics();
   const wins    = signalHistory.filter((s) => s === "win").length;
   const losses  = signalHistory.filter((s) => s === "loss").length;
   const pending = signalHistory.filter((s) => s === "pending").length;

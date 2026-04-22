@@ -40,6 +40,13 @@ fn list_images(folder: String) -> Vec<String> {
 }
 
 
+// ─── Read a file from disk ────────────────────────────────────────────────────
+
+#[tauri::command]
+fn read_credentials_file(path: String) -> Result<String, String> {
+    std::fs::read_to_string(&path).map_err(|e| e.to_string())
+}
+
 // ─── App entry point ──────────────────────────────────────────────────────────
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -59,7 +66,7 @@ pub fn run() {
                 .add_migrations("sqlite:trademirror.db", migrations)
                 .build(),
         )
-        .invoke_handler(tauri::generate_handler![list_images])
+        .invoke_handler(tauri::generate_handler![list_images, read_credentials_file])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
