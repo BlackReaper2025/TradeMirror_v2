@@ -50,21 +50,16 @@ export function Dashboard() {
 
   const handleSelectDate = useCallback(async (date: string) => {
     setSelectedDate(date);
-    const today = todayStr();
-    if (date === today) {
-      setSelectedTrades(data.recentTrades);
-      return;
-    }
     if (!data.account || !ready) return;
     try {
       const t = await getTradesByDate(data.account.id, date);
       setSelectedTrades(t);
     } catch { setSelectedTrades([]); }
-  }, [data.account, data.recentTrades, ready]);
+  }, [data.account, ready]);
 
-  // Keep selected trades in sync when recentTrades refresh
+  // Keep selected trades in sync when recentTrades refresh (only when no date selected)
   useEffect(() => {
-    if (!selectedDate || selectedDate === todayStr()) setSelectedTrades(data.recentTrades);
+    if (!selectedDate) setSelectedTrades(data.recentTrades);
   }, [data.recentTrades, selectedDate]);
 
   if (loading) {
@@ -104,6 +99,7 @@ export function Dashboard() {
             todayStats={data.todayStats}
             allTimeStats={data.allTimeStats}
             monthlyStats={data.monthlyStats}
+            weeklyStats={data.weeklyStats}
             todayFullStats={data.todayFullStats}
           />
         </div>

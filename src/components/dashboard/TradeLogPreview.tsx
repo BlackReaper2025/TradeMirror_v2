@@ -118,11 +118,12 @@ export function TradeLogPreview({ trades, selectedDate, onTradeChanged }: Props)
     const tradeId   = `t-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
     const journalId = `j-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
     const openedAt  = normaliseDateTime(values.openedAt);
-    const day       = openedAt.split("T")[0];
+    const closedAt  = values.closedAt ? normaliseDateTime(values.closedAt) : undefined;
+    const day       = (closedAt ?? openedAt).split("T")[0];
 
     await createTrade({
       id: tradeId, accountId: account.id, openedAt,
-      closedAt:       values.closedAt ? normaliseDateTime(values.closedAt) : undefined,
+      closedAt,
       instrument:     values.instrument.trim(),
       side:           values.side,
       setupName:      values.setupName.trim()     || undefined,
@@ -152,13 +153,14 @@ export function TradeLogPreview({ trades, selectedDate, onTradeChanged }: Props)
 
   const handleEditSave = useCallback(async (values: TradeFormValues) => {
     if (!account || !editTrade) return;
-    const oldDay   = editTrade.openedAt.slice(0, 10);
+    const oldDay   = (editTrade.closedAt ?? editTrade.openedAt).slice(0, 10);
     const openedAt = normaliseDateTime(values.openedAt);
-    const newDay   = openedAt.split("T")[0];
+    const closedAt = values.closedAt ? normaliseDateTime(values.closedAt) : undefined;
+    const newDay   = (closedAt ?? openedAt).split("T")[0];
 
     await updateTrade(editTrade.id, {
       openedAt,
-      closedAt:       values.closedAt ? normaliseDateTime(values.closedAt) : undefined,
+      closedAt,
       instrument:     values.instrument.trim(),
       side:           values.side,
       setupName:      values.setupName.trim()     || undefined,
@@ -225,7 +227,7 @@ export function TradeLogPreview({ trades, selectedDate, onTradeChanged }: Props)
             {trades.map((trade) => {
               const pnl   = trade.pnl ?? 0;
               const isWin = pnl > 0;
-              const pnlStr = `${isWin ? "+" : pnl < 0 ? "-" : ""}$${Math.abs(pnl).toLocaleString()}`;
+              const pnlStr = `${isWin ? "+" : pnl < 0 ? "-" : ""}$${Math.abs(pnl).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
               return (
                 <div
                   key={trade.id}

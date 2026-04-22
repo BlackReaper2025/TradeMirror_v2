@@ -9,6 +9,7 @@ import {
   getTodayTrades,
   getAllTimeStats,
   getMonthlyStats,
+  getWeeklyStats,
   getTodayFullStats,
   getEquityCurve,
   getCalendarDays,
@@ -25,6 +26,7 @@ export interface DashboardData {
   todayStats:     TodayLiveStats;
   allTimeStats:   AllTimeStats;
   monthlyStats:   AllTimeStats;
+  weeklyStats:    AllTimeStats;
   todayFullStats: AllTimeStats;
   recentTrades:   Trade[];
   equityCurve:    Array<{ date: string; balance: number }>;
@@ -36,6 +38,7 @@ export interface DashboardData {
 const EMPTY_STATS: AllTimeStats = {
   tradeCount: 0, winCount: 0, lossCount: 0,
   winRate: 0, avgWin: 0, avgLoss: 0, profitFactor: 0,
+  largestWin: 0, largestLoss: 0,
 };
 
 const EMPTY_TODAY: TodayLiveStats = { totalPnl: 0, tradeCount: 0, winCount: 0, lossCount: 0 };
@@ -45,6 +48,7 @@ const EMPTY: DashboardData = {
   todayStats:     EMPTY_TODAY,
   allTimeStats:   EMPTY_STATS,
   monthlyStats:   EMPTY_STATS,
+  weeklyStats:    EMPTY_STATS,
   todayFullStats: EMPTY_STATS,
   recentTrades:   [],
   equityCurve:    [],
@@ -71,13 +75,14 @@ export function useDashboardData() {
       const accountId = settings?.selectedAccountId ?? "acc-1";
 
       const [
-        account, todayStats, allTimeStats, monthlyStats, todayFullStats,
+        account, todayStats, allTimeStats, monthlyStats, weeklyStats, todayFullStats,
         recentTrades, equityCurve, calendarDays, portfolio, quotes,
       ] = await Promise.all([
         getAccount(accountId),
         getTodayLiveStats(accountId),
         getAllTimeStats(accountId),
         getMonthlyStats(accountId),
+        getWeeklyStats(accountId),
         getTodayFullStats(accountId),
         getTodayTrades(accountId),
         getEquityCurve(accountId, 3650),
@@ -86,7 +91,7 @@ export function useDashboardData() {
         getActiveQuotes(),
       ]);
 
-      setData({ account, todayStats, allTimeStats, monthlyStats, todayFullStats, recentTrades, equityCurve, calendarDays, portfolio, quotes });
+      setData({ account, todayStats, allTimeStats, monthlyStats, weeklyStats, todayFullStats, recentTrades, equityCurve, calendarDays, portfolio, quotes });
       setLoading(false);
     } catch (err) {
       console.error("[useDashboardData] Query failed:", err);

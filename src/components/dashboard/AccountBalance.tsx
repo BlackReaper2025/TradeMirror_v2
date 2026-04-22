@@ -23,14 +23,14 @@ export function AccountBalance({ account, todayStats }: Props) {
   ).toFixed(2);
 
   return (
-    <Panel state className="flex flex-col gap-4 h-full">
+    <Panel state className="flex flex-col gap-2 h-full">
       {/* Header row */}
       <div className="flex items-start justify-between">
         <div>
-          <div className="text-[15px] font-semibold uppercase tracking-widest" style={{ color: "var(--text-secondary)" }}>
+          <div className="text-[14px] font-semibold uppercase tracking-widest" style={{ color: "var(--text-secondary)" }}>
             Account Balance
           </div>
-          <div className="text-[12px] mt-0.5" style={{ color: "var(--text-muted)" }}>
+          <div className="text-[11px] mt-0.5" style={{ color: "var(--text-muted)" }}>
             {account.name} · {account.brokerOrFirm}
           </div>
         </div>
@@ -42,15 +42,15 @@ export function AccountBalance({ account, todayStats }: Props) {
 
       {/* Balance */}
       <div>
-        <div className="text-[44px] font-bold tabular-nums leading-none" style={{ color: "var(--text-primary)" }}>
+        <div className="text-[36px] font-bold tabular-nums leading-none" style={{ color: "var(--text-primary)" }}>
           {formatCurrency(account.currentBalance)}
         </div>
-        <div className="flex items-center gap-2 mt-2">
-          {isPositive ? <TrendingUp size={14} style={{ color: "var(--accent)" }} /> : <TrendingDown size={14} color="#f87171" />}
-          <span className="text-[13px] font-medium" style={{ color: isPositive ? "var(--accent-text)" : "#f87171" }}>
+        <div className="flex items-center gap-2 mt-1">
+          {isPositive ? <TrendingUp size={13} style={{ color: "var(--accent)" }} /> : <TrendingDown size={13} color="#f87171" />}
+          <span className="text-[12px] font-medium" style={{ color: isPositive ? "var(--accent-text)" : "#f87171" }}>
             {isPositive ? "+" : ""}{formatCurrency(account.currentBalance - account.startingBalance)}
           </span>
-          <span className="text-[13px]" style={{ color: "var(--text-secondary)" }}>
+          <span className="text-[12px]" style={{ color: "var(--text-secondary)" }}>
             ({isPositive ? "+" : ""}{balancePct}%) all time
           </span>
         </div>
@@ -58,19 +58,33 @@ export function AccountBalance({ account, todayStats }: Props) {
 
       {/* Daily P&L */}
       <div
-        className="rounded-xl p-4"
+        className="rounded-xl p-3"
         style={{ background: "var(--bg-panel-alt)", border: "1px solid var(--border-subtle)" }}
       >
-        <div className="text-[15px] font-semibold uppercase tracking-widest mb-2" style={{ color: "var(--text-secondary)" }}>
+        <div className="text-[13px] font-semibold uppercase tracking-widest mb-1" style={{ color: "var(--text-secondary)" }}>
           Today's P&L
         </div>
         <div className="flex items-end justify-between">
           <div>
-            <div className="text-[28px] font-bold tabular-nums" style={{ color: isPositive ? "var(--accent-text)" : "#f87171" }}>
+            <div className="text-[24px] font-bold tabular-nums" style={{ color: isPositive ? "var(--accent-text)" : "#f87171" }}>
               {isPositive ? "+" : ""}{formatCurrency(pnl)}
             </div>
-            <div className="text-[12px] mt-1" style={{ color: "var(--text-secondary)" }}>
+            <div className="text-[11px] mt-0.5" style={{ color: "var(--text-secondary)" }}>
               {todayStats.tradeCount} trades · {todayStats.winCount}W / {todayStats.lossCount}L
+            </div>
+            <div className="flex gap-4 mt-1.5">
+              <div>
+                <div className="text-[10px] uppercase tracking-widest" style={{ color: "var(--text-muted)" }}>Largest Win</div>
+                <div className="text-[12px] font-semibold tabular-nums" style={{ color: "#4ade80" }}>
+                  {todayStats.largestWin > 0 ? `+${formatCurrency(todayStats.largestWin)}` : "—"}
+                </div>
+              </div>
+              <div>
+                <div className="text-[10px] uppercase tracking-widest" style={{ color: "var(--text-muted)" }}>Largest Loss</div>
+                <div className="text-[12px] font-semibold tabular-nums" style={{ color: "#f87171" }}>
+                  {todayStats.largestLoss > 0 ? `-${formatCurrency(todayStats.largestLoss)}` : "—"}
+                </div>
+              </div>
             </div>
           </div>
           <div className="text-right">

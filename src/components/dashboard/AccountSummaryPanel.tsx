@@ -22,8 +22,8 @@ function fmtStat(n: number, prefix = "") {
 
 // ─── Stats toggle ─────────────────────────────────────────────────────────────
 
-type StatPeriod = "All Time" | "Monthly" | "Today";
-const PERIODS: StatPeriod[] = ["All Time", "Monthly", "Today"];
+type StatPeriod = "All Time" | "Monthly" | "Weekly" | "Today";
+const PERIODS: StatPeriod[] = ["All Time", "Monthly", "Weekly", "Today"];
 
 // ─── Props ────────────────────────────────────────────────────────────────────
 
@@ -32,13 +32,14 @@ interface Props {
   todayStats:     TodayLiveStats;
   allTimeStats:   AllTimeStats;
   monthlyStats:   AllTimeStats;
+  weeklyStats:    AllTimeStats;
   todayFullStats: AllTimeStats;
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
 export function AccountSummaryPanel({
-  account, todayStats, allTimeStats, monthlyStats, todayFullStats,
+  account, todayStats, allTimeStats, monthlyStats, weeklyStats, todayFullStats,
 }: Props) {
   const [period, setPeriod] = useState<StatPeriod>("All Time");
 
@@ -53,15 +54,17 @@ export function AccountSummaryPanel({
     ? ((allTimeGain / account.startingBalance) * 100).toFixed(2)
     : "0.00";
 
-  const s      = period === "All Time" ? allTimeStats : period === "Monthly" ? monthlyStats : todayFullStats;
+  const s      = period === "All Time" ? allTimeStats : period === "Monthly" ? monthlyStats : period === "Weekly" ? weeklyStats : todayFullStats;
   const noData = s.tradeCount === 0;
 
   const statRows = [
-    { icon: <Trophy size={12} />,      label: "Win Rate",      value: `${s.winRate.toFixed(0)}%`,        color: "var(--text-secondary)" },
-    { icon: <TrendingUp size={12} />,  label: "Avg Win",       value: fmtStat(s.avgWin, "+"),            color: "var(--text-secondary)" },
-    { icon: <TrendingDown size={12} />, label: "Avg Loss",     value: `-${fmtStat(s.avgLoss)}`,          color: "var(--text-secondary)" },
-    { icon: <Activity size={12} />,    label: "Profit Factor", value: `${s.profitFactor.toFixed(2)}×`,   color: "var(--text-secondary)" },
-    { icon: <Layers size={12} />,      label: "Total Trades",  value: `${s.tradeCount}`,                 color: "var(--text-secondary)" },
+    { icon: <Trophy size={12} />,       label: "Win Rate",      value: `${s.winRate.toFixed(0)}%`,       color: "var(--text-secondary)" },
+    { icon: <TrendingUp size={12} />,   label: "Avg Win",       value: fmtStat(s.avgWin, "+"),           color: "var(--text-secondary)" },
+    { icon: <TrendingDown size={12} />, label: "Avg Loss",      value: `-${fmtStat(s.avgLoss)}`,         color: "var(--text-secondary)" },
+    { icon: <Activity size={12} />,     label: "Profit Factor", value: `${s.profitFactor.toFixed(2)}×`,  color: "var(--text-secondary)" },
+    { icon: <TrendingUp size={12} />,   label: "Largest Win",   value: s.largestWin  > 0 ? fmtStat(s.largestWin, "+")   : "—", color: "var(--text-secondary)" },
+    { icon: <TrendingDown size={12} />, label: "Largest Loss",  value: s.largestLoss > 0 ? `-${fmtStat(s.largestLoss)}` : "—", color: "var(--text-secondary)" },
+    { icon: <Layers size={12} />,       label: "Total Trades",  value: `${s.tradeCount}`,                color: "var(--text-secondary)" },
   ];
 
   return (
@@ -80,7 +83,7 @@ export function AccountSummaryPanel({
 
       {/* ══ ACCOUNT BALANCE ══════════════════════════════════════════════════ */}
       <div
-        className="px-5 py-4 shrink-0"
+        className="px-5 py-3 shrink-0"
         style={{ borderBottom: "1px solid var(--border-subtle)" }}
       >
         {/* Header row */}
@@ -107,7 +110,7 @@ export function AccountSummaryPanel({
 
         {/* Balance */}
         <div
-          className="text-[38px] font-bold tabular-nums leading-none mt-3"
+          className="text-[38px] font-bold tabular-nums leading-none mt-2"
           style={{ color: "var(--text-primary)" }}
         >
           {fmtUSD(account.currentBalance)}
@@ -136,7 +139,7 @@ export function AccountSummaryPanel({
         style={{ borderBottom: "1px solid var(--border-subtle)" }}
       >
         <div
-          className="text-[14px] font-semibold uppercase tracking-widest mb-2"
+          className="text-[14px] font-semibold uppercase tracking-widest mb-1"
           style={{ color: "var(--text-secondary)" }}
         >
           Today's P&amp;L
@@ -219,36 +222,28 @@ export function AccountSummaryPanel({
 
         {/* Stat rows */}
         <div className="flex-1 flex flex-col justify-center px-5 py-1 min-h-0">
-          {noData ? (
-            <div className="flex items-center justify-center h-full">
-              <span className="text-[12px]" style={{ color: "var(--text-muted)" }}>
-                No trades {period === "Today" ? "today" : period === "Monthly" ? "this month" : "yet"}
-              </span>
-            </div>
-          ) : (
-            <div className="flex flex-col">
-              {statRows.map((row, i) => (
-                <div
-                  key={row.label}
-                  className="flex items-center justify-between py-1.5 px-1"
-                  style={i < statRows.length - 1 ? { borderBottom: "1px solid var(--border-subtle)" } : undefined}
-                >
-                  <div className="flex items-center gap-2">
-                    <span style={{ color: "var(--text-muted)" }}>{row.icon}</span>
-                    <span className="text-[11px] font-medium" style={{ color: "var(--text-secondary)" }}>
-                      {row.label}
-                    </span>
-                  </div>
-                  <span
-                    className="text-[13px] font-bold tabular-nums"
-                    style={{ color: row.color }}
-                  >
-                    {row.value}
+          <div className="flex flex-col">
+            {statRows.map((row, i) => (
+              <div
+                key={row.label}
+                className="flex items-center justify-between py-1.5 px-1"
+                style={i < statRows.length - 1 ? { borderBottom: "1px solid var(--border-subtle)" } : undefined}
+              >
+                <div className="flex items-center gap-2">
+                  <span style={{ color: "var(--text-muted)" }}>{row.icon}</span>
+                  <span className="text-[11px] font-medium" style={{ color: "var(--text-secondary)" }}>
+                    {row.label}
                   </span>
                 </div>
-              ))}
-            </div>
-          )}
+                <span
+                  className="text-[13px] font-bold tabular-nums"
+                  style={{ color: noData ? "var(--text-muted)" : row.color }}
+                >
+                  {noData ? "—" : row.value}
+                </span>
+              </div>
+            ))}
+          </div>
         </div>
       </div>
 

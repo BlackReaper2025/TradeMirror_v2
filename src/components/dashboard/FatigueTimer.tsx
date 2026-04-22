@@ -1,49 +1,96 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect } from "react";
 import { Play, Pause, RotateCcw, X, ChevronRight } from "lucide-react";
 import { Panel } from "../ui/Panel";
 
-// Cycle order for the single duration button
 const DURATIONS = [60, 90, 120, 180] as const;
-const DEFAULT_IDX = 2; // 120 minutes
-
-// Fixed waveform heights for the drain visualiser (20 bars, percent of container height)
+const DEFAULT_IDX = 2;
 const BAR_HEIGHTS = [65, 85, 45, 95, 58, 75, 40, 88, 52, 78, 48, 92, 42, 70, 60, 82, 50, 68, 90, 62];
 
 function pad(n: number) { return String(n).padStart(2, "0"); }
 
-export function FatigueTimer() {
-  const [durIdx,      setDurIdx]      = useState(DEFAULT_IDX);
-  const [remaining,   setRemaining]   = useState(DURATIONS[DEFAULT_IDX] * 60);
-  const [running,     setRunning]     = useState(false);
-  const [showOverlay, setShowOverlay] = useState(false);
-  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+// ── Module-level store — survives component unmount/remount ───────────────────
+interface TimerStore {
+  durIdx:          number;
+  pausedRemaining: number;   // seconds remaining at last pause/reset
+  running:         boolean;
+  startedAt:       number | null; // Date.now() when timer was last resumed
+  showOverlay:     boolean;
+}
 
-  const totalSecs  = DURATIONS[durIdx] * 60;
+const store: TimerStore = {
+  durIdx:          DEFAULT_IDX,
+  pausedRemaining: DURATIONS[DEFAULT_IDX] * 60,
+  running:         false,
+  startedAt:       null,
+  showOverlay:     false,
+};
+
+function computeRemaining(): number {
+  if (!store.running || store.startedAt === null) return store.pausedRemaining;
+  const elapsed = Math.floor((Date.now() - store.startedAt) / 1000);
+  return Math.max(0, store.pausedRemaining - elapsed);
+}
+
+// ── Component ─────────────────────────────────────────────────────────────────
+
+export function FatigueTimer() {
+  const [durIdx,      setDurIdx]      = useState(store.durIdx);
+  const [remaining,   setRemaining]   = useState(() => computeRemaining());
+  const [running,     setRunning]     = useState(store.running);
+  const [showOverlay, setShowOverlay] = useState(store.showOverlay);
+
+  const totalSecs    = DURATIONS[durIdx] * 60;
   const durationMins = DURATIONS[durIdx];
 
-  // Tick
+  // Tick — derives remaining from wall clock so gaps from navigation are absorbed
   useEffect(() => {
-    if (running) {
-      intervalRef.current = setInterval(() => {
-        setRemaining((r) => {
-          if (r <= 1) { setRunning(false); setShowOverlay(true); return 0; }
-          return r - 1;
-        });
-      }, 1000);
-    } else {
-      if (intervalRef.current) clearInterval(intervalRef.current);
-    }
-    return () => { if (intervalRef.current) clearInterval(intervalRef.current); };
+    if (!running) return;
+    const id = setInterval(() => {
+      const r = computeRemaining();
+      if (r <= 0) {
+        store.running         = false;
+        store.pausedRemaining = 0;
+        store.startedAt       = null;
+        store.showOverlay     = true;
+        setRunning(false);
+        setRemaining(0);
+        setShowOverlay(true);
+      } else {
+        setRemaining(r);
+      }
+    }, 1000);
+    return () => clearInterval(id);
   }, [running]);
 
+  // On remount while running, re-sync remaining from wall clock immediately
+  useEffect(() => {
+    if (store.running) setRemaining(computeRemaining());
+  }, []);
+
+  const toggleRunning = () => {
+    if (running) {
+      store.pausedRemaining = computeRemaining();
+      store.startedAt       = null;
+      store.running         = false;
+      setRunning(false);
+    } else {
+      store.startedAt = Date.now();
+      store.running   = true;
+      setRunning(true);
+    }
+  };
+
   const reset = (mins: number) => {
+    store.running         = false;
+    store.startedAt       = null;
+    store.pausedRemaining = mins * 60;
     setRunning(false);
     setRemaining(mins * 60);
   };
 
-  // Cycle to next duration and reset timer
   const cycleDuration = () => {
     const next = (durIdx + 1) % DURATIONS.length;
+    store.durIdx = next;
     setDurIdx(next);
     reset(DURATIONS[next]);
   };
@@ -61,6 +108,9 @@ export function FatigueTimer() {
   const ringColor    = warningLevel === "red" ? "#ef4444" : warningLevel === "yellow" ? "#f59e0b" : "var(--accent)";
   const timeColor    = warningLevel === "red" ? "#f87171" : warningLevel === "yellow" ? "#fbbf24" : "var(--text-primary)";
 
+  // suppress unused warning — pct is used in waveform
+  void pct;
+
   return (
     <>
       <div style={{ height: "100%", display: "flex", flexDirection: "column", position: "relative" }}>
@@ -76,7 +126,6 @@ export function FatigueTimer() {
             Fatigue Timer
           </span>
 
-          {/* Controls inline in header */}
           <div className="flex items-center gap-2">
 
             {/* Duration cycle */}
@@ -84,19 +133,9 @@ export function FatigueTimer() {
               onClick={cycleDuration}
               title="Cycle duration (60 → 90 → 120 → 180m)"
               className="flex items-center gap-1 px-2 h-7 rounded-lg transition-colors"
-              style={{
-                background: "var(--bg-panel-alt)",
-                border: "1px solid var(--border-subtle)",
-                color: "var(--text-secondary)",
-              }}
-              onMouseEnter={(e) => {
-                (e.currentTarget as HTMLElement).style.borderColor = "var(--accent-border)";
-                (e.currentTarget as HTMLElement).style.color = "var(--accent-text)";
-              }}
-              onMouseLeave={(e) => {
-                (e.currentTarget as HTMLElement).style.borderColor = "var(--border-subtle)";
-                (e.currentTarget as HTMLElement).style.color = "var(--text-secondary)";
-              }}
+              style={{ background: "var(--bg-panel-alt)", border: "1px solid var(--border-subtle)", color: "var(--text-secondary)" }}
+              onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.borderColor = "var(--accent-border)"; (e.currentTarget as HTMLElement).style.color = "var(--accent-text)"; }}
+              onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.borderColor = "var(--border-subtle)"; (e.currentTarget as HTMLElement).style.color = "var(--text-secondary)"; }}
             >
               <span className="text-[11px] font-semibold tabular-nums">{durationMins}m</span>
               <ChevronRight size={10} style={{ opacity: 0.6 }} />
@@ -107,11 +146,7 @@ export function FatigueTimer() {
               onClick={() => reset(durationMins)}
               title="Reset"
               className="w-7 h-7 rounded-lg flex items-center justify-center transition-colors"
-              style={{
-                background: "var(--bg-panel-alt)",
-                border: "1px solid var(--border-subtle)",
-                color: "var(--text-secondary)",
-              }}
+              style={{ background: "var(--bg-panel-alt)", border: "1px solid var(--border-subtle)", color: "var(--text-secondary)" }}
               onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.color = "var(--text-primary)"; }}
               onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.color = "var(--text-secondary)"; }}
             >
@@ -120,7 +155,7 @@ export function FatigueTimer() {
 
             {/* Start / Pause */}
             <button
-              onClick={() => setRunning((r) => !r)}
+              onClick={toggleRunning}
               className="w-7 h-7 rounded-lg flex items-center justify-center transition-all"
               style={{
                 background: running ? "var(--accent-dim)" : "var(--accent)",
@@ -209,14 +244,14 @@ export function FatigueTimer() {
             </p>
             <div className="flex flex-col gap-3">
               <button
-                onClick={() => { setShowOverlay(false); reset(durationMins); }}
+                onClick={() => { store.showOverlay = false; setShowOverlay(false); reset(durationMins); }}
                 className="w-full py-3 rounded-xl font-semibold text-[14px] transition-opacity hover:opacity-90"
                 style={{ background: "rgba(239,68,68,0.15)", border: "1px solid rgba(239,68,68,0.25)", color: "#f87171" }}
               >
                 Stop Trading — I'm Done
               </button>
               <button
-                onClick={() => setShowOverlay(false)}
+                onClick={() => { store.showOverlay = false; setShowOverlay(false); }}
                 className="w-full py-3 rounded-xl font-medium text-[14px] transition-opacity hover:opacity-70"
                 style={{ color: "#374151" }}
               >
@@ -224,7 +259,7 @@ export function FatigueTimer() {
               </button>
             </div>
           </div>
-          <button onClick={() => setShowOverlay(false)} className="absolute top-6 right-6 p-2 rounded-lg" style={{ color: "var(--text-muted)" }}>
+          <button onClick={() => { store.showOverlay = false; setShowOverlay(false); }} className="absolute top-6 right-6 p-2 rounded-lg" style={{ color: "var(--text-muted)" }}>
             <X size={20} />
           </button>
         </div>

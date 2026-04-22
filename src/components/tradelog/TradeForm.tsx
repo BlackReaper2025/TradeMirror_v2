@@ -1,6 +1,6 @@
 // ─── TradeForm — slide-over drawer for new trade entry or edit ────────────────
 import { useState, useEffect, useRef, useCallback } from "react"; // useRef used in TimeInput hold logic
-import { X, ChevronRight, TrendingUp, TrendingDown, BookOpen, Tag, ChevronUp, ChevronDown } from "lucide-react";
+import { X, ChevronRight, TrendingUp, TrendingDown, BookOpen, ChevronUp, ChevronDown } from "lucide-react";
 import { FormField, inputClass, inputStyle } from "../ui/FormField";
 import type { Account, TradeWithJournal } from "../../db/queries";
 
@@ -38,8 +38,7 @@ const EMOTION_OPTIONS = [
 
 const SETUP_SUGGESTIONS = [
   "Supply Zone", "Demand Zone", "Liquidity Sweep", "Wyckoff",
-  "Break & Retest", "Rejection Wick", "Fib Retracement",
-  "Range Breakout", "Fair Value Gap",
+  "Break & Retest", "No Setup",
 ];
 
 const MAJOR_PAIRS = [
@@ -52,10 +51,11 @@ const MAJOR_PAIRS = [
   "XAU/USD", "US100", "US500", "US30",
 ];
 
-const TAG_SUGGESTIONS = [
-  "london-open", "ny-open", "order-block", "trend-continuation",
-  "high-rr", "reversal", "breakout", "scalp", "swing",
-  "news-event", "patience", "fomo", "revenge",
+const TAG_GROUPS = [
+  { label: "Session",    tags: ["asia", "london", "new-york"] },
+  { label: "Setup",      tags: ["swing-low", "swing-high", "session-high", "session-low", "supply", "demand", "liquidity-sweep", "wyckoff", "break-retest", "fair-value-gap"] },
+  { label: "Type",       tags: ["scalp", "swing", "news-event"] },
+  { label: "Psychology", tags: ["patience", "impatience", "fomo", "revenge", "no-setup", "bad-entry", "exit-early"] },
 ];
 
 function todayLocal() {
@@ -112,9 +112,9 @@ function tradeToFormValues(t: TradeWithJournal): TradeFormValues {
     entryPrice:      t.entryPrice  != null ? String(t.entryPrice)  : "",
     stopPrice:       t.stopPrice   != null ? String(t.stopPrice)   : "",
     targetPrice:     t.targetPrice != null ? String(t.targetPrice) : "",
-    size:            t.size        != null ? String(t.size)        : "",
-    fees:            t.fees        != null ? String(t.fees)        : "",
-    pnl:             t.pnl         != null ? String(t.pnl)         : "",
+    size:            t.size        != null ? parseFloat(String(t.size)).toFixed(2)        : "",
+    fees:            t.fees        != null ? parseFloat(String(t.fees)).toFixed(2)        : "",
+    pnl:             t.pnl         != null ? parseFloat(String(t.pnl)).toFixed(2)         : "",
     technicalNotes:  norm(t.technicalNotes),
     tags:            norm(t.tags),
     emotionBefore:   norm(t.journal?.emotionBefore),
@@ -241,12 +241,14 @@ function Input({
   type = "text",
   placeholder,
   step,
+  cents,
 }: {
   value: string;
   onChange: (v: string) => void;
   type?: string;
   placeholder?: string;
   step?: string;
+  cents?: boolean;
 }) {
   const [focused, setFocused] = useState(false);
   return (
@@ -257,7 +259,13 @@ function Input({
       step={step}
       onChange={(e) => onChange(e.target.value)}
       onFocus={() => setFocused(true)}
-      onBlur={() => setFocused(false)}
+      onBlur={() => {
+        setFocused(false);
+        if (cents && value !== "") {
+          const n = parseFloat(value);
+          if (!isNaN(n)) onChange(n.toFixed(2));
+        }
+      }}
       className={inputClass}
       style={{
         ...inputStyle,
@@ -475,7 +483,7 @@ export function TradeForm({ account, existingTrade, defaultDate, onClose, onSave
       >
         {/* ── Drawer header ── */}
         <div
-          className="flex items-center justify-between px-6 py-5"
+          className="flex items-center justify-between px-6 py-3"
           style={{ borderBottom: "1px solid var(--border-subtle)" }}
         >
           <div>
@@ -521,17 +529,17 @@ export function TradeForm({ account, existingTrade, defaultDate, onClose, onSave
 
         {/* ── Form body ── */}
         <form onSubmit={handleSubmit} className="flex-1 overflow-y-auto">
-          <div className="px-6 py-5" style={{ display: tab === "trade" ? "block" : "none" }}>
+          <div className="px-6 py-3" style={{ display: tab === "trade" ? "block" : "none" }}>
             <TradeTab values={values} set={set} rr={rr} errors={errors} />
           </div>
-          <div className="px-6 py-5" style={{ display: tab === "journal" ? "block" : "none" }}>
+          <div className="px-6 py-3" style={{ display: tab === "journal" ? "block" : "none" }}>
             <JournalTab values={values} set={set} />
           </div>
         </form>
 
         {/* ── Footer ── */}
         <div
-          className="flex items-center justify-between px-6 py-4"
+          className="flex items-center justify-between px-6 py-3"
           style={{ borderTop: "1px solid var(--border-subtle)" }}
         >
           {tab === "trade" ? (
@@ -599,7 +607,7 @@ interface TabProps {
 
 function TradeTab({ values, set, rr, errors = {} }: TabProps) {
   return (
-    <div className="flex flex-col gap-5">
+    <div className="flex flex-col gap-3">
 
       {/* Opened / Closed */}
       <div className="grid grid-cols-2 gap-3">
@@ -712,15 +720,16 @@ function TradeTab({ values, set, rr, errors = {} }: TabProps) {
       {/* Size / Fees / P&L */}
       <div className="grid grid-cols-3 gap-3">
         <FormField label="Size / Lots">
-          <Input type="number" step="0.01" value={values.size} onChange={(v) => set("size", v)} placeholder="1.00" />
+          <Input type="number" step="0.01" cents value={values.size} onChange={(v) => set("size", v)} placeholder="1.00" />
         </FormField>
         <FormField label="Fees">
-          <Input type="number" step="0.01" value={values.fees} onChange={(v) => set("fees", v)} placeholder="0.00" />
+          <Input type="number" step="0.01" cents value={values.fees} onChange={(v) => set("fees", v)} placeholder="0.00" />
         </FormField>
         <FormField label="P&L ($)">
           <Input
             type="number"
             step="0.01"
+            cents
             value={values.pnl}
             onChange={(v) => set("pnl", v)}
             placeholder="+500.00"
@@ -734,50 +743,45 @@ function TradeTab({ values, set, rr, errors = {} }: TabProps) {
           value={values.technicalNotes}
           onChange={(v) => set("technicalNotes", v)}
           placeholder="Describe the setup, confluence, execution…"
-          rows={4}
+          rows={2}
         />
       </FormField>
 
       {/* Tags */}
-      <FormField label="Tags" hint="comma separated">
-        <div className="relative">
-          <div className="absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" style={{ color: "var(--text-muted)", zIndex: 1 }}>
-            <Tag size={13} />
-          </div>
-          <input
-            type="text"
-            value={values.tags}
-            onChange={e => set("tags", e.target.value)}
-            placeholder="breakout, london, high-rr"
-            className={inputClass}
-            style={{ ...inputStyle, paddingLeft: 32 }}
-          />
-        </div>
-        {/* Quick-pick tag chips */}
-        <div className="flex flex-wrap gap-1 mt-2">
-          {TAG_SUGGESTIONS.map((tag) => {
+      <FormField label="Tags">
+        <div className="flex flex-col gap-2">
+          {TAG_GROUPS.map(({ label, tags }) => {
             const currentTags = values.tags.split(",").map(t => t.trim()).filter(Boolean);
-            const isActive = currentTags.includes(tag);
-            const toggle = () => {
-              const next = isActive
-                ? currentTags.filter(t => t !== tag)
-                : [...currentTags, tag];
-              set("tags", next.join(", "));
-            };
             return (
-              <button
-                key={tag}
-                type="button"
-                onClick={toggle}
-                className="px-2 py-0.5 rounded-md text-[11px] transition-colors"
-                style={{
-                  background: isActive ? "var(--accent-dim)" : "rgba(255,255,255,0.08)",
-                  color: isActive ? "var(--accent-text)" : "var(--text-secondary)",
-                  border: isActive ? "1px solid var(--accent-border)" : "1px solid rgba(255,255,255,0.14)",
-                }}
-              >
-                {tag}
-              </button>
+              <div key={label}>
+                <div className="text-[9px] uppercase tracking-widest mb-1" style={{ color: "var(--text-muted)" }}>{label}</div>
+                <div className="flex flex-wrap gap-1">
+                {tags.map((tag) => {
+                  const isActive = currentTags.includes(tag);
+                  const toggle = () => {
+                    const next = isActive
+                      ? currentTags.filter(t => t !== tag)
+                      : [...currentTags, tag];
+                    set("tags", next.join(", "));
+                  };
+                  return (
+                    <button
+                      key={tag}
+                      type="button"
+                      onClick={toggle}
+                      className="px-2 py-0.5 rounded-md text-[11px] transition-colors"
+                      style={{
+                        background: isActive ? "var(--accent-dim)" : "rgba(255,255,255,0.08)",
+                        color: isActive ? "var(--accent-text)" : "var(--text-secondary)",
+                        border: isActive ? "1px solid var(--accent-border)" : "1px solid rgba(255,255,255,0.14)",
+                      }}
+                    >
+                      {tag}
+                    </button>
+                  );
+                })}
+                </div>
+              </div>
             );
           })}
         </div>

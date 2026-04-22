@@ -80,11 +80,12 @@ export function TradeLog() {
       const tradeId   = `t-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
       const journalId = `j-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
       const openedAt  = normaliseDateTime(values.openedAt);
-      const day       = openedAt.split("T")[0];
+      const closedAt  = values.closedAt ? normaliseDateTime(values.closedAt) : undefined;
+      const day       = (closedAt ?? openedAt).split("T")[0];
 
       await createTrade({
         id: tradeId, accountId: account.id, openedAt,
-        closedAt:       values.closedAt ? normaliseDateTime(values.closedAt) : undefined,
+        closedAt,
         instrument:     values.instrument.trim(),
         side:           values.side,
         setupName:      values.setupName.trim()      || undefined,
@@ -121,13 +122,14 @@ export function TradeLog() {
     if (!account || !editTrade) return;
     setSaveError(null);
     try {
-      const oldDay  = editTrade.openedAt.slice(0, 10);
+      const oldDay   = (editTrade.closedAt ?? editTrade.openedAt).slice(0, 10);
       const openedAt = normaliseDateTime(values.openedAt);
-      const newDay  = openedAt.split("T")[0];
+      const closedAt = values.closedAt ? normaliseDateTime(values.closedAt) : undefined;
+      const newDay   = (closedAt ?? openedAt).split("T")[0];
 
       await updateTrade(editTrade.id, {
         openedAt,
-        closedAt:       values.closedAt ? normaliseDateTime(values.closedAt) : undefined,
+        closedAt,
         instrument:     values.instrument.trim(),
         side:           values.side,
         setupName:      values.setupName.trim()      || undefined,
@@ -194,7 +196,7 @@ export function TradeLog() {
         <div>
           <h1
             className="text-[22px] font-bold tracking-tight"
-            style={{ color: "var(--text-primary)" }}
+            style={{ color: "var(--text-secondary)" }}
           >
             Trade Log
           </h1>
@@ -248,7 +250,7 @@ export function TradeLog() {
       </div>
 
       {/* ── Table ───────────────────────────────────────────────────────────── */}
-      <Panel padded={false} className="flex-1 flex flex-col overflow-hidden" style={{ padding: "0 0" }}>
+      <Panel padded={false} className="flex-1 flex flex-col overflow-hidden" style={{ padding: "0 0", border: "1px solid var(--border-subtle)" }}>
         {loading ? (
           <div className="flex-1 flex items-center justify-center">
             <span className="text-[12px]" style={{ color: "var(--text-muted)" }}>Loading trades…</span>
@@ -307,7 +309,7 @@ function StatStrip({ label, value, sub, icon, accent, positive, negative }: Stat
     ? "#4ade80"
     : negative
     ? "#f87171"
-    : "var(--text-primary)";
+    : "var(--text-secondary)";
 
   return (
     <div

@@ -44,6 +44,24 @@ function getActiveSessions(now: Date): SessionName[] {
   return active.length > 0 ? active : ["Closed"];
 }
 
+const SESSION_TIMEZONES: Partial<Record<SessionName, string>> = {
+  Sydney:       "Australia/Sydney",
+  Tokyo:        "Asia/Tokyo",
+  London:       "Europe/London",
+  "New York":   "America/New_York",
+};
+
+function getSessionLocalTime(session: SessionName, fmt: TimeFormat): string | null {
+  const tz = SESSION_TIMEZONES[session];
+  if (!tz) return null;
+  return new Date().toLocaleTimeString("en-US", {
+    timeZone: tz,
+    hour:     "2-digit",
+    minute:   "2-digit",
+    hour12:   fmt !== "24h",
+  });
+}
+
 function pad(n: number) { return String(n).padStart(2, "0"); }
 
 function buildTimeStr(now: Date, fmt: TimeFormat): string {
@@ -220,7 +238,7 @@ export function SessionClockPanel() {
       </div>
 
       {/* ── Bottom: Market Session ── */}
-      <div className="flex flex-col justify-center px-5 py-4">
+      <div className="flex flex-col justify-center px-5 pt-4 pb-2.5">
         <div className="flex items-center justify-between mb-3">
           <span className="text-[14px] font-semibold uppercase tracking-widest" style={{ color: "var(--text-secondary)" }}>
             Market Session
@@ -267,8 +285,15 @@ export function SessionClockPanel() {
               style={{ background: style.color }}
             />
             <div className="flex-1 min-w-0">
-              <div className="text-[17px] font-bold leading-tight" style={{ color: style.color, transition: "color 0.25s ease" }}>
-                {displayedSession}
+              <div className="flex items-baseline justify-between gap-2">
+                <div className="text-[17px] font-bold leading-tight" style={{ color: style.color, transition: "color 0.25s ease" }}>
+                  {displayedSession}
+                </div>
+                {getSessionLocalTime(displayedSession, fmt) && (
+                  <div className="text-[12px] font-semibold tabular-nums shrink-0" style={{ color: style.color, opacity: 0.8 }}>
+                    {getSessionLocalTime(displayedSession, fmt)}
+                  </div>
+                )}
               </div>
               <div className="text-[11px] mt-0.5" style={{ color: "var(--text-muted)" }}>
                 {isOpen ? "Market open" : "Market closed"}
@@ -296,7 +321,7 @@ export function SessionClockPanel() {
 
         {/* Next session countdown */}
         {display.nextOpen && (
-          <div className="text-[11px] font-bold text-center mt-1.5" style={{ color: "var(--text-muted)" }}>
+          <div className="text-[11px] font-bold text-center mt-3" style={{ color: "var(--text-muted)" }}>
             {display.nextOpen}
           </div>
         )}
