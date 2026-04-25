@@ -2,7 +2,7 @@ import React, { useState, useEffect } from "react";
 import { Play, Pause, RotateCcw, X, ChevronRight } from "lucide-react";
 import { Panel } from "../ui/Panel";
 
-const DURATIONS = [60, 90, 120, 180] as const;
+const DURATIONS = [60, 90, 120, 180, 240] as const;
 const DEFAULT_IDX = 2;
 const BAR_HEIGHTS = [65, 85, 45, 95, 58, 75, 40, 88, 52, 78, 48, 92, 42, 70, 60, 82, 50, 68, 90, 62];
 

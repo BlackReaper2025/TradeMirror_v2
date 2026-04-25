@@ -199,7 +199,7 @@ export function TradeLog() {
       style={{ padding: "20px 24px 24px" }}
     >
       {/* ── Summary stat strip ──────────────────────────────────────────────── */}
-      <Panel padded={false} className="mb-5" style={{ padding: "0", border: "1px solid rgba(255,255,255,0.08)" }}>
+      <Panel padded={false} className="mb-5" style={{ padding: "0", background: "radial-gradient(ellipse at top left, rgba(255,255,255,0.07) 0%, transparent 60%), rgba(8,12,18,0.55)", backdropFilter: "blur(10px)", WebkitBackdropFilter: "blur(10px)", border: "1px solid rgba(255,255,255,0.08)" }}>
         <div className="grid" style={{ gridTemplateColumns: "repeat(7, 1fr)" }}>
           <StatStrip label="Total Trades" value={String(trades.length)} />
           <StatStrip label="Win Rate" value={`${winRate}%`} sub={`${wins.length}W · ${losses.length}L`} accent />
@@ -212,7 +212,7 @@ export function TradeLog() {
       </Panel>
 
       {/* ── Table ───────────────────────────────────────────────────────────── */}
-      <Panel padded={false} className="flex-1 flex flex-col overflow-hidden" style={{ padding: "0 0", border: "1px solid rgba(255,255,255,0.08)" }}>
+      <Panel padded={false} className="flex-1 flex flex-col overflow-hidden" style={{ padding: "0 0", background: "radial-gradient(ellipse at top left, rgba(255,255,255,0.03) 0%, transparent 60%), rgba(8,12,18,0.55)", backdropFilter: "blur(10px)", WebkitBackdropFilter: "blur(10px)", border: "1px solid rgba(255,255,255,0.08)" }}>
         {loading ? (
           <div className="flex-1 flex items-center justify-center">
             <span className="text-[12px]" style={{ color: "var(--text-muted)" }}>Loading trades…</span>
@@ -277,18 +277,20 @@ function StatStrip({ label, value, sub, icon, accent, positive, negative }: Stat
 
   return (
     <div
-      className="px-4 py-0 flex flex-col items-center justify-center gap-0 text-center"
+      className="px-4 py-1.5 flex flex-col items-center justify-center gap-0 text-center"
       style={{ boxShadow: "inset -1px 0 0 var(--border-subtle)" }}
     >
       <div className="text-[10px] font-semibold uppercase tracking-widest" style={{ color: "var(--text-muted)" }}>
         {label}
       </div>
-      <div className="text-[15px] font-bold tabular-nums" style={{ color }}>
-        {value}
+      <div className="flex items-baseline gap-3">
+        <div className="text-[15px] font-bold tabular-nums" style={{ color }}>
+          {value}
+        </div>
+        {sub && (
+          <div className="text-[11px]" style={{ color: "var(--text-muted)" }}>{sub}</div>
+        )}
       </div>
-      {sub && (
-        <div className="text-[11px]" style={{ color: "var(--text-muted)" }}>{sub}</div>
-      )}
     </div>
   );
 }

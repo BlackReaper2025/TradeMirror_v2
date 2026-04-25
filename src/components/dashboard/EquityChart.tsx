@@ -20,10 +20,10 @@ function fmtBalance(n: number) {
 
 // ─── Timeframe ─────────────────────────────────────────────────────────────────
 
-const TIMEFRAMES = ["1H", "1D", "1W", "1M", "3M", "YTD", "ALL"] as const;
+const TIMEFRAMES = ["1D", "1W", "1M", "3M", "YTD", "ALL"] as const;
 type Timeframe = (typeof TIMEFRAMES)[number];
 
-const CANDLE_TIMEFRAMES: Timeframe[] = ["1H"]; // 1D now uses intraday line chart
+const CANDLE_TIMEFRAMES: Timeframe[] = []; // no candle timeframes active
 
 function filterCurve(
   curve: Array<{ date: string; balance: number }>,
@@ -35,7 +35,6 @@ function filterCurve(
     return d.toISOString().split("T")[0];
   };
   switch (tf) {
-    case "1H":  return []; // handled by CandleChart
     case "1D":  return []; // handled by intraday line chart
     case "1W":  return curve.filter(p => p.date >= cutoff(7));
     case "1M":  return curve.filter(p => p.date >= cutoff(30));
@@ -290,12 +289,13 @@ function TfButton({ label, active, onClick }: { label: string; active: boolean; 
 // ─── Main component ────────────────────────────────────────────────────────────
 
 interface Props {
-  equityCurve: Array<{ date: string; balance: number }>;
-  account:     Account | null;
+  equityCurve:  Array<{ date: string; balance: number }>;
+  account:      Account | null;
+  selectedDate?: string | null;
 }
 
-export function EquityChart({ equityCurve, account }: Props) {
-  const [timeframe, setTimeframe]     = useState<Timeframe>("ALL");
+export function EquityChart({ equityCurve, account, selectedDate }: Props) {
+  const [timeframe, setTimeframe]     = useState<Timeframe>("1D");
   const [candles, setCandles]         = useState<Candle[]>([]);
   const [intradayCurve, setIntraday]  = useState<Array<{ date: string; balance: number }>>([]);
   const [viewMode, setViewMode]     = useState<"chart" | "slideshow">("chart");
@@ -318,10 +318,27 @@ export function EquityChart({ equityCurve, account }: Props) {
     getHourlyCandles(account.id).then(setCandles).catch(() => setCandles([]));
   }, [timeframe, account?.id, ready, isCandle]);
 
+  // Switch to 1D whenever the user selects a calendar date
+  useEffect(() => {
+    if (selectedDate) setTimeframe("1D");
+  }, [selectedDate]);
+
   useEffect(() => {
     if (timeframe !== "1D" || !account || !ready) { setIntraday([]); return; }
-    getIntradayCurve(account.id, 24).then(setIntraday).catch(() => setIntraday([]));
-  }, [timeframe, account?.id, ready]);
+    if (selectedDate) {
+      getIntradayCurve(account.id, 24, selectedDate).then(setIntraday).catch(() => setIntraday([]));
+      return;
+    }
+    getIntradayCurve(account.id, 24).then(async (pts) => {
+      if (pts.length > 0) { setIntraday(pts); return; }
+      const lastDate = equityCurve.length > 0
+        ? equityCurve[equityCurve.length - 1].date.slice(0, 10)
+        : null;
+      if (!lastDate) { setIntraday([]); return; }
+      const fallback = await getIntradayCurve(account.id, 24, lastDate).catch(() => []);
+      setIntraday(fallback);
+    }).catch(() => setIntraday([]));
+  }, [timeframe, account?.id, ready, equityCurve, selectedDate]);
 
   const startingBalance = account?.startingBalance ?? 0;
   const allTimeGain     = account ? account.currentBalance - account.startingBalance : 0;

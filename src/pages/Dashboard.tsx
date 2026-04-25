@@ -106,7 +106,7 @@ export function Dashboard() {
 
         {/* EquityChart — dominant centre-top, rows 1–5 */}
         <div style={{ gridColumn: "4 / 10", gridRow: "1 / 6" }}>
-          <EquityChart equityCurve={data.equityCurve} account={data.account} />
+          <EquityChart equityCurve={data.equityCurve} account={data.account} selectedDate={selectedDate} />
         </div>
 
         {/* SessionClock — compact right-top, rows 1–4 */}

@@ -91,8 +91,18 @@ export function analyze(rows: SheetRow[]): ComputedAnalytics {
   // ─── EurusdSnapshot ─────────────────────────────────────────────────────────
   const pivotPoint = parseFloat(((cur.high + cur.low + cur.close) / 3).toFixed(5));
 
+  // Parse the sheet date as noon UTC so timezone offsets never shift the display date
+  function sheetDateToISO(d: string): string {
+    // ISO "YYYY-MM-DD"
+    if (/^\d{4}-\d{2}-\d{2}$/.test(d)) return d + 'T12:00:00Z';
+    // Slash "M/D/YYYY" or "MM/DD/YYYY"
+    const m = d.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+    if (m) return `${m[3]}-${m[1].padStart(2,'0')}-${m[2].padStart(2,'0')}T12:00:00Z`;
+    return new Date(d).toISOString();
+  }
+
   const eurusdSnapshot: EurusdSnapshot = {
-    timestamp:       new Date(cur.date).toISOString(),
+    timestamp:       sheetDateToISO(cur.date),
     symbol:          'EURUSD',
     open:            cur.open,
     high:            cur.high,

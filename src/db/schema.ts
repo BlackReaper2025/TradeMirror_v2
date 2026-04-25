@@ -32,12 +32,14 @@ export const trades = sqliteTable("trades", {
   entryPrice: real("entry_price"),
   stopPrice: real("stop_price"),
   targetPrice: real("target_price"),
+  exitPrice: real("exit_price"),
   size: real("size"),
   fees: real("fees").default(0),
   pnl: real("pnl").default(0),
   screenshotPath: text("screenshot_path"),
   technicalNotes: text("technical_notes"),
   tags: text("tags"), // JSON array stored as string
+  tradeRef: text("trade_ref"),
 });
 
 // ─── trade_journal ────────────────────────────────────────────────────────────

@@ -7,6 +7,12 @@ import { getRawSqlite } from "./index";
 const MIGRATIONS: string[] = [
   // v1 — per-account brokerage URL
   `ALTER TABLE accounts ADD COLUMN broker_url TEXT`,
+  // v2 — user-facing trade reference number
+  `ALTER TABLE trades ADD COLUMN trade_ref TEXT`,
+  // v3 — actual exit price (separate from take-profit target)
+  `ALTER TABLE trades ADD COLUMN exit_price REAL`,
+  // v3b — copy existing target_price values into exit_price (idempotent)
+  `UPDATE trades SET exit_price = target_price WHERE exit_price IS NULL AND target_price IS NOT NULL`,
 ];
 
 export async function runMigrations(): Promise<void> {

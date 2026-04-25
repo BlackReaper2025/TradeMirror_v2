@@ -148,7 +148,7 @@ export function TradeTable({ trades, onNewTrade, onEditTrade, onDeleteTrade }: P
             const thisDate = trade.closedAt?.slice(0, 10) ?? null;
             const isNewDateGroup = prevDate !== null && prevDate !== thisDate;
 
-            const rowBg = i % 2 === 0 ? "transparent" : "rgba(255,255,255,0.06)";
+            const rowBg = i % 2 === 0 ? "transparent" : "rgba(255,255,255,0.04)";
             return (
               <tr
                 key={trade.id}

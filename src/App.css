@@ -168,6 +168,23 @@ body {
 .accent-bg   { background-color: var(--accent-dim); }
 .accent-dot  { background-color: var(--accent); }
 
+/* ─── Trade Log animated glow background ────────────── */
+@keyframes tradelog-glow-pulse {
+  0%, 100% { opacity: 0.55; }
+  50%       { opacity: 1;    }
+}
+
+.tradelog-glow-bg {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  background-image:
+    radial-gradient(ellipse 70% 50% at 15% 0%,   rgba(255,255,255,0.055) 0%, transparent 70%),
+    radial-gradient(ellipse 50% 40% at 85% 100%,  rgba(255,255,255,0.03)  0%, transparent 65%);
+  animation: tradelog-glow-pulse 7s ease-in-out infinite;
+}
+
 /* ─── Animations ────────────────────────────────────── */
 @keyframes pulse-dot {
   0%, 100% { opacity: 1;   transform: scale(1);    }

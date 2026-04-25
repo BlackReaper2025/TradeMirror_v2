@@ -52,8 +52,9 @@ interface Props {
 
 export function TradeLogPreview({ trades, selectedDate, onTradeChanged }: Props) {
   const { ready } = useDatabase();
-  const [showForm,   setShowForm]   = useState(false);
-  const [editTrade,  setEditTrade]  = useState<TradeWithJournal | null>(null);
+  const [showForm,      setShowForm]      = useState(false);
+  const [editTrade,     setEditTrade]     = useState<TradeWithJournal | null>(null);
+  const [duplicateInit, setDuplicateInit] = useState<TradeFormValues | undefined>(undefined);
   const [account,    setAccount]    = useState<Account | null>(null);
   const [hour12,     setHour12]     = useState(() => getTimeFormat() === "12h");
 
@@ -135,6 +136,8 @@ export function TradeLogPreview({ trades, selectedDate, onTradeChanged }: Props)
       pnl:            values.pnl         ? parseFloat(values.pnl)         : 0,
       technicalNotes: values.technicalNotes.trim() || undefined,
       tags:           values.tags.trim()           || undefined,
+      tradeRef:       values.tradeRef.trim()       || undefined,
+      exitPrice:      values.exitPrice ? parseFloat(values.exitPrice) : undefined,
     });
 
     await createJournalEntry({
@@ -172,6 +175,8 @@ export function TradeLogPreview({ trades, selectedDate, onTradeChanged }: Props)
       pnl:            values.pnl         ? parseFloat(values.pnl)         : 0,
       technicalNotes: values.technicalNotes.trim() || undefined,
       tags:           values.tags.trim()           || undefined,
+      tradeRef:       values.tradeRef.trim()       || undefined,
+      exitPrice:      values.exitPrice ? parseFloat(values.exitPrice) : undefined,
     });
 
     await upsertJournalEntry(
@@ -275,6 +280,11 @@ export function TradeLogPreview({ trades, selectedDate, onTradeChanged }: Props)
                             Target <span style={{ color: "var(--text-secondary)" }}>{fmtPrice(trade.targetPrice)}</span>
                           </span>
                         )}
+                        {trade.tradeRef && (
+                          <span className="text-[11px] font-mono tabular-nums ml-auto mr-4" style={{ color: "var(--text-muted)" }}>
+                            #{trade.tradeRef}
+                          </span>
+                        )}
                       </div>
                     )}
                   </div>
@@ -327,11 +337,14 @@ export function TradeLogPreview({ trades, selectedDate, onTradeChanged }: Props)
 
       {showForm && account && (
         <TradeForm
+          key={editTrade?.id ?? "new"}
           account={account}
           existingTrade={editTrade}
           defaultDate={editTrade ? undefined : (selectedDate ?? undefined)}
-          onClose={() => { setShowForm(false); setEditTrade(null); }}
+          defaultValues={duplicateInit}
+          onClose={() => { setShowForm(false); setEditTrade(null); setDuplicateInit(undefined); }}
           onSaved={editTrade ? handleEditSave : handleSave}
+          onDuplicate={(vals) => { setDuplicateInit(vals); setEditTrade(null); }}
         />
       )}
     </>

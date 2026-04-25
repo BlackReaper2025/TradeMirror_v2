@@ -392,38 +392,52 @@ export async function getDailyCandles(accountId: string, days: number): Promise<
   return candles;
 }
 
-/** Running balance after each trade within the last `hours` hours (intraday line chart). */
+/** Running balance after each trade for a given day (intraday line chart).
+ *  When `date` is today, applies a `hours`-hour trailing window.
+ *  When `date` is a past day, shows all trades of that day. */
 export async function getIntradayCurve(
   accountId: string,
-  hours: number
+  hours: number,
+  date?: string,
 ): Promise<Array<{ date: string; balance: number }>> {
   const db      = getDb();
   const account = await getAccount(accountId);
   if (!account) return [];
 
-  const todayStr = localDateStr();
+  const todayStr  = localDateStr();
+  const targetStr = date ?? todayStr;
+  const isPastDay = targetStr < todayStr;
 
   const priorRows = await db
     .select({ total: sql<number>`coalesce(sum(${dailyStats.totalPnl}), 0)` })
     .from(dailyStats)
-    .where(and(eq(dailyStats.accountId, accountId), lt(dailyStats.day, todayStr)));
+    .where(and(eq(dailyStats.accountId, accountId), lt(dailyStats.day, targetStr)));
 
   let running = account.startingBalance + (priorRows[0]?.total ?? 0);
 
-  const allTodayTrades = await db
+  const allDayTrades = await db
     .select()
     .from(trades)
-    .where(and(eq(trades.accountId, accountId), gte(trades.closedAt, todayStr + "T00:00:00"), lte(trades.closedAt, todayStr + "T23:59:59")))
+    .where(and(eq(trades.accountId, accountId), gte(trades.closedAt, targetStr + "T00:00:00"), lte(trades.closedAt, targetStr + "T23:59:59")))
     .orderBy(trades.closedAt);
 
-  if (allTodayTrades.length === 0) return [];
+  if (allDayTrades.length === 0) return [];
 
-  const windowStart = new Date(Date.now() - hours * 60 * 60 * 1000);
+  // For past days show all trades; for today apply the hours window
+  if (isPastDay) {
+    const points: Array<{ date: string; balance: number }> = [];
+    for (const t of allDayTrades) {
+      running += t.pnl ?? 0;
+      points.push({ date: (t.closedAt ?? t.openedAt).slice(11, 16), balance: running });
+    }
+    return points;
+  }
+
+  const windowStart    = new Date(Date.now() - hours * 60 * 60 * 1000);
   const windowStartStr = windowStart.toISOString().slice(0, 19);
 
-  // Accumulate balance for trades before the window
-  const inWindow: typeof allTodayTrades = [];
-  for (const t of allTodayTrades) {
+  const inWindow: typeof allDayTrades = [];
+  for (const t of allDayTrades) {
     const closeStr = (t.closedAt ?? t.openedAt).slice(0, 19);
     if (closeStr < windowStartStr) running += t.pnl ?? 0;
     else inWindow.push(t);
