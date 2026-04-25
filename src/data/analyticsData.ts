@@ -468,6 +468,10 @@ type Listener = () => void;
 const _listeners = new Set<Listener>();
 let _liveData: LiveAnalyticsData | null = null;
 
+export function hasLiveAnalytics(): boolean {
+  return _liveData !== null;
+}
+
 export function setLiveAnalytics(data: LiveAnalyticsData): void {
   _liveData = data;
   _listeners.forEach(l => l());

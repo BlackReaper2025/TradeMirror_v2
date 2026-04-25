@@ -12,7 +12,7 @@ import { EntryExitPanel }        from "../components/analytics/EntryExitPanel";
 import { HistoryDotsPanel }      from "../components/analytics/HistoryDotsPanel";
 import { LiveIndicatorPanel }    from "../components/analytics/LiveIndicatorPanel";
 import { PairSelector }          from "../components/analytics/PairSelector";
-import { useAnalytics, setLiveAnalytics, signalHistory, historicalAccuracy } from "../data/analyticsData";
+import { useAnalytics, setLiveAnalytics, hasLiveAnalytics, signalHistory, historicalAccuracy } from "../data/analyticsData";
 import { fetchSheetRows }        from "../lib/googleSheets";
 import { analyze }               from "../lib/brain/analyzer";
 
@@ -68,6 +68,7 @@ export function Analytics() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    if (hasLiveAnalytics()) return;
     fetchSheetRows(50)
       .then(rows => {
         setLiveAnalytics({ ...analyze(rows), signalHistory, historicalAccuracy });

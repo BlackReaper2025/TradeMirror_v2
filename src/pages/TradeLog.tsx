@@ -37,9 +37,10 @@ export function TradeLog() {
   const [account, setAccount]     = useState<Account | null>(null);
   const [trades, setTrades]       = useState<TradeWithJournal[]>([]);
   const [loading, setLoading]     = useState(true);
-  const [editTrade, setEditTrade] = useState<TradeWithJournal | null>(null); // null = new
-  const [showForm, setShowForm]   = useState(false);
-  const [saveError, setSaveError] = useState<string | null>(null);
+  const [editTrade, setEditTrade]       = useState<TradeWithJournal | null>(null);
+  const [showForm, setShowForm]         = useState(false);
+  const [duplicateInit, setDuplicateInit] = useState<import("../components/tradelog/TradeForm").TradeFormValues | undefined>(undefined);
+  const [saveError, setSaveError]       = useState<string | null>(null);
 
   const load = useCallback(async () => {
     if (!ready) return;
@@ -97,6 +98,8 @@ export function TradeLog() {
         pnl:            values.pnl          ? parseFloat(values.pnl)         : 0,
         technicalNotes: values.technicalNotes.trim()  || undefined,
         tags:           values.tags.trim()            || undefined,
+        tradeRef:       values.tradeRef.trim()        || undefined,
+        exitPrice:      values.exitPrice  ? parseFloat(values.exitPrice)  : undefined,
       });
 
       await createJournalEntry({
@@ -141,6 +144,8 @@ export function TradeLog() {
         pnl:            values.pnl          ? parseFloat(values.pnl)         : 0,
         technicalNotes: values.technicalNotes.trim()  || undefined,
         tags:           values.tags.trim()            || undefined,
+        tradeRef:       values.tradeRef.trim()        || undefined,
+        exitPrice:      values.exitPrice  ? parseFloat(values.exitPrice)  : undefined,
       });
 
       await upsertJournalEntry(
@@ -181,76 +186,33 @@ export function TradeLog() {
   // ── Summary stats from loaded trades ──────────────────────────────────────
   const wins    = trades.filter((t) => (t.pnl ?? 0) > 0);
   const losses  = trades.filter((t) => (t.pnl ?? 0) < 0);
-  const totalPnl   = trades.reduce((s, t) => s + (t.pnl ?? 0), 0);
-  const winRate    = trades.length > 0 ? Math.round((wins.length / trades.length) * 100) : 0;
-  const avgWin     = wins.length   > 0 ? wins.reduce((s, t)   => s + (t.pnl ?? 0), 0) / wins.length   : 0;
-  const avgLoss    = losses.length > 0 ? Math.abs(losses.reduce((s, t) => s + (t.pnl ?? 0), 0)) / losses.length : 0;
+  const totalPnl    = trades.reduce((s, t) => s + (t.pnl ?? 0), 0);
+  const winRate     = trades.length > 0 ? Math.round((wins.length / trades.length) * 100) : 0;
+  const avgWin      = wins.length   > 0 ? wins.reduce((s, t)   => s + (t.pnl ?? 0), 0) / wins.length   : 0;
+  const avgLoss     = losses.length > 0 ? Math.abs(losses.reduce((s, t) => s + (t.pnl ?? 0), 0)) / losses.length : 0;
+  const largestWin  = wins.length   > 0 ? Math.max(...wins.map((t) => t.pnl ?? 0))   : 0;
+  const largestLoss = losses.length > 0 ? Math.abs(Math.min(...losses.map((t) => t.pnl ?? 0))) : 0;
 
   return (
     <div
       className="flex-1 flex flex-col overflow-hidden"
       style={{ padding: "20px 24px 24px" }}
     >
-      {/* ── Header ──────────────────────────────────────────────────────────── */}
-      <div className="flex items-center justify-between mb-5">
-        <div>
-          <h1
-            className="text-[22px] font-bold tracking-tight"
-            style={{ color: "var(--text-secondary)" }}
-          >
-            Trade Log
-          </h1>
-          {account && (
-            <div className="text-[12px] mt-0.5" style={{ color: "var(--text-muted)" }}>
-              {account.name} · {account.brokerOrFirm}
-            </div>
-          )}
-        </div>
-
-        <button
-          onClick={() => { setEditTrade(null); setShowForm(true); }}
-          className="flex items-center gap-2 px-4 py-2.5 rounded-xl text-[13px] font-semibold transition-opacity hover:opacity-80"
-          style={{
-            background: "var(--accent-dim)",
-            color: "var(--accent-text)",
-            border: "1px solid var(--accent-border)",
-          }}
-        >
-          <Plus size={15} />
-          New Trade
-        </button>
-      </div>
-
       {/* ── Summary stat strip ──────────────────────────────────────────────── */}
-      <div className="grid grid-cols-4 gap-3 mb-5" style={{ gridTemplateColumns: "repeat(4, 1fr)" }}>
-        <StatStrip
-          label="Total Trades"
-          value={String(trades.length)}
-          icon={<Hash size={14} />}
-        />
-        <StatStrip
-          label="Win Rate"
-          value={`${winRate}%`}
-          sub={`${wins.length}W · ${losses.length}L`}
-          icon={<BarChart2 size={14} />}
-          accent
-        />
-        <StatStrip
-          label="Total P&L"
-          value={trades.length ? fmt$(totalPnl) : "—"}
-          positive={totalPnl > 0}
-          negative={totalPnl < 0}
-          icon={totalPnl >= 0 ? <TrendingUp size={14} /> : <TrendingDown size={14} />}
-        />
-        <StatStrip
-          label="Avg Win / Loss"
-          value={avgWin || avgLoss ? `+$${avgWin.toFixed(0)} / -$${avgLoss.toFixed(0)}` : "—"}
-          icon={<TrendingUp size={14} />}
-        />
-      </div>
+      <Panel padded={false} className="mb-5" style={{ padding: "0", border: "1px solid rgba(255,255,255,0.08)" }}>
+        <div className="grid" style={{ gridTemplateColumns: "repeat(7, 1fr)" }}>
+          <StatStrip label="Total Trades" value={String(trades.length)} />
+          <StatStrip label="Win Rate" value={`${winRate}%`} sub={`${wins.length}W · ${losses.length}L`} accent />
+          <StatStrip label="Total P&L" value={trades.length ? fmt$(totalPnl) : "—"} positive={totalPnl > 0} negative={totalPnl < 0} />
+          <StatStrip label="Avg Win" value={avgWin > 0 ? `+$${avgWin.toFixed(2)}` : "—"} positive={avgWin > 0} />
+          <StatStrip label="Avg Loss" value={avgLoss > 0 ? `-$${avgLoss.toFixed(2)}` : "—"} negative={avgLoss > 0} />
+          <StatStrip label="Largest Win" value={largestWin > 0 ? fmt$(largestWin) : "—"} positive={largestWin > 0} />
+          <StatStrip label="Largest Loss" value={largestLoss > 0 ? `-$${largestLoss.toFixed(2)}` : "—"} negative={largestLoss > 0} />
+        </div>
+      </Panel>
 
       {/* ── Table ───────────────────────────────────────────────────────────── */}
-      <Panel padded={false} className="flex-1 flex flex-col overflow-hidden" style={{ padding: "0 0", border: "1px solid var(--border-subtle)" }}>
+      <Panel padded={false} className="flex-1 flex flex-col overflow-hidden" style={{ padding: "0 0", border: "1px solid rgba(255,255,255,0.08)" }}>
         {loading ? (
           <div className="flex-1 flex items-center justify-center">
             <span className="text-[12px]" style={{ color: "var(--text-muted)" }}>Loading trades…</span>
@@ -282,8 +244,10 @@ export function TradeLog() {
           key={editTrade?.id ?? "new"}
           account={account}
           existingTrade={editTrade}
-          onClose={() => { setShowForm(false); setEditTrade(null); }}
+          defaultValues={duplicateInit}
+          onClose={() => { setShowForm(false); setEditTrade(null); setDuplicateInit(undefined); }}
           onSaved={editTrade ? handleEditSave : handleSave}
+          onDuplicate={(vals) => { setDuplicateInit(vals); setEditTrade(null); }}
         />
       )}
     </div>
@@ -313,28 +277,18 @@ function StatStrip({ label, value, sub, icon, accent, positive, negative }: Stat
 
   return (
     <div
-      className="px-4 py-3 rounded-xl flex items-center gap-3"
-      style={{ background: "var(--bg-panel)", border: "1px solid var(--border-subtle)" }}
+      className="px-4 py-0 flex flex-col items-center justify-center gap-0 text-center"
+      style={{ boxShadow: "inset -1px 0 0 var(--border-subtle)" }}
     >
-      {icon && (
-        <div
-          className="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0"
-          style={{ background: "var(--bg-panel-alt)", color: "var(--text-muted)" }}
-        >
-          {icon}
-        </div>
-      )}
-      <div>
-        <div className="text-[10px] font-semibold uppercase tracking-widest" style={{ color: "var(--text-muted)" }}>
-          {label}
-        </div>
-        <div className="text-[15px] font-bold tabular-nums mt-0.5" style={{ color }}>
-          {value}
-        </div>
-        {sub && (
-          <div className="text-[11px] mt-0.5" style={{ color: "var(--text-muted)" }}>{sub}</div>
-        )}
+      <div className="text-[10px] font-semibold uppercase tracking-widest" style={{ color: "var(--text-muted)" }}>
+        {label}
       </div>
+      <div className="text-[15px] font-bold tabular-nums" style={{ color }}>
+        {value}
+      </div>
+      {sub && (
+        <div className="text-[11px]" style={{ color: "var(--text-muted)" }}>{sub}</div>
+      )}
     </div>
   );
 }

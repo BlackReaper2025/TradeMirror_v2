@@ -59,10 +59,12 @@ const COL_HEADERS = [
   { label: "Size",         width: 72  },
   { label: "Entry Price",  width: 90  },
   { label: "Stop Price",   width: 90  },
-  { label: "Target Price", width: 90  },
+  { label: "Take Profit",  width: 90  },
   { label: "Exit Date",    width: 90  },
   { label: "Exit Time",    width: 80  },
+  { label: "Exit Price",   width: 90  },
   { label: "P&L",          width: 90  },
+  { label: "Trade ID",     width: 90  },
   { label: "Setup",        width: 140 },
   { label: "Journal",      width: 68  },
   { label: "",             width: 72  }, // actions
@@ -122,13 +124,13 @@ export function TradeTable({ trades, onNewTrade, onEditTrade, onDeleteTrade }: P
   return (
     <div className="flex-1 overflow-auto">
       <table className="w-full border-collapse" style={{ minWidth: 960 }}>
-        <thead>
-          <tr style={{ borderBottom: "1px solid var(--border-subtle)" }}>
+        <thead className="sticky top-0 z-10">
+          <tr style={{ background: "linear-gradient(rgba(255,255,255,0.07), rgba(255,255,255,0.07)), var(--bg-panel)", borderBottom: "2px solid var(--border-medium)" }}>
             {COL_HEADERS.map((col, i) => (
               <th
                 key={i}
-                className="text-left px-3 py-2.5 text-[11px] font-semibold uppercase tracking-widest"
-                style={{ color: "var(--text-muted)", width: col.width, whiteSpace: "nowrap" }}
+                className="text-center px-3 py-2.5 text-[11px] font-semibold uppercase tracking-widest"
+                style={{ color: "var(--text-secondary)", width: col.width, whiteSpace: "nowrap", boxShadow: i === 0 || i === 2 || i === 3 || i === 4 || i === 5 || i === 8 || i === 11 || i === 12 || i === 13 ? "inset -1px 0 0 var(--border-subtle)" : undefined }}
               >
                 {col.label}
               </th>
@@ -142,53 +144,53 @@ export function TradeTable({ trades, onNewTrade, onEditTrade, onDeleteTrade }: P
             const isLoss   = pnl < 0;
             const pnlColor = isWin ? "#4ade80" : isLoss ? "#f87171" : "var(--text-secondary)";
             const awaitingConfirm = confirmDeleteId === trade.id;
-            const prevDate = i > 0 ? trades[i - 1].openedAt.slice(0, 10) : null;
-            const thisDate = trade.openedAt.slice(0, 10);
+            const prevDate = i > 0 ? (trades[i - 1].closedAt?.slice(0, 10) ?? null) : null;
+            const thisDate = trade.closedAt?.slice(0, 10) ?? null;
             const isNewDateGroup = prevDate !== null && prevDate !== thisDate;
 
+            const rowBg = i % 2 === 0 ? "transparent" : "rgba(255,255,255,0.06)";
             return (
               <tr
                 key={trade.id}
                 className="group transition-colors cursor-pointer"
                 style={{
+                  background: rowBg,
                   borderBottom: "1px solid var(--border-subtle)",
-                  borderTop: isNewDateGroup ? "2px solid var(--border-medium)" : undefined,
+                  borderTop: isNewDateGroup ? "2px solid rgba(255,255,255,0.2)" : undefined,
                 }}
                 onDoubleClick={() => onEditTrade(trade)}
-                onMouseEnter={(e) => (e.currentTarget.style.background = "var(--bg-panel-alt)")}
-                onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
               >
                 {/* # */}
-                <td className="px-3 py-3 tabular-nums">
+                <td className="px-3 py-3 text-center tabular-nums" style={{ boxShadow: "inset -1px 0 0 var(--border-subtle)" }}>
                   <span className="text-[11px] font-medium" style={{ color: "var(--text-muted)" }}>
                     {trades.length - i}
                   </span>
                 </td>
 
                 {/* Entry Date */}
-                <td className="px-3 py-3">
+                <td className="px-3 py-3 text-center">
                   <span className="text-[12px] font-medium" style={{ color: "var(--text-secondary)" }}>
                     {fmtDate(trade.openedAt)}
                   </span>
                 </td>
 
                 {/* Entry Time */}
-                <td className="px-3 py-3 tabular-nums">
+                <td className="px-3 py-3 text-center tabular-nums" style={{ boxShadow: "inset -1px 0 0 var(--border-subtle)" }}>
                   <span className="text-[11px]" style={{ color: "var(--text-muted)" }}>
                     {fmtTime(trade.openedAt, hour12)}
                   </span>
                 </td>
 
                 {/* Instrument */}
-                <td className="px-3 py-3">
+                <td className="px-3 py-3 text-center" style={{ boxShadow: "inset -1px 0 0 var(--border-subtle)" }}>
                   <span className="text-[13px] font-semibold" style={{ color: "var(--text-secondary)" }}>
                     {trade.instrument}
                   </span>
                 </td>
 
                 {/* Side */}
-                <td className="px-3 py-3">
-                  <div className="flex items-center gap-1.5">
+                <td className="px-3 py-3 text-center" style={{ boxShadow: "inset -1px 0 0 var(--border-subtle)" }}>
+                  <div className="flex items-center justify-center gap-1.5">
                     <div
                       className="w-5 h-5 rounded-md flex items-center justify-center"
                       style={{ background: trade.side === "long" ? "rgba(34,197,94,0.12)" : "rgba(239,68,68,0.12)" }}
@@ -205,58 +207,72 @@ export function TradeTable({ trades, onNewTrade, onEditTrade, onDeleteTrade }: P
                 </td>
 
                 {/* Size */}
-                <td className="px-3 py-3 tabular-nums">
-                  <span className="text-[12px]" style={{ color: "var(--text-secondary)" }}>
+                <td className="px-3 py-3 text-center tabular-nums" style={{ boxShadow: "inset -1px 0 0 var(--border-subtle)" }}>
+                  <span className="text-[12px]" style={{ color: "var(--text-muted)" }}>
                     {fmtSize(trade.size)}
                   </span>
                 </td>
 
                 {/* Entry Price */}
-                <td className="px-3 py-3 tabular-nums">
-                  <span className="text-[12px]" style={{ color: "var(--text-secondary)" }}>
+                <td className="px-3 py-3 text-center tabular-nums">
+                  <span className="text-[12px]" style={{ color: "var(--text-muted)" }}>
                     {fmtPrice(trade.entryPrice)}
                   </span>
                 </td>
 
                 {/* Stop Price */}
-                <td className="px-3 py-3 tabular-nums">
-                  <span className="text-[12px]" style={{ color: "#f87171", opacity: 0.8 }}>
+                <td className="px-3 py-3 text-center tabular-nums">
+                  <span className="text-[12px]" style={{ color: "var(--text-muted)" }}>
                     {fmtPrice(trade.stopPrice)}
                   </span>
                 </td>
 
                 {/* Target Price */}
-                <td className="px-3 py-3 tabular-nums">
-                  <span className="text-[12px]" style={{ color: "#4ade80", opacity: 0.8 }}>
+                <td className="px-3 py-3 text-center tabular-nums" style={{ boxShadow: "inset -1px 0 0 var(--border-subtle)" }}>
+                  <span className="text-[12px]" style={{ color: "var(--text-muted)" }}>
                     {fmtPrice(trade.targetPrice)}
                   </span>
                 </td>
 
                 {/* Exit Date */}
-                <td className="px-3 py-3">
+                <td className="px-3 py-3 text-center" style={{ whiteSpace: "nowrap" }}>
                   <span className="text-[12px] font-medium" style={{ color: "var(--text-secondary)" }}>
                     {trade.closedAt ? fmtDate(trade.closedAt) : "—"}
                   </span>
                 </td>
 
                 {/* Exit Time */}
-                <td className="px-3 py-3 tabular-nums">
+                <td className="px-3 py-3 text-center tabular-nums">
                   <span className="text-[11px]" style={{ color: "var(--text-muted)" }}>
                     {trade.closedAt ? fmtTime(trade.closedAt, hour12) : "—"}
                   </span>
                 </td>
 
+                {/* Exit Price */}
+                <td className="px-3 py-3 text-center tabular-nums" style={{ boxShadow: "inset -1px 0 0 var(--border-subtle)" }}>
+                  <span className="text-[12px]" style={{ color: "var(--text-muted)" }}>
+                    {fmtPrice(trade.exitPrice)}
+                  </span>
+                </td>
+
                 {/* P&L */}
-                <td className="px-3 py-3 tabular-nums">
+                <td className="px-3 py-3 text-center tabular-nums" style={{ boxShadow: "inset -1px 0 0 var(--border-subtle)" }}>
                   <span className="text-[13px] font-bold" style={{ color: pnlColor }}>
                     {fmt(pnl)}
                   </span>
                 </td>
 
+                {/* Trade ID */}
+                <td className="px-3 py-3 text-center tabular-nums" style={{ boxShadow: "inset -1px 0 0 var(--border-subtle)" }}>
+                  <span className="text-[11px] font-mono" style={{ color: "var(--text-muted)" }}>
+                    {trade.tradeRef ?? "—"}
+                  </span>
+                </td>
+
                 {/* Setup */}
-                <td className="px-3 py-3">
+                <td className="px-3 py-3 text-center">
                   {trade.setupName ? (
-                    <span className="text-[12px]" style={{ color: "var(--text-secondary)" }}>
+                    <span className="text-[12px]" style={{ color: "var(--text-muted)" }}>
                       {trade.setupName}
                     </span>
                   ) : (
@@ -265,7 +281,7 @@ export function TradeTable({ trades, onNewTrade, onEditTrade, onDeleteTrade }: P
                 </td>
 
                 {/* Journal indicator */}
-                <td className="px-3 py-3">
+                <td className="px-3 py-3 text-center">
                   {trade.journal ? (
                     <Badge label="✓" color="green" />
                   ) : (
@@ -275,7 +291,7 @@ export function TradeTable({ trades, onNewTrade, onEditTrade, onDeleteTrade }: P
 
                 {/* Actions */}
                 <td className="px-3 py-3" onClick={(e) => e.stopPropagation()}>
-                  <div className="flex items-center gap-1">
+                  <div className="flex items-center justify-center gap-1">
                     {/* Edit hint icon — subtle, reinforces row is clickable */}
                     <button
                       title="Edit trade"

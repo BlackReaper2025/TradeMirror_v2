@@ -16,11 +16,13 @@ export interface TradeFormValues {
   entryPrice:    string;
   stopPrice:     string;
   targetPrice:   string;
+  exitPrice:     string;
   size:          string;
   fees:          string;
   pnl:           string;
   technicalNotes: string;
   tags:          string;
+  tradeRef:      string;
   // Journal
   emotionBefore:    string;
   emotionAfter:     string;
@@ -55,7 +57,7 @@ const TAG_GROUPS = [
   { label: "Session",    tags: ["asia", "london", "new-york"] },
   { label: "Setup",      tags: ["swing-low", "swing-high", "session-high", "session-low", "supply", "demand", "liquidity-sweep", "wyckoff", "break-retest", "fair-value-gap"] },
   { label: "Type",       tags: ["scalp", "swing", "news-event"] },
-  { label: "Psychology", tags: ["patience", "impatience", "fomo", "revenge", "no-setup", "bad-entry", "exit-early"] },
+  { label: "Psychology", tags: ["patience", "impatience", "fomo", "revenge", "greedy", "scared", "no-setup", "bad-entry", "exit-early"] },
 ];
 
 function todayLocal() {
@@ -82,11 +84,13 @@ function makeEmpty(defaultDate?: string): TradeFormValues {
     entryPrice: "",
     stopPrice: "",
     targetPrice: "",
+    exitPrice: "",
     size: "",
     fees: "",
     pnl: "",
     technicalNotes: "",
     tags: "",
+    tradeRef: "",
     emotionBefore: "",
     emotionAfter: "",
     mistakes: "",
@@ -112,11 +116,13 @@ function tradeToFormValues(t: TradeWithJournal): TradeFormValues {
     entryPrice:      t.entryPrice  != null ? String(t.entryPrice)  : "",
     stopPrice:       t.stopPrice   != null ? String(t.stopPrice)   : "",
     targetPrice:     t.targetPrice != null ? String(t.targetPrice) : "",
+    exitPrice:       t.exitPrice   != null ? String(t.exitPrice)   : "",
     size:            t.size        != null ? parseFloat(String(t.size)).toFixed(2)        : "",
     fees:            t.fees        != null ? parseFloat(String(t.fees)).toFixed(2)        : "",
     pnl:             t.pnl         != null ? parseFloat(String(t.pnl)).toFixed(2)         : "",
     technicalNotes:  norm(t.technicalNotes),
     tags:            norm(t.tags),
+    tradeRef:        norm(t.tradeRef),
     emotionBefore:   norm(t.journal?.emotionBefore),
     emotionAfter:    norm(t.journal?.emotionAfter),
     mistakes:        norm(t.journal?.mistakes),
@@ -398,16 +404,18 @@ interface Props {
   account: Account;
   existingTrade?: TradeWithJournal | null;
   defaultDate?: string;
+  defaultValues?: TradeFormValues;
   onClose: () => void;
   onSaved: (values: TradeFormValues) => Promise<void>;
+  onDuplicate?: (values: TradeFormValues) => void;
 }
 
 type Tab = "trade" | "journal";
 
-export function TradeForm({ account, existingTrade, defaultDate, onClose, onSaved }: Props) {
+export function TradeForm({ account, existingTrade, defaultDate, defaultValues, onClose, onSaved, onDuplicate }: Props) {
   const isEdit = existingTrade != null;
   const [values, setValues]   = useState<TradeFormValues>(() =>
-    isEdit ? tradeToFormValues(existingTrade!) : makeEmpty(defaultDate)
+    isEdit ? tradeToFormValues(existingTrade!) : (defaultValues ?? makeEmpty(defaultDate))
   );
   const [tab, setTab]         = useState<Tab>("trade");
   const [saving, setSaving]   = useState(false);
@@ -481,19 +489,29 @@ export function TradeForm({ account, existingTrade, defaultDate, onClose, onSave
           boxShadow: "-16px 0 48px rgba(0,0,0,0.5)",
         }}
       >
-        {/* ── Drawer header ── */}
+        {/* ── Drawer header + tabs ── */}
         <div
-          className="flex items-center justify-between px-6 py-3"
-          style={{ borderBottom: "1px solid var(--border-subtle)" }}
+          className="flex items-center justify-between px-6"
+          style={{ borderBottom: "1px solid var(--border-subtle)", height: 52, background: "var(--bg-panel-alt)" }}
         >
-          <div>
-            <h2 className="text-[16px] font-bold" style={{ color: "var(--text-primary)" }}>
-              {isEdit ? "Edit Trade" : "New Trade"}
-            </h2>
-            <div className="text-[12px] mt-0.5" style={{ color: "var(--text-muted)" }}>
-              {account.name} · {account.brokerOrFirm}
-            </div>
+          <div className="flex items-end h-full" style={{ paddingBottom: 8 }}>
+            {(["trade", "journal"] as Tab[]).map((t) => (
+              <button
+                key={t}
+                onClick={() => setTab(t)}
+                className="px-5 py-2 text-[12px] font-semibold transition-colors"
+                style={{
+                  color: tab === t ? "var(--accent-text)" : "var(--text-secondary)",
+                  borderBottom: tab === t ? "2px solid var(--accent)" : "2px solid transparent",
+                  background: tab === t ? "var(--accent-dim)" : "transparent",
+                  borderRadius: tab === t ? "6px 6px 0 0" : undefined,
+                }}
+              >
+                {t === "trade" ? "Trade Details" : "Journal"}
+              </button>
+            ))}
           </div>
+
           <button
             onClick={onClose}
             className="w-8 h-8 rounded-lg flex items-center justify-center transition-colors"
@@ -505,34 +523,12 @@ export function TradeForm({ account, existingTrade, defaultDate, onClose, onSave
           </button>
         </div>
 
-        {/* ── Tabs ── */}
-        <div
-          className="flex gap-1 px-6 pt-4 pb-0"
-          style={{ borderBottom: "1px solid var(--border-subtle)" }}
-        >
-          {(["trade", "journal"] as Tab[]).map((t) => (
-            <button
-              key={t}
-              onClick={() => setTab(t)}
-              className="px-4 py-2 text-[12px] font-semibold capitalize rounded-t-lg transition-colors"
-              style={{
-                color: tab === t ? "var(--accent-text)" : "var(--text-secondary)",
-                background: tab === t ? "var(--accent-dim)" : "transparent",
-                borderBottom: tab === t ? "2px solid var(--accent)" : "2px solid transparent",
-                marginBottom: -1,
-              }}
-            >
-              {t === "trade" ? "Trade Details" : "Journal"}
-            </button>
-          ))}
-        </div>
-
         {/* ── Form body ── */}
-        <form onSubmit={handleSubmit} className="flex-1 overflow-y-auto">
-          <div className="px-6 py-3" style={{ display: tab === "trade" ? "block" : "none" }}>
+        <form id="trade-form-inner" onSubmit={handleSubmit} className="flex-1 overflow-y-auto">
+          <div className="px-6 py-2" style={{ display: tab === "trade" ? "block" : "none" }}>
             <TradeTab values={values} set={set} rr={rr} errors={errors} />
           </div>
-          <div className="px-6 py-3" style={{ display: tab === "journal" ? "block" : "none" }}>
+          <div className="px-6 py-2" style={{ display: tab === "journal" ? "block" : "none" }}>
             <JournalTab values={values} set={set} />
           </div>
         </form>
@@ -563,6 +559,20 @@ export function TradeForm({ account, existingTrade, defaultDate, onClose, onSave
           )}
 
           <div className="flex gap-2">
+            {isEdit && onDuplicate && (
+              <button
+                type="button"
+                onClick={() => onDuplicate(values)}
+                className="px-4 py-2 rounded-lg text-[12px] font-medium transition-opacity hover:opacity-70"
+                style={{
+                  background: "rgba(255,255,255,0.05)",
+                  color: "var(--text-secondary)",
+                  border: "1px solid rgba(255,255,255,0.12)",
+                }}
+              >
+                Duplicate
+              </button>
+            )}
             <button
               type="button"
               onClick={onClose}
@@ -607,7 +617,7 @@ interface TabProps {
 
 function TradeTab({ values, set, rr, errors = {} }: TabProps) {
   return (
-    <div className="flex flex-col gap-3">
+    <div className="flex flex-col gap-2">
 
       {/* Opened / Closed */}
       <div className="grid grid-cols-2 gap-3">
@@ -666,7 +676,7 @@ function TradeTab({ values, set, rr, errors = {} }: TabProps) {
             placeholder="London Open Break…"
           />
           {/* Quick-pick chips */}
-          <div className="flex flex-wrap gap-1 mt-2">
+          <div className="flex flex-wrap gap-1 mt-1">
             {SETUP_SUGGESTIONS.map((s) => (
               <button
                 key={s}
@@ -687,34 +697,43 @@ function TradeTab({ values, set, rr, errors = {} }: TabProps) {
         </div>
       </FormField>
 
-      {/* Entry / Stop / Target */}
+      {/* Entry / Stop / Take Profit */}
       <div>
-        <div className="grid grid-cols-3 gap-3 mb-2">
+        <div className="grid grid-cols-3 gap-3 mb-1">
           <FormField label="Entry">
             <Input type="number" step="0.00001" value={values.entryPrice} onChange={(v) => set("entryPrice", v)} placeholder="0.00" />
           </FormField>
           <FormField label="Stop">
             <Input type="number" step="0.00001" value={values.stopPrice} onChange={(v) => set("stopPrice", v)} placeholder="0.00" />
           </FormField>
-          <FormField label="Target">
+          <FormField label="Take Profit">
             <Input type="number" step="0.00001" value={values.targetPrice} onChange={(v) => set("targetPrice", v)} placeholder="0.00" />
           </FormField>
         </div>
 
-        {/* Derived R:R */}
-        {rr && rr !== "—" && (
-          <div
-            className="flex items-center gap-2 px-3 py-2 rounded-lg"
-            style={{ background: "var(--accent-dim)", border: "1px solid var(--accent-border)" }}
-          >
-            <span className="text-[11px] font-semibold uppercase tracking-widest" style={{ color: "var(--text-secondary)" }}>
-              Risk : Reward
-            </span>
-            <span className="text-[14px] font-bold tabular-nums" style={{ color: "var(--accent-text)" }}>
-              {rr}
-            </span>
+        {/* R:R badge + Exit Price */}
+        <div className="flex items-end gap-3">
+          {rr && rr !== "—" && (
+            <div style={{ flex: 1 }}>
+              <div
+                className="flex items-center justify-center gap-1.5 rounded-lg"
+                style={{ background: "var(--accent-dim)", border: "1px solid var(--accent-border)", height: 38 }}
+              >
+                <span className="text-[10px] font-semibold uppercase tracking-widest" style={{ color: "var(--text-secondary)" }}>
+                  R:R
+                </span>
+                <span className="text-[13px] font-bold tabular-nums" style={{ color: "var(--accent-text)" }}>
+                  {rr}
+                </span>
+              </div>
+            </div>
+          )}
+          <div style={{ flex: 1 }}>
+            <FormField label="Exit Price">
+              <Input type="number" step="0.00001" value={values.exitPrice} onChange={(v) => set("exitPrice", v)} placeholder="0.00" />
+            </FormField>
           </div>
-        )}
+        </div>
       </div>
 
       {/* Size / Fees / P&L */}
@@ -749,12 +768,12 @@ function TradeTab({ values, set, rr, errors = {} }: TabProps) {
 
       {/* Tags */}
       <FormField label="Tags">
-        <div className="flex flex-col gap-2">
+        <div className="flex flex-col gap-1">
           {TAG_GROUPS.map(({ label, tags }) => {
             const currentTags = values.tags.split(",").map(t => t.trim()).filter(Boolean);
             return (
               <div key={label}>
-                <div className="text-[9px] uppercase tracking-widest mb-1" style={{ color: "var(--text-muted)" }}>{label}</div>
+                <div className="text-[9px] uppercase tracking-widest mb-0.5" style={{ color: "var(--text-muted)" }}>{label}</div>
                 <div className="flex flex-wrap gap-1">
                 {tags.map((tag) => {
                   const isActive = currentTags.includes(tag);
@@ -785,6 +804,15 @@ function TradeTab({ values, set, rr, errors = {} }: TabProps) {
             );
           })}
         </div>
+      </FormField>
+
+      {/* Trade ID / Ref */}
+      <FormField label="Trade ID / Ref">
+        <Input
+          value={values.tradeRef}
+          onChange={(v) => set("tradeRef", v)}
+          placeholder="e.g. 7842913"
+        />
       </FormField>
     </div>
   );

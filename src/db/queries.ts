@@ -163,16 +163,16 @@ export interface TodayLiveStats {
 }
 
 export async function getTodayLiveStats(accountId: string): Promise<TodayLiveStats> {
-  const db  = getDb();
-  const { start, end } = tradingDayBounds();
-  const rows  = await db
+  const db     = getDb();
+  const today  = localDateStr();
+  const rows   = await db
     .select({ pnl: trades.pnl })
     .from(trades)
     .where(
       and(
         eq(trades.accountId, accountId),
-        gte(trades.openedAt, start),
-        lte(trades.openedAt, end)
+        gte(trades.closedAt, today + "T00:00:00"),
+        lte(trades.closedAt, today + "T23:59:59")
       )
     );
 
@@ -736,11 +736,13 @@ export interface CreateTradeInput {
   entryPrice?: number;
   stopPrice?: number;
   targetPrice?: number;
+  exitPrice?: number;
   size?: number;
   fees?: number;
   pnl?: number;
   technicalNotes?: string;
   tags?: string;
+  tradeRef?: string;
 }
 
 export interface CreateJournalInput {
@@ -770,11 +772,13 @@ export async function createTrade(input: CreateTradeInput): Promise<void> {
     entryPrice: input.entryPrice ?? null,
     stopPrice: input.stopPrice ?? null,
     targetPrice: input.targetPrice ?? null,
+    exitPrice: input.exitPrice ?? null,
     size: input.size ?? null,
     fees: input.fees ?? 0,
     pnl: input.pnl ?? 0,
     technicalNotes: input.technicalNotes ?? null,
     tags: input.tags ?? null,
+    tradeRef: input.tradeRef ?? null,
   });
 }
 
@@ -826,11 +830,13 @@ export async function updateTrade(
       entryPrice:     input.entryPrice ?? null,
       stopPrice:      input.stopPrice ?? null,
       targetPrice:    input.targetPrice ?? null,
+      exitPrice:      input.exitPrice ?? null,
       size:           input.size ?? null,
       fees:           input.fees ?? 0,
       pnl:            input.pnl ?? 0,
       technicalNotes: input.technicalNotes ?? null,
       tags:           input.tags ?? null,
+      tradeRef:       input.tradeRef ?? null,
     })
     .where(eq(trades.id, id));
 }

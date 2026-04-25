@@ -1,10 +1,10 @@
 import { useEffect, useState } from "react";
 import {
   LayoutDashboard, ScrollText, CalendarDays, BarChart2,
-  Calculator, ImageIcon, Settings,
+  Calculator, Settings,
   PanelLeftClose, PanelLeftOpen, ExternalLink, Music,
 } from "lucide-react";
-import { PieChart, Pie, Cell, ResponsiveContainer } from "recharts";
+import { PieChart, Pie, Cell, ResponsiveContainer, Sector } from "recharts";
 import { clsx } from "clsx";
 import { useDatabase } from "../../db/DatabaseProvider";
 import { tradeEvents } from "../../lib/tradeEvents";
@@ -16,13 +16,12 @@ import { openUrl as openExternal } from "@tauri-apps/plugin-opener";
 
 export type Page =
   | "dashboard" | "trade-log" | "calendar" | "analytics"
-  | "risk-calculator" | "inspiration" | "settings";
+  | "risk-calculator" | "settings";
 
 const NAV_ITEMS: { id: Page; label: string; icon: React.ElementType }[] = [
   { id: "dashboard",       label: "Dashboard",   icon: LayoutDashboard },
   { id: "trade-log",       label: "Trade Log",   icon: ScrollText      },
   { id: "analytics",       label: "Analytics",   icon: BarChart2       },
-  { id: "inspiration",     label: "Inspiration", icon: ImageIcon       },
 ];
 
 interface SidebarProps {
@@ -140,11 +139,13 @@ const THEME_BASE: Record<string, string> = {
   red:    "#ef4444",
 };
 
-function PortfolioWidget({ portfolio }: { portfolio: PortfolioItem[] }) {
+function PortfolioWidget({ portfolio, activeAccountName }: { portfolio: PortfolioItem[]; activeAccountName: string | undefined }) {
   const { themeState } = useTheme();
   if (portfolio.length === 0) return null;
-  const total  = portfolio.reduce((s, p) => s + p.value, 0);
-  const shades = accentShades(THEME_BASE[themeState], portfolio.length);
+  const total     = portfolio.reduce((s, p) => s + p.value, 0);
+  const shades    = accentShades(THEME_BASE[themeState], portfolio.length);
+  const activeIdx = portfolio.findIndex(p => p.name === activeAccountName);
+  const glowColor = THEME_BASE[themeState];
 
   return (
     <div className="px-2 pb-2">
@@ -184,6 +185,14 @@ function PortfolioWidget({ portfolio }: { portfolio: PortfolioItem[] }) {
                 paddingAngle={2}
                 dataKey="value"
                 strokeWidth={0}
+                activeIndex={activeIdx >= 0 ? activeIdx : undefined}
+                activeShape={(props: Record<string, unknown>) => (
+                  <Sector
+                    {...(props as Parameters<typeof Sector>[0])}
+                    outerRadius={(props.outerRadius as number ?? 38) + 4}
+                    style={{ filter: `drop-shadow(0 0 7px ${glowColor})` }}
+                  />
+                )}
               >
                 {portfolio.map((_, i) => (
                   <Cell key={i} fill={shades[i]} />
@@ -421,7 +430,7 @@ export function Sidebar({ activePage, onNavigate, collapsed, onToggleCollapse }:
 
         {/* Portfolio widget — expanded sidebar only, on the bottom */}
         {!collapsed && (
-          <PortfolioWidget portfolio={portfolio} />
+          <PortfolioWidget portfolio={portfolio} activeAccountName={account?.name} />
         )}
       </div>
     </aside>
