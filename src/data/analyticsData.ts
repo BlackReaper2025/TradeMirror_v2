@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from 'react';
+import type { SheetRow } from '../lib/googleSheets';
 
 export interface SignalGroup {
   bias: "bullish" | "bearish" | "neutral";
@@ -407,6 +408,7 @@ export interface LiveAnalyticsData {
   momentumChartData:    MomentumPoint[];
   volatilityChartData:  VolatilityPoint[];
   directionalChartData: DirectionalPoint[];
+  sheetRows:            SheetRow[];
 }
 
 export const emaStackData: EmaPoint[] = [
@@ -448,6 +450,7 @@ export interface LiveAnalyticsData {
   momentumChartData:    MomentumPoint[];
   volatilityChartData:  VolatilityPoint[];
   directionalChartData: DirectionalPoint[];
+  sheetRows:            SheetRow[];
 }
 
 const _defaultData: LiveAnalyticsData = {
@@ -462,6 +465,7 @@ const _defaultData: LiveAnalyticsData = {
   momentumChartData,
   volatilityChartData,
   directionalChartData,
+  sheetRows: [],
 };
 
 type Listener = () => void;

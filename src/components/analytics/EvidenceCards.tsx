@@ -5,6 +5,13 @@ import { useAnalytics } from "../../data/analyticsData";
 import type { EvidenceCard, Status } from "../../data/analyticsData";
 
 
+function parseSheetDate(raw: string): Date {
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return new Date(raw + 'T12:00:00Z');
+  const m = raw.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (m) return new Date(`${m[3]}-${m[1].padStart(2,'0')}-${m[2].padStart(2,'0')}T12:00:00Z`);
+  return new Date(raw);
+}
+
 const MOMENTUM_DISPLAY = [
   { key: "rsi14",    label: "RSI 14",   color: "#60a5fa" },
   { key: "rsi9",     label: "RSI 9",    color: "#818cf8" },
@@ -438,7 +445,7 @@ function ExpandedModal({ card, onClose }: { card: EvidenceCard; onClose: () => v
                 const idx = Math.round(i * (visibleDirModalData.length - 1) / 2);
                 const raw = visibleDirModalData[idx]?.date;
                 if (!raw) return <span key={i} />;
-                const d = new Date(raw);
+                const d = parseSheetDate(raw);
                 return <span key={i}>{isNaN(d.getTime()) ? '' : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</span>;
               })}
             </div>
@@ -497,7 +504,7 @@ function ExpandedModal({ card, onClose }: { card: EvidenceCard; onClose: () => v
                 const idx = Math.round(i * (visibleVolModalData.length - 1) / 2);
                 const raw = visibleVolModalData[idx]?.date;
                 if (!raw) return <span key={i} />;
-                const d = new Date(raw);
+                const d = parseSheetDate(raw);
                 return <span key={i}>{isNaN(d.getTime()) ? '' : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</span>;
               })}
             </div>
@@ -557,7 +564,7 @@ function ExpandedModal({ card, onClose }: { card: EvidenceCard; onClose: () => v
                 const idx = Math.round(i * (visibleMomentumData.length - 1) / 2);
                 const raw = visibleMomentumData[idx]?.date;
                 if (!raw) return <span key={i} />;
-                const d = new Date(raw);
+                const d = parseSheetDate(raw);
                 return <span key={i}>{isNaN(d.getTime()) ? '' : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</span>;
               })}
             </div>
@@ -620,7 +627,7 @@ function ExpandedModal({ card, onClose }: { card: EvidenceCard; onClose: () => v
                 const idx = Math.round(i * (visibleMacdModalData.length - 1) / 2);
                 const raw = visibleMacdModalData[idx]?.date;
                 if (!raw) return <span key={i} />;
-                const d = new Date(raw);
+                const d = parseSheetDate(raw);
                 return <span key={i}>{isNaN(d.getTime()) ? '' : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</span>;
               })}
             </div>
@@ -679,7 +686,7 @@ function ExpandedModal({ card, onClose }: { card: EvidenceCard; onClose: () => v
                 const idx = Math.round(i * (visibleEmaModalData.length - 1) / 2);
                 const raw = visibleEmaModalData[idx]?.date;
                 if (!raw) return <span key={i} />;
-                const d = new Date(raw);
+                const d = parseSheetDate(raw);
                 return <span key={i}>{isNaN(d.getTime()) ? '' : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</span>;
               })}
             </div>
@@ -1001,7 +1008,7 @@ function Card({ card, onClick }: { card: EvidenceCard; onClick: () => void }) {
               const idx = Math.round(i * (visibleVolData.length - 1) / 2);
               const raw = visibleVolData[idx]?.date;
               if (!raw) return <span key={i} />;
-              const d = new Date(raw);
+              const d = parseSheetDate(raw);
               return <span key={i}>{isNaN(d.getTime()) ? '' : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</span>;
             })}
           </div>
@@ -1066,7 +1073,7 @@ function Card({ card, onClick }: { card: EvidenceCard; onClick: () => void }) {
               const idx = Math.round(i * (visibleMomentumData.length - 1) / 2);
               const raw = visibleMomentumData[idx]?.date;
               if (!raw) return <span key={i} />;
-              const d = new Date(raw);
+              const d = parseSheetDate(raw);
               return <span key={i}>{isNaN(d.getTime()) ? '' : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</span>;
             })}
           </div>
@@ -1126,7 +1133,7 @@ function Card({ card, onClick }: { card: EvidenceCard; onClick: () => void }) {
               const idx = Math.round(i * (visibleMacdData.length - 1) / 2);
               const raw = visibleMacdData[idx]?.date;
               if (!raw) return <span key={i} />;
-              const d = new Date(raw);
+              const d = parseSheetDate(raw);
               return <span key={i}>{isNaN(d.getTime()) ? '' : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</span>;
             })}
           </div>
@@ -1187,7 +1194,7 @@ function Card({ card, onClick }: { card: EvidenceCard; onClick: () => void }) {
               const idx = Math.round(i * (visibleDirData.length - 1) / 2);
               const raw = visibleDirData[idx]?.date;
               if (!raw) return <span key={i} />;
-              const d = new Date(raw);
+              const d = parseSheetDate(raw);
               return <span key={i}>{isNaN(d.getTime()) ? '' : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</span>;
             })}
           </div>
@@ -1251,7 +1258,7 @@ function Card({ card, onClick }: { card: EvidenceCard; onClick: () => void }) {
               const idx = Math.round(i * (visibleEmaData.length - 1) / 2);
               const raw = visibleEmaData[idx]?.date;
               if (!raw) return <span key={i} />;
-              const d = new Date(raw);
+              const d = parseSheetDate(raw);
               return <span key={i}>{isNaN(d.getTime()) ? '' : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</span>;
             })}
           </div>
