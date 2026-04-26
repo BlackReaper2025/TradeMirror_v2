@@ -1,5 +1,5 @@
 // ─── Trade Log page — Phase 3 ────────────────────────────────────────────────
-import { useEffect, useState, useCallback } from "react";
+import React, { useEffect, useState, useCallback } from "react";
 import { Plus, TrendingUp, TrendingDown, BarChart2, Hash } from "lucide-react";
 import { Panel } from "../components/ui/Panel";
 import { TradeTable } from "../components/tradelog/TradeTable";
@@ -199,20 +199,25 @@ export function TradeLog() {
       style={{ padding: "20px 24px 24px" }}
     >
       {/* ── Summary stat strip ──────────────────────────────────────────────── */}
-      <Panel padded={false} className="mb-5" style={{ padding: "0", background: "radial-gradient(ellipse at top left, rgba(255,255,255,0.07) 0%, transparent 60%), rgba(8,12,18,0.55)", backdropFilter: "blur(10px)", WebkitBackdropFilter: "blur(10px)", border: "1px solid rgba(255,255,255,0.08)" }}>
-        <div className="grid" style={{ gridTemplateColumns: "repeat(7, 1fr)" }}>
-          <StatStrip label="Total Trades" value={String(trades.length)} />
-          <StatStrip label="Win Rate" value={`${winRate}%`} sub={`${wins.length}W · ${losses.length}L`} accent />
-          <StatStrip label="Total P&L" value={trades.length ? fmt$(totalPnl) : "—"} positive={totalPnl > 0} negative={totalPnl < 0} />
-          <StatStrip label="Avg Win" value={avgWin > 0 ? `+$${avgWin.toFixed(2)}` : "—"} positive={avgWin > 0} />
-          <StatStrip label="Avg Loss" value={avgLoss > 0 ? `-$${avgLoss.toFixed(2)}` : "—"} negative={avgLoss > 0} />
-          <StatStrip label="Largest Win" value={largestWin > 0 ? fmt$(largestWin) : "—"} positive={largestWin > 0} />
-          <StatStrip label="Largest Loss" value={largestLoss > 0 ? `-$${largestLoss.toFixed(2)}` : "—"} negative={largestLoss > 0} />
-        </div>
-      </Panel>
+      <div className="mb-5 shrink-0" style={{ position: "relative", borderRadius: "14px", clipPath: "inset(0 round 14px)" }}>
+        <div style={{ position: "absolute", inset: 0, borderRadius: "14px", padding: "1.5px", pointerEvents: "none", zIndex: 1, background: "rgba(255,255,255,0.12)", WebkitMask: "linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0)", WebkitMaskComposite: "xor", maskComposite: "exclude" } as React.CSSProperties} />
+        <Panel padded={false} style={{ padding: "0", background: "radial-gradient(ellipse at top left, rgba(255,255,255,0.07) 0%, transparent 60%), rgba(8,12,18,0.55)", backdropFilter: "blur(10px)", WebkitBackdropFilter: "blur(10px)", border: "none", borderRadius: "14px" }}>
+          <div className="grid" style={{ gridTemplateColumns: "repeat(7, 1fr)" }}>
+            <StatStrip label="Total Trades" value={String(trades.length)} />
+            <StatStrip label="Win Rate" value={`${winRate}%`} sub={`${wins.length}W · ${losses.length}L`} accent />
+            <StatStrip label="Total P&L" value={trades.length ? fmt$(totalPnl) : "—"} positive={totalPnl > 0} negative={totalPnl < 0} />
+            <StatStrip label="Avg Win" value={avgWin > 0 ? `+$${avgWin.toFixed(2)}` : "—"} positive={avgWin > 0} />
+            <StatStrip label="Avg Loss" value={avgLoss > 0 ? `-$${avgLoss.toFixed(2)}` : "—"} negative={avgLoss > 0} />
+            <StatStrip label="Largest Win" value={largestWin > 0 ? fmt$(largestWin) : "—"} positive={largestWin > 0} />
+            <StatStrip label="Largest Loss" value={largestLoss > 0 ? `-$${largestLoss.toFixed(2)}` : "—"} negative={largestLoss > 0} />
+          </div>
+        </Panel>
+      </div>
 
       {/* ── Table ───────────────────────────────────────────────────────────── */}
-      <Panel padded={false} className="flex-1 flex flex-col overflow-hidden" style={{ padding: "0 0", background: "radial-gradient(ellipse at top left, rgba(255,255,255,0.03) 0%, transparent 60%), rgba(8,12,18,0.55)", backdropFilter: "blur(10px)", WebkitBackdropFilter: "blur(10px)", border: "1px solid rgba(255,255,255,0.08)" }}>
+      <div className="flex-1 flex flex-col overflow-hidden" style={{ position: "relative", borderRadius: "14px", clipPath: "inset(0 round 14px)" }}>
+        <div style={{ position: "absolute", inset: 0, borderRadius: "14px", padding: "1.5px", pointerEvents: "none", zIndex: 1, background: "rgba(255,255,255,0.12)", WebkitMask: "linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0)", WebkitMaskComposite: "xor", maskComposite: "exclude" } as React.CSSProperties} />
+        <Panel padded={false} className="flex-1 flex flex-col overflow-hidden" style={{ padding: "1.5px", background: "radial-gradient(ellipse at top left, rgba(255,255,255,0.03) 0%, transparent 60%), rgba(8,12,18,0.55)", backdropFilter: "blur(10px)", WebkitBackdropFilter: "blur(10px)", border: "none", borderRadius: "14px" }}>
         {loading ? (
           <div className="flex-1 flex items-center justify-center">
             <span className="text-[12px]" style={{ color: "var(--text-muted)" }}>Loading trades…</span>
@@ -225,7 +230,8 @@ export function TradeLog() {
             onDeleteTrade={handleDelete}
           />
         )}
-      </Panel>
+        </Panel>
+      </div>
 
       {/* ── Save error toast ────────────────────────────────────────────────── */}
       {saveError && (
