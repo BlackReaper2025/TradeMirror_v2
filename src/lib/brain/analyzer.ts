@@ -213,9 +213,34 @@ export function analyze(rows: SheetRow[]): ComputedAnalytics {
     },
   ];
 
+  // ─── Signal tags — one entry per scoring condition, mirrors scoring logic exactly
+  const volHigh = cur.volumeSma20 > 0 && cur.volume > cur.volumeSma20;
+  const signalTagsEarly = [
+    // ── Long conditions (same booleans as longScore increments above) ──────────
+    { label: 'EMA Stack',    active: cur.sma200 > 0 && cur.close > cur.ema9 && cur.close > cur.ema20 && cur.close > cur.ema50 && cur.close > cur.sma200, bias: 'bullish' as const },
+    { label: 'MACD Bull',    active: cur.macd > cur.macdSignal && histExpanding,           bias: 'bullish' as const },
+    { label: 'RSI Zone↑',    active: cur.rsi14 >= 45 && cur.rsi14 <= 65 && rsiTrend === 'UP', bias: 'bullish' as const },
+    { label: 'ADX Strong',   active: cur.adx > 25,                                        bias: 'bullish' as const },
+    { label: '+DI > −DI',    active: cur.diPlus > cur.diMinus,                            bias: 'bullish' as const },
+    { label: 'Above Cloud',  active: priceAboveKijun && priceAboveCloud,                  bias: 'bullish' as const },
+    { label: 'RSI Rising',   active: rsiTrend === 'UP',                                   bias: 'bullish' as const },
+    { label: 'Vol High',     active: volHigh,                                             bias: 'bullish' as const },
+    { label: 'Above R1',     active: cur.r1 > 0 && (cur.close > cur.r1 || (cur.s1 > 0 && Math.abs(cur.close - cur.s1) < cur.atr14 * 0.5)), bias: 'bullish' as const },
+    // ── Short conditions (same booleans as shortScore increments above) ─────────
+    { label: 'EMA Stack↓',   active: cur.sma200 > 0 && cur.close < cur.ema9 && cur.close < cur.ema20 && cur.close < cur.ema50 && cur.close < cur.sma200, bias: 'bearish' as const },
+    { label: 'MACD Bear',    active: cur.macd < cur.macdSignal && !histExpanding,         bias: 'bearish' as const },
+    { label: 'RSI Zone↓',    active: cur.rsi14 >= 35 && cur.rsi14 <= 55 && rsiTrend === 'DOWN', bias: 'bearish' as const },
+    { label: 'ADX Strong',   active: cur.adx > 25,                                        bias: 'bearish' as const },
+    { label: '−DI > +DI',    active: cur.diMinus > cur.diPlus,                            bias: 'bearish' as const },
+    { label: 'Below Cloud',  active: !priceAboveKijun && !priceAboveCloud,                bias: 'bearish' as const },
+    { label: 'RSI Falling',  active: rsiTrend === 'DOWN',                                 bias: 'bearish' as const },
+    { label: 'Vol High',     active: volHigh,                                             bias: 'bearish' as const },
+    { label: 'Below S1',     active: cur.s1 > 0 && (cur.close < cur.s1 || (cur.r1 > 0 && Math.abs(cur.close - cur.r1) < cur.atr14 * 0.5)), bias: 'bearish' as const },
+  ];
+
   // ─── Analysis result ─────────────────────────────────────────────────────────
   const analysisResult: AnalysisResult = {
-    direction:   direction as 'LONG' | 'SHORT',
+    direction:       direction as 'LONG' | 'SHORT',
     confidence,
     entry,
     stopLoss,
@@ -225,6 +250,8 @@ export function analyze(rows: SheetRow[]): ComputedAnalytics {
     riskReward,
     longScore,
     shortScore,
+    longIndicators:  signalTagsEarly.filter(t => t.active && t.bias === 'bullish').map(t => t.label),
+    shortIndicators: signalTagsEarly.filter(t => t.active && t.bias === 'bearish').map(t => t.label),
     signals: {
       trend: {
         bias: trendBias,
@@ -268,17 +295,7 @@ export function analyze(rows: SheetRow[]): ComputedAnalytics {
   };
 
   // ─── Signal tags ─────────────────────────────────────────────────────────────
-  const signalTags = [
-    { label: 'EMA Stack',   active: emaAlignedUp,                                         bias: 'bullish' as const },
-    { label: 'MACD Bull',   active: cur.macd > cur.macdSignal,                            bias: 'bullish' as const },
-    { label: 'RSI Rising',  active: rsiTrend === 'UP',                                    bias: 'bullish' as const },
-    { label: 'ADX Strong',  active: cur.adx > 25,                                         bias: 'bullish' as const },
-    { label: '+DI > −DI',   active: cur.diPlus > cur.diMinus,                             bias: 'bullish' as const },
-    { label: 'Above Cloud', active: priceAboveCloud,                                      bias: 'bullish' as const },
-    { label: 'Volume High', active: cur.volumeSma20 > 0 && cur.volume > cur.volumeSma20,  bias: 'bullish' as const },
-    { label: 'Near R1',     active: cur.r1 > 0 && Math.abs(cur.close - cur.r1) < atr,    bias: 'bearish' as const },
-    { label: 'StochRSI OB', active: cur.stochRsiK > 80,                                  bias: 'bearish' as const },
-  ];
+  const signalTags = signalTagsEarly;
 
   // ─── Chart data (last 20 rows) ───────────────────────────────────────────────
   const emaStackData: EmaPoint[] = rows.map((r, i) => ({

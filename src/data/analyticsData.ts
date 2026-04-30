@@ -18,6 +18,8 @@ export interface AnalysisResult {
   riskReward: number;
   longScore: number;
   shortScore: number;
+  longIndicators?: string[];
+  shortIndicators?: string[];
   signals: {
     trend: SignalGroup;
     momentum: SignalGroup;
@@ -87,6 +89,8 @@ export const analysisResult: AnalysisResult = {
   riskReward: 2.7,
   longScore: 7,
   shortScore: 2,
+  longIndicators:  ["EMA Stack", "MACD Cross", "MACD Hist", "ADX Strong", "+DI > −DI", "RSI Rising", "CCI Bull"],
+  shortIndicators: ["Near R1", "StochRSI OB"],
   signals: {
     trend: {
       bias: "bullish",
