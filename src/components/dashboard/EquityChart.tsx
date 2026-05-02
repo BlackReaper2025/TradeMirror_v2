@@ -1,7 +1,7 @@
 // ─── EquityChart — standalone equity curve panel with timeframe selector ──────
 import React, { useState, useMemo, useEffect } from "react";
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
-import { getSlideshowFolder, getSlideshowInterval } from "../../lib/preferences";
+import { getSlideshowFolder, getSlideshowInterval, getEquityPanelView, setEquityPanelView, getSlideshowIdx, setSlideshowIdx, getSlideshowPlaying, setSlideshowPlaying } from "../../lib/preferences";
 import {
   AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
   ComposedChart, Customized,
@@ -298,16 +298,20 @@ export function EquityChart({ equityCurve, account, selectedDate }: Props) {
   const [timeframe, setTimeframe]     = useState<Timeframe>("1D");
   const [candles, setCandles]         = useState<Candle[]>([]);
   const [intradayCurve, setIntraday]  = useState<Array<{ date: string; balance: number }>>([]);
-  const [viewMode, setViewMode]     = useState<"chart" | "slideshow">("chart");
+  const [viewMode, setViewMode]     = useState<"chart" | "slideshow">(getEquityPanelView);
   const [ssImages,  setSsImages]    = useState<string[]>([]);
-  const [ssIdx,     setSsIdx]       = useState(0);
-  const [ssPlaying, setSsPlaying]   = useState(true);
+  const [ssIdx,     setSsIdx]       = useState<number>(getSlideshowIdx);
+  const [ssPlaying, setSsPlaying]   = useState<boolean>(getSlideshowPlaying);
   const { ready }                   = useDatabase();
 
   // Auto-advance slideshow
   useEffect(() => {
     if (viewMode !== "slideshow" || ssImages.length < 2 || !ssPlaying) return;
-    const id = setInterval(() => setSsIdx(i => (i + 1) % ssImages.length), getSlideshowInterval() * 1_000);
+    const id = setInterval(() => setSsIdx(i => {
+      const next = (i + 1) % ssImages.length;
+      setSlideshowIdx(next);
+      return next;
+    }), getSlideshowInterval() * 1_000);
     return () => clearInterval(id);
   }, [viewMode, ssImages.length, ssPlaying]);
 
@@ -379,21 +383,21 @@ export function EquityChart({ equityCurve, account, selectedDate }: Props) {
           {viewMode === "slideshow" && ssImages.length > 1 && (
             <>
               <button
-                onClick={() => setSsIdx(i => (i - 1 + ssImages.length) % ssImages.length)}
+                onClick={() => setSsIdx(i => { const next = (i - 1 + ssImages.length) % ssImages.length; setSlideshowIdx(next); return next; })}
                 className="w-7 h-7 rounded-lg flex items-center justify-center"
                 style={{ background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)", color: "var(--text-muted)" }}
               >
                 <ChevronLeft size={13} />
               </button>
               <button
-                onClick={() => setSsPlaying(p => !p)}
+                onClick={() => setSsPlaying(p => { setSlideshowPlaying(!p); return !p; })}
                 className="w-7 h-7 rounded-lg flex items-center justify-center"
                 style={{ background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)", color: "var(--text-muted)" }}
               >
                 {ssPlaying ? <Pause size={12} /> : <Play size={12} />}
               </button>
               <button
-                onClick={() => setSsIdx(i => (i + 1) % ssImages.length)}
+                onClick={() => setSsIdx(i => { const next = (i + 1) % ssImages.length; setSlideshowIdx(next); return next; })}
                 className="w-7 h-7 rounded-lg flex items-center justify-center"
                 style={{ background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)", color: "var(--text-muted)" }}
               >
@@ -405,7 +409,7 @@ export function EquityChart({ equityCurve, account, selectedDate }: Props) {
             </>
           )}
           <button
-            onClick={() => setViewMode(m => m === "chart" ? "slideshow" : "chart")}
+            onClick={() => setViewMode(m => { const next = m === "chart" ? "slideshow" : "chart"; setEquityPanelView(next); return next; })}
             title={viewMode === "chart" ? "Switch to slideshow" : "Switch to equity curve"}
             className="w-7 h-7 rounded-lg flex items-center justify-center transition-colors"
             style={{
@@ -423,7 +427,7 @@ export function EquityChart({ equityCurve, account, selectedDate }: Props) {
       <div className="flex-1 relative" style={{ minHeight: 0 }}>
         {viewMode === "slideshow" ? (
           <SlideshowBoundary>
-            <SlideshowView images={ssImages} idx={ssIdx} setIdx={setSsIdx} onLoaded={setSsImages} />
+            <SlideshowView images={ssImages} idx={ssIdx} setIdx={setSsIdx} onLoaded={paths => { setSsImages(paths); setSsIdx(i => { const clamped = i < paths.length ? i : 0; setSlideshowIdx(clamped); return clamped; }); }} />
           </SlideshowBoundary>
         ) : (
         <>

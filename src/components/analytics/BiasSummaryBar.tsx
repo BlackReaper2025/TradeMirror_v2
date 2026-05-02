@@ -2,8 +2,8 @@ import { analysisResult } from "../../data/analyticsData";
 import type { SignalGroup } from "../../data/analyticsData";
 
 const BIAS_COLORS = {
-  bullish: "#4ade80",
-  bearish: "#f87171",
+  bullish: "#60a5fa",
+  bearish: "#a78bfa",
   neutral: "#7a8fa8",
 };
 
@@ -44,7 +44,7 @@ function BiasPill({ label, group }: { label: string; group: SignalGroup }) {
 
 export function BiasSummaryBar() {
   const { signals, direction, confidence } = analysisResult;
-  const directionColor = direction === "LONG" ? "#4ade80" : "#f87171";
+  const directionColor = direction === "LONG" ? "#60a5fa" : "#a78bfa";
 
   return (
     <div

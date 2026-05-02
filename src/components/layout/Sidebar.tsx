@@ -15,13 +15,14 @@ import { useTheme } from "../../theme/ThemeContext";
 import { openUrl as openExternal } from "@tauri-apps/plugin-opener";
 
 export type Page =
-  | "dashboard" | "trade-log" | "calendar" | "analytics"
+  | "dashboard" | "trade-log" | "calendar" | "analytics" | "analytics-v3"
   | "risk-calculator" | "settings";
 
 const NAV_ITEMS: { id: Page; label: string; icon: React.ElementType }[] = [
   { id: "dashboard",       label: "Dashboard",   icon: LayoutDashboard },
   { id: "trade-log",       label: "Trade Log",   icon: ScrollText      },
   { id: "analytics",       label: "Analytics",   icon: BarChart2       },
+  { id: "analytics-v3",   label: "Analytics V3", icon: BarChart2      },
 ];
 
 interface SidebarProps {

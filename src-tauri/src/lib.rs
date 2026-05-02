@@ -1,4 +1,5 @@
 use tauri_plugin_sql::{Builder as SqlBuilder, Migration, MigrationKind};
+use tauri::Manager;
 
 // ─── List image files in a folder ─────────────────────────────────────────────
 
@@ -47,16 +48,114 @@ fn read_credentials_file(path: String) -> Result<String, String> {
     std::fs::read_to_string(&path).map_err(|e| e.to_string())
 }
 
+// ─── Read an environment variable ────────────────────────────────────────────
+
+#[tauri::command]
+fn read_env_var(name: String) -> Result<String, String> {
+    std::env::var(&name).map_err(|_| format!("Environment variable '{}' not set", name))
+}
+
+// ─── Test: fetch OANDA daily candles (temporary) ─────────────────────────────
+
+const OANDA_KEY_PATH: &str = "C:\\Users\\Geoff\\.trademirror\\oanda-api-key.txt";
+
+#[tauri::command]
+fn test_oanda_daily_candles() -> Result<Vec<oanda_client::RawCandle>, String> {
+    let contents = std::fs::read_to_string(OANDA_KEY_PATH)
+        .map_err(|e| format!("Could not read OANDA key file: {}", e))?;
+    let api_key = contents.lines().next().unwrap_or("").trim();
+    if api_key.is_empty() {
+        return Err("OANDA API key is empty".into());
+    }
+    oanda_client::fetch_raw_candles(api_key, "EUR_USD", 20)
+}
+
+// ─── Analytics V3 — sync OANDA → indicators → SQLite ─────────────────────────
+
+#[tauri::command]
+fn sync_oanda_candles_v3(app: tauri::AppHandle) -> Result<usize, String> {
+    let contents = std::fs::read_to_string(OANDA_KEY_PATH)
+        .map_err(|e| format!("Could not read OANDA key file: {}", e))?;
+    let api_key = contents.lines().next().unwrap_or("").trim().to_string();
+    if api_key.is_empty() {
+        return Err("OANDA API key is empty".into());
+    }
+
+    let raw = oanda_client::fetch_raw_candles(&api_key, "EUR_USD", 500)?;
+    let rows = indicators::compute(raw);
+    let count = rows.len();
+
+    let db_path = app.path().app_data_dir()
+        .map_err(|e: tauri::Error| e.to_string())?
+        .join("trademirror.db");
+
+    candle_store::upsert_candles(
+        db_path.to_str().unwrap_or(""),
+        "EURUSD", "D",
+        &rows,
+    )?;
+
+    Ok(count)
+}
+
+// ─── Analytics V3 ─────────────────────────────────────────────────────────────
+mod analytics_v3_demo;
+mod candle_store;
+mod oanda_client;
+mod indicators;
+use analytics_v3_demo::CandleV3;
+
+#[tauri::command]
+fn get_candles_v3(app: tauri::AppHandle) -> Result<Vec<CandleV3>, String> {
+    let db_path = app.path().app_data_dir()
+        .map_err(|e: tauri::Error| e.to_string())?
+        .join("trademirror.db");
+
+    let rows = candle_store::read_candles(
+        db_path.to_str().unwrap_or(""),
+        "EURUSD", "D", 20,
+    ).unwrap_or_default();
+
+    if rows.is_empty() {
+        Ok(analytics_v3_demo::demo_rows())
+    } else {
+        Ok(rows)
+    }
+}
+
+
+// ─── Analytics V3 — Ichimoku history (100 rows for cloud + Chikou) ───────────
+
+#[tauri::command]
+fn get_ichi_rows_v3(app: tauri::AppHandle) -> Result<Vec<CandleV3>, String> {
+    let db_path = app.path().app_data_dir()
+        .map_err(|e: tauri::Error| e.to_string())?
+        .join("trademirror.db");
+
+    Ok(candle_store::read_candles(
+        db_path.to_str().unwrap_or(""),
+        "EURUSD", "D", 100,
+    ).unwrap_or_default())
+}
+
 // ─── App entry point ──────────────────────────────────────────────────────────
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let migrations = vec![Migration {
-        version: 1,
-        description: "initial_schema",
-        sql: include_str!("../migrations/0001_initial.sql"),
-        kind: MigrationKind::Up,
-    }];
+    let migrations = vec![
+        Migration {
+            version: 1,
+            description: "initial_schema",
+            sql: include_str!("../migrations/0001_initial.sql"),
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 2,
+            description: "candles_v3",
+            sql: include_str!("../migrations/0002_candles_v3.sql"),
+            kind: MigrationKind::Up,
+        },
+    ];
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -66,7 +165,19 @@ pub fn run() {
                 .add_migrations("sqlite:trademirror.db", migrations)
                 .build(),
         )
-        .invoke_handler(tauri::generate_handler![list_images, read_credentials_file])
+        .setup(|app| {
+            let db_path = app.path().app_data_dir()?.join("trademirror.db");
+            let path_str = db_path.to_str().unwrap_or("").to_string();
+            // Remove stale demo rows seeded during development.
+            if let Ok(conn) = rusqlite::Connection::open(&path_str) {
+                let _ = conn.execute(
+                    "DELETE FROM candles_v3 WHERE symbol='EURUSD' AND timeframe='D' AND date BETWEEN '2026-04-01' AND '2026-04-20'",
+                    [],
+                );
+            }
+            Ok(())
+        })
+        .invoke_handler(tauri::generate_handler![list_images, read_credentials_file, get_candles_v3, get_ichi_rows_v3, test_oanda_daily_candles, sync_oanda_candles_v3])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

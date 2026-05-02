@@ -14,7 +14,7 @@ function parseSheetDate(raw: string): Date {
 
 const MOMENTUM_DISPLAY = [
   { key: "rsi14",    label: "RSI 14",   color: "#60a5fa" },
-  { key: "rsi9",     label: "RSI 9",    color: "#818cf8" },
+  { key: "rsi9",     label: "RSI 9",    color: "#93c5fd" },
   { key: "stochRsi", label: "StochRSI", color: "#e2e8f0" },
 ];
 
@@ -48,7 +48,7 @@ function MomentumTooltip({ active, payload }: any) {
 
 const VOLATILITY_DISPLAY = [
   { key: "price",    label: "Price",    color: "#e2e8f0" },
-  { key: "bbUpper",  label: "BB Upper", color: "#60a5fa" },
+  { key: "bbUpper",  label: "BB Upper", color: "#a78bfa" },
   { key: "bbMiddle", label: "BB Mid",   color: "#7a8fa8" },
   { key: "bbLower",  label: "BB Lower", color: "#60a5fa" },
 ];
@@ -79,7 +79,7 @@ function VolatilityTooltip({ active, payload }: any) {
 const EMA_DISPLAY = [
   { key: "price",  label: "Price",   color: "#e2e8f0" },
   { key: "ema9",   label: "EMA 9",   color: "#60a5fa" },
-  { key: "ema20",  label: "EMA 20",  color: "#818cf8" },
+  { key: "ema20",  label: "EMA 20",  color: "#93c5fd" },
   { key: "ema50",  label: "EMA 50",  color: "#7a8fa8" },
   { key: "ema200", label: "EMA 200", color: "#c4b5fd" },
 ];
@@ -116,7 +116,7 @@ function EmaTooltip({ active, payload }: any) {
 
 const BADGE_COLOR: Record<Status, string> = {
   bullish: "#60a5fa",
-  bearish: "#f87171",
+  bearish: "#a78bfa",
   neutral: "#7a8fa8",
 };
 
@@ -397,7 +397,7 @@ function ExpandedModal({ card, onClose }: { card: EvidenceCard; onClose: () => v
               {([
                 { label: "+DI", color: "#60a5fa", show: mShowDiPlus,  set: setMShowDiPlus  },
                 { label: "-DI", color: "#a78bfa", show: mShowDiMinus, set: setMShowDiMinus },
-                { label: "ADX", color: "#6366f1", show: mShowAdx,     set: setMShowAdx     },
+                { label: "ADX", color: "#94a3b8", show: mShowAdx,     set: setMShowAdx     },
               ] as const).map(({ label, color, show, set }) => (
                 <button key={label} onClick={() => set(s => !s)} style={{
                   fontSize: 11, padding: "2px 9px", borderRadius: 6, cursor: "pointer",
@@ -426,7 +426,7 @@ function ExpandedModal({ card, onClose }: { card: EvidenceCard; onClose: () => v
                   />
                   {mShowDiPlus  && <Line dataKey="diPlus"  dot={false} activeDot={false} strokeWidth={1.5} stroke="#60a5fa" />}
                   {mShowDiMinus && <Line dataKey="diMinus" dot={false} activeDot={false} strokeWidth={1.5} stroke="#a78bfa" />}
-                  {mShowAdx     && <Line dataKey="adx"     dot={false} activeDot={false} strokeWidth={1.5} stroke="#6366f1" strokeDasharray="4 2" />}
+                  {mShowAdx     && <Line dataKey="adx"     dot={false} activeDot={false} strokeWidth={1.5} stroke="#94a3b8" strokeDasharray="4 2" />}
                 </LineChart>
               </ResponsiveContainer>
             </div>
@@ -460,8 +460,8 @@ function ExpandedModal({ card, onClose }: { card: EvidenceCard; onClose: () => v
             <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
               {([
                 { label: "Price",    color: "#e2e8f0", show: mShowVolPrice, set: setMShowVolPrice },
-                { label: "BB Upper", color: "#60a5fa", show: mShowBbUpper,  set: setMShowBbUpper  },
-                { label: "BB Mid",   color: "#a78bfa", show: mShowBbMiddle, set: setMShowBbMiddle },
+                { label: "BB Upper", color: "#a78bfa", show: mShowBbUpper,  set: setMShowBbUpper  },
+                { label: "BB Mid",   color: "#7a8fa8", show: mShowBbMiddle, set: setMShowBbMiddle },
                 { label: "BB Lower", color: "#60a5fa", show: mShowBbLower,  set: setMShowBbLower  },
               ] as const).map(({ label, color, show, set }) => (
                 <button key={label} onClick={() => set(s => !s)} style={{
@@ -480,10 +480,10 @@ function ExpandedModal({ card, onClose }: { card: EvidenceCard; onClose: () => v
                 <ComposedChart data={visibleVolModalData} margin={{ top: 4, right: 4, bottom: 4, left: 4 }}>
                   <YAxis domain={volMViewDomain} hide />
                   <Tooltip content={<VolatilityTooltip />} position={{ x: 8, y: 8 }} />
-                  {mShowBbUpper && <Area dataKey="bbUpper" stroke="none" fill="rgba(96,165,250,0.13)" dot={false} activeDot={false} legendType="none" isAnimationActive={false} />}
+                  {mShowBbUpper && <Area dataKey="bbUpper" stroke="none" fill="rgba(167,139,250,0.13)" dot={false} activeDot={false} legendType="none" isAnimationActive={false} />}
                   {mShowBbLower && <Area dataKey="bbLower" stroke="none" fill="#0d1219" dot={false} activeDot={false} legendType="none" isAnimationActive={false} fillOpacity={1} />}
-                  {mShowBbUpper  && <Line dataKey="bbUpper"  dot={false} activeDot={false} strokeWidth={1}    stroke="#60a5fa" strokeDasharray="3 3" />}
-                  {mShowBbMiddle && <Line dataKey="bbMiddle" dot={false} activeDot={false} strokeWidth={1}    stroke="#a78bfa" />}
+                  {mShowBbUpper  && <Line dataKey="bbUpper"  dot={false} activeDot={false} strokeWidth={1}    stroke="#a78bfa" strokeDasharray="3 3" />}
+                  {mShowBbMiddle && <Line dataKey="bbMiddle" dot={false} activeDot={false} strokeWidth={1}    stroke="#7a8fa8" />}
                   {mShowBbLower  && <Line dataKey="bbLower"  dot={false} activeDot={false} strokeWidth={1}    stroke="#60a5fa" strokeDasharray="3 3" />}
                   {mShowVolPrice && <Line dataKey="price"    dot={false} activeDot={false} strokeWidth={0.75} stroke="#e2e8f0" />}
                 </ComposedChart>
@@ -519,7 +519,7 @@ function ExpandedModal({ card, onClose }: { card: EvidenceCard; onClose: () => v
             <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
               {([
                 { label: "RSI 14",   color: "#60a5fa", show: mShowRsi14,    set: setMShowRsi14 },
-                { label: "RSI 9",    color: "#818cf8", show: mShowRsi9,     set: setMShowRsi9 },
+                { label: "RSI 9",    color: "#93c5fd", show: mShowRsi9,     set: setMShowRsi9 },
                 { label: "StochRSI", color: "#e2e8f0", show: mShowStochRsi, set: setMShowStochRsi },
               ] as const).map(({ label, color, show, set }) => (
                 <button key={label} onClick={() => set(s => !s)} style={{
@@ -544,7 +544,7 @@ function ExpandedModal({ card, onClose }: { card: EvidenceCard; onClose: () => v
                   <ReferenceLine y={30} stroke="rgba(255,255,255,0.30)" strokeDasharray="3 3" />
                   <Tooltip content={<MomentumTooltip />} position={{ x: 8, y: 8 }} />
                   {mShowRsi14    && <Line dataKey="rsi14"    dot={false} activeDot={false} strokeWidth={1.5}  stroke="#60a5fa" />}
-                  {mShowRsi9     && <Line dataKey="rsi9"     dot={false} activeDot={false} strokeWidth={1.5}  stroke="#818cf8" />}
+                  {mShowRsi9     && <Line dataKey="rsi9"     dot={false} activeDot={false} strokeWidth={1.5}  stroke="#93c5fd" />}
                   {mShowStochRsi && <Line dataKey="stochRsi" dot={false} activeDot={false} strokeWidth={0.75} stroke="#e2e8f0" />}
                 </ComposedChart>
               </ResponsiveContainer>
@@ -579,7 +579,7 @@ function ExpandedModal({ card, onClose }: { card: EvidenceCard; onClose: () => v
             <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
               {([
                 { label: "MACD",      color: "#60a5fa", show: mShowMacd,      set: setMShowMacd      },
-                { label: "Signal",    color: "#a78bfa", show: mShowSignal,    set: setMShowSignal    },
+                { label: "Signal",    color: "#fbbf24", show: mShowSignal,    set: setMShowSignal    },
                 { label: "Histogram", color: "#7a8fa8", show: mShowHistogram, set: setMShowHistogram },
               ] as const).map(({ label, color, show, set }) => (
                 <button key={label} onClick={() => set(s => !s)} style={{
@@ -608,7 +608,7 @@ function ExpandedModal({ card, onClose }: { card: EvidenceCard; onClose: () => v
                   />
                   {mShowHistogram && <Bar dataKey="histogram" fill="#7a8fa8" opacity={0.5} radius={[2, 2, 0, 0]} />}
                   {mShowMacd      && <Line dataKey="macd"   dot={false} activeDot={false} strokeWidth={1.5} stroke="#60a5fa" />}
-                  {mShowSignal    && <Line dataKey="signal" dot={false} activeDot={false} strokeWidth={1.5} stroke="#a78bfa" />}
+                  {mShowSignal    && <Line dataKey="signal" dot={false} activeDot={false} strokeWidth={1.5} stroke="#fbbf24" />}
                 </ComposedChart>
               </ResponsiveContainer>
             </div>
@@ -643,7 +643,7 @@ function ExpandedModal({ card, onClose }: { card: EvidenceCard; onClose: () => v
               {([
                 { label: "Price",   color: "#e2e8f0", show: mShowPrice,  set: setMShowPrice  },
                 { label: "EMA 9",   color: "#60a5fa", show: mShowEma9,   set: setMShowEma9   },
-                { label: "EMA 20",  color: "#818cf8", show: mShowEma20,  set: setMShowEma20  },
+                { label: "EMA 20",  color: "#93c5fd", show: mShowEma20,  set: setMShowEma20  },
                 { label: "EMA 50",  color: "#a78bfa", show: mShowEma50,  set: setMShowEma50  },
                 { label: "EMA 200", color: "#c4b5fd", show: mShowEma200, set: setMShowEma200 },
               ] as const).map(({ label, color, show, set }) => (
@@ -665,7 +665,7 @@ function ExpandedModal({ card, onClose }: { card: EvidenceCard; onClose: () => v
                   <Tooltip content={<EmaTooltip />} position={{ x: 8, y: 8 }} />
                   {mShowPrice  && <Line dataKey="price"  dot={false} activeDot={false} strokeWidth={0.75} stroke="#e2e8f0" connectNulls />}
                   {mShowEma9   && <Line dataKey="ema9"   dot={false} activeDot={false} strokeWidth={1.5}  stroke="#60a5fa" connectNulls />}
-                  {mShowEma20  && <Line dataKey="ema20"  dot={false} activeDot={false} strokeWidth={1.5}  stroke="#818cf8" connectNulls />}
+                  {mShowEma20  && <Line dataKey="ema20"  dot={false} activeDot={false} strokeWidth={1.5}  stroke="#93c5fd" connectNulls />}
                   {mShowEma50  && <Line dataKey="ema50"  dot={false} activeDot={false} strokeWidth={1.5}  stroke="#a78bfa" connectNulls />}
                   {mShowEma200 && <Line dataKey="ema200" dot={false} activeDot={false} strokeWidth={1.5}  stroke="#c4b5fd" connectNulls />}
                 </LineChart>
@@ -965,8 +965,8 @@ function Card({ card, onClick }: { card: EvidenceCard; onClick: () => void }) {
           <div style={{ display: "flex", gap: 4, padding: "4px 8px 2px", flexShrink: 0 }}>
             {([
               { label: "Price",    color: "#e2e8f0", show: showVolPrice, set: setShowVolPrice },
-              { label: "BB Upper", color: "#60a5fa", show: showBbUpper,  set: setShowBbUpper  },
-              { label: "BB Mid",   color: "#a78bfa", show: showBbMiddle, set: setShowBbMiddle },
+              { label: "BB Upper", color: "#a78bfa", show: showBbUpper,  set: setShowBbUpper  },
+              { label: "BB Mid",   color: "#7a8fa8", show: showBbMiddle, set: setShowBbMiddle },
               { label: "BB Lower", color: "#60a5fa", show: showBbLower,  set: setShowBbLower  },
             ] as const).map(({ label, color, show, set }) => (
               <button key={label} onClick={() => set(s => !s)} style={{
@@ -984,10 +984,10 @@ function Card({ card, onClick }: { card: EvidenceCard; onClick: () => void }) {
             <ResponsiveContainer width="100%" height="100%">
               <ComposedChart data={visibleVolData} margin={{ top: 6, right: 6, bottom: 0, left: 6 }}>
                 <YAxis domain={volCViewDomain} hide />
-                {showBbUpper && <Area dataKey="bbUpper" stroke="none" fill="rgba(96,165,250,0.13)" dot={false} activeDot={false} legendType="none" isAnimationActive={false} />}
+                {showBbUpper && <Area dataKey="bbUpper" stroke="none" fill="rgba(167,139,250,0.13)" dot={false} activeDot={false} legendType="none" isAnimationActive={false} />}
                 {showBbLower && <Area dataKey="bbLower" stroke="none" fill="#0d1219" dot={false} activeDot={false} legendType="none" isAnimationActive={false} fillOpacity={1} />}
-                {showBbUpper  && <Line dataKey="bbUpper"  dot={false} activeDot={false} strokeWidth={1}    stroke="#60a5fa" strokeDasharray="3 3" />}
-                {showBbMiddle && <Line dataKey="bbMiddle" dot={false} activeDot={false} strokeWidth={1}    stroke="#a78bfa" />}
+                {showBbUpper  && <Line dataKey="bbUpper"  dot={false} activeDot={false} strokeWidth={1}    stroke="#a78bfa" strokeDasharray="3 3" />}
+                {showBbMiddle && <Line dataKey="bbMiddle" dot={false} activeDot={false} strokeWidth={1}    stroke="#7a8fa8" />}
                 {showBbLower  && <Line dataKey="bbLower"  dot={false} activeDot={false} strokeWidth={1}    stroke="#60a5fa" strokeDasharray="3 3" />}
                 {showVolPrice && <Line dataKey="price"    dot={false} activeDot={false} strokeWidth={0.75} stroke="#e2e8f0" />}
               </ComposedChart>
@@ -1029,7 +1029,7 @@ function Card({ card, onClick }: { card: EvidenceCard; onClick: () => void }) {
           <div style={{ display: "flex", gap: 4, padding: "4px 8px 2px", flexShrink: 0 }}>
             {([
               { label: "RSI 14",   color: "#60a5fa", show: showRsi14,    set: setShowRsi14 },
-              { label: "RSI 9",    color: "#818cf8", show: showRsi9,     set: setShowRsi9 },
+              { label: "RSI 9",    color: "#93c5fd", show: showRsi9,     set: setShowRsi9 },
               { label: "StochRSI", color: "#e2e8f0", show: showStochRsi, set: setShowStochRsi },
             ] as const).map(({ label, color, show, set }) => (
               <button key={label} onClick={() => set(s => !s)} style={{
@@ -1053,7 +1053,7 @@ function Card({ card, onClick }: { card: EvidenceCard; onClick: () => void }) {
                 <ReferenceLine y={50} stroke="rgba(255,255,255,0.15)" strokeDasharray="3 3" />
                 <ReferenceLine y={30} stroke="rgba(255,255,255,0.30)" strokeDasharray="3 3" />
                 {showRsi14    && <Line dataKey="rsi14"    dot={false} activeDot={false} strokeWidth={1.5}  stroke="#60a5fa" />}
-                {showRsi9     && <Line dataKey="rsi9"     dot={false} activeDot={false} strokeWidth={1.5}  stroke="#818cf8" />}
+                {showRsi9     && <Line dataKey="rsi9"     dot={false} activeDot={false} strokeWidth={1.5}  stroke="#93c5fd" />}
                 {showStochRsi && <Line dataKey="stochRsi" dot={false} activeDot={false} strokeWidth={0.75} stroke="#e2e8f0" />}
               </ComposedChart>
             </ResponsiveContainer>
@@ -1094,7 +1094,7 @@ function Card({ card, onClick }: { card: EvidenceCard; onClick: () => void }) {
           <div style={{ display: "flex", gap: 4, padding: "4px 8px 2px", flexShrink: 0 }}>
             {([
               { label: "MACD",      color: "#60a5fa", show: showMacd,      set: setShowMacd      },
-              { label: "Signal",    color: "#a78bfa", show: showSignal,    set: setShowSignal    },
+              { label: "Signal",    color: "#fbbf24", show: showSignal,    set: setShowSignal    },
               { label: "Histogram", color: "#7a8fa8", show: showHistogram, set: setShowHistogram },
             ] as const).map(({ label, color, show, set }) => (
               <button key={label} onClick={() => set(s => !s)} style={{
@@ -1114,7 +1114,7 @@ function Card({ card, onClick }: { card: EvidenceCard; onClick: () => void }) {
                 <YAxis domain={macdCViewDomain} hide />
                 {showHistogram && <Bar dataKey="histogram" fill="#7a8fa8" opacity={0.5} radius={[2, 2, 0, 0]} label={false} />}
                 {showMacd      && <Line dataKey="macd"   dot={false} activeDot={false} strokeWidth={1.5} stroke="#60a5fa" />}
-                {showSignal    && <Line dataKey="signal" dot={false} activeDot={false} strokeWidth={1.5} stroke="#a78bfa" />}
+                {showSignal    && <Line dataKey="signal" dot={false} activeDot={false} strokeWidth={1.5} stroke="#fbbf24" />}
               </ComposedChart>
             </ResponsiveContainer>
           </div>
@@ -1155,7 +1155,7 @@ function Card({ card, onClick }: { card: EvidenceCard; onClick: () => void }) {
             {([
               { label: "+DI", color: "#60a5fa", show: showDiPlus,  set: setShowDiPlus  },
               { label: "-DI", color: "#a78bfa", show: showDiMinus, set: setShowDiMinus },
-              { label: "ADX", color: "#6366f1", show: showAdx,     set: setShowAdx     },
+              { label: "ADX", color: "#94a3b8", show: showAdx,     set: setShowAdx     },
             ] as const).map(({ label, color, show, set }) => (
               <button key={label} onClick={() => set(s => !s)} style={{
                 fontSize: 8, padding: "1px 6px", borderRadius: 4, cursor: "pointer",
@@ -1175,7 +1175,7 @@ function Card({ card, onClick }: { card: EvidenceCard; onClick: () => void }) {
                 <ReferenceLine y={25} stroke="rgba(255,255,255,0.15)" strokeDasharray="3 3" />
                 {showDiPlus  && <Line dataKey="diPlus"  dot={false} activeDot={false} strokeWidth={1.5} stroke="#60a5fa" />}
                 {showDiMinus && <Line dataKey="diMinus" dot={false} activeDot={false} strokeWidth={1.5} stroke="#a78bfa" />}
-                {showAdx     && <Line dataKey="adx"     dot={false} activeDot={false} strokeWidth={1.5} stroke="#6366f1" strokeDasharray="4 2" />}
+                {showAdx     && <Line dataKey="adx"     dot={false} activeDot={false} strokeWidth={1.5} stroke="#94a3b8" strokeDasharray="4 2" />}
               </LineChart>
             </ResponsiveContainer>
           </div>
@@ -1216,7 +1216,7 @@ function Card({ card, onClick }: { card: EvidenceCard; onClick: () => void }) {
             {([
               { label: "Price",   color: "#e2e8f0", show: showPrice,  set: setShowPrice  },
               { label: "EMA 9",   color: "#60a5fa", show: showEma9,   set: setShowEma9   },
-              { label: "EMA 20",  color: "#818cf8", show: showEma20,  set: setShowEma20  },
+              { label: "EMA 20",  color: "#93c5fd", show: showEma20,  set: setShowEma20  },
               { label: "EMA 50",  color: "#a78bfa", show: showEma50,  set: setShowEma50  },
               { label: "EMA 200", color: "#c4b5fd", show: showEma200, set: setShowEma200 },
             ] as const).map(({ label, color, show, set }) => (
@@ -1237,7 +1237,7 @@ function Card({ card, onClick }: { card: EvidenceCard; onClick: () => void }) {
                 <YAxis domain={eViewDomain} hide />
                 {showPrice  && <Line dataKey="price"  dot={false} activeDot={false} strokeWidth={0.75} stroke="#e2e8f0" connectNulls />}
                 {showEma9   && <Line dataKey="ema9"   dot={false} activeDot={false} strokeWidth={1.5}  stroke="#60a5fa" connectNulls />}
-                {showEma20  && <Line dataKey="ema20"  dot={false} activeDot={false} strokeWidth={1.5}  stroke="#818cf8" connectNulls />}
+                {showEma20  && <Line dataKey="ema20"  dot={false} activeDot={false} strokeWidth={1.5}  stroke="#93c5fd" connectNulls />}
                 {showEma50  && <Line dataKey="ema50"  dot={false} activeDot={false} strokeWidth={1.5}  stroke="#a78bfa" connectNulls />}
                 {showEma200 && <Line dataKey="ema200" dot={false} activeDot={false} strokeWidth={1.5}  stroke="#c4b5fd" connectNulls />}
               </LineChart>

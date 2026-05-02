@@ -2,18 +2,27 @@
 import React, { useEffect, useState } from "react";
 import { Quote as QuoteIcon, ChevronLeft, ChevronRight } from "lucide-react";
 import { Panel } from "../ui/Panel";
+import { getQuotesIdx, setQuotesIdx } from "../../lib/preferences";
 
 interface QuoteItem { text: string; author: string; }
 interface Props { quotes: QuoteItem[]; }
 
 export function QuotesPanel({ quotes }: Props) {
-  const [idx,     setIdx]     = useState(0);
-  const [visible, setVisible] = useState(true);
   const count = quotes.length;
+  const [idx,     setIdx]     = useState<number>(() => {
+    const saved = getQuotesIdx();
+    return count > 0 && saved < count ? saved : 0;
+  });
+  const [visible, setVisible] = useState(true);
 
   const go = (next: number) => {
     setVisible(false);
-    setTimeout(() => { setIdx(((next % count) + count) % count); setVisible(true); }, 200);
+    setTimeout(() => {
+      const clamped = ((next % count) + count) % count;
+      setQuotesIdx(clamped);
+      setIdx(clamped);
+      setVisible(true);
+    }, 200);
   };
 
   useEffect(() => {

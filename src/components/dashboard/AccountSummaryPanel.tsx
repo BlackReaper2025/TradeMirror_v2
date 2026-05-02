@@ -41,20 +41,21 @@ interface Props {
 export function AccountSummaryPanel({
   account, todayStats, allTimeStats, monthlyStats, weeklyStats, todayFullStats,
 }: Props) {
-  const [period, setPeriod] = useState<StatPeriod>("All Time");
+  const [period, setPeriod] = useState<StatPeriod>("Today");
 
   if (!account) return null;
 
-  const pnl          = todayStats.totalPnl;
-  const isPosToday   = pnl >= 0;
-  const targetPct    = Math.min(100, account.dailyTarget > 0 ? (pnl / account.dailyTarget) * 100 : 0);
+  const s      = period === "All Time" ? allTimeStats : period === "Monthly" ? monthlyStats : period === "Weekly" ? weeklyStats : todayFullStats;
+
+  const pnl        = s.totalPnl;
+  const isPosToday = pnl >= 0;
+  const targetPct  = Math.min(100, account.dailyTarget > 0 ? (todayStats.totalPnl / account.dailyTarget) * 100 : 0);
   const allTimeGain  = account.currentBalance - account.startingBalance;
   const allTimeIsPos = allTimeGain >= 0;
   const allTimePct   = account.startingBalance > 0
     ? ((allTimeGain / account.startingBalance) * 100).toFixed(2)
     : "0.00";
 
-  const s      = period === "All Time" ? allTimeStats : period === "Monthly" ? monthlyStats : period === "Weekly" ? weeklyStats : todayFullStats;
   const noData = s.tradeCount === 0;
 
   const statRows = [
@@ -142,7 +143,7 @@ export function AccountSummaryPanel({
           className="text-[14px] font-semibold uppercase tracking-widest mb-1"
           style={{ color: "var(--text-secondary)" }}
         >
-          Today's P&amp;L
+          {period} P&amp;L
         </div>
 
         <div className="flex items-end gap-4">
@@ -154,7 +155,7 @@ export function AccountSummaryPanel({
               {isPosToday ? "+" : ""}{fmtUSD(pnl)}
             </div>
             <div className="text-[11px] mt-1" style={{ color: "var(--text-secondary)" }}>
-              {todayStats.tradeCount} trades · {todayStats.winCount}W / {todayStats.lossCount}L
+              {s.tradeCount} trades · {s.winCount}W / {s.lossCount}L
             </div>
           </div>
 

@@ -73,12 +73,13 @@ export function analyze(rows: SheetRow[]): ComputedAnalytics {
   const confidence = Math.round((Math.max(longScore, shortScore) / 9) * 100);
 
   // ─── Entry / SL / TP ────────────────────────────────────────────────────────
-  const entry = cur.close;
-  const atr   = cur.atr14 > 0 ? cur.atr14 : 0.0050;
+  const entry   = cur.close;
+  const atr     = cur.atr14 > 0 ? cur.atr14 : 0.0050;
+  const atrPrice = atr / 10000;
 
   const stopLoss = direction === 'LONG'
-    ? parseFloat((entry - 1.5 * atr).toFixed(5))
-    : parseFloat((entry + 1.5 * atr).toFixed(5));
+    ? parseFloat((entry - 1.5 * atrPrice).toFixed(5))
+    : parseFloat((entry + 1.5 * atrPrice).toFixed(5));
 
   const [tp1, tp2, tp3] = direction === 'LONG'
     ? [cur.r1 || entry + atr, cur.r2 || entry + 2 * atr, cur.r3 || entry + 3 * atr]

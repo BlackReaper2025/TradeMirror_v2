@@ -114,6 +114,7 @@ export async function getAccount(id: string): Promise<Account | null> {
 // Computed live from the trades table — NOT from daily_stats.
 
 export interface AllTimeStats {
+  totalPnl:     number;
   tradeCount:   number;
   winCount:     number;
   lossCount:    number;
@@ -146,7 +147,8 @@ export async function getAllTimeStats(accountId: string): Promise<AllTimeStats> 
   const largestWin   = wins.length   > 0 ? Math.max(...wins.map(t => t.pnl ?? 0))                : 0;
   const largestLoss  = losses.length > 0 ? Math.abs(Math.min(...losses.map(t => t.pnl ?? 0)))    : 0;
 
-  return { tradeCount, winCount, lossCount, winRate, avgWin, avgLoss, profitFactor, largestWin, largestLoss };
+  const totalPnl = allTrades.reduce((s, t) => s + (t.pnl ?? 0), 0);
+  return { totalPnl, tradeCount, winCount, lossCount, winRate, avgWin, avgLoss, profitFactor, largestWin, largestLoss };
 }
 
 // ─── Dashboard: today's stats — computed LIVE from trades table ───────────────
@@ -572,7 +574,8 @@ export async function getMonthlyStats(accountId: string): Promise<AllTimeStats> 
   const profitFactor = avgLoss > 0 ? (avgWin * winCount) / (avgLoss * Math.max(lossCount, 1)) : 0;
   const largestWin   = wins.length   > 0 ? Math.max(...wins.map(t => t.pnl ?? 0))                : 0;
   const largestLoss  = losses.length > 0 ? Math.abs(Math.min(...losses.map(t => t.pnl ?? 0)))    : 0;
-  return { tradeCount, winCount, lossCount, winRate, avgWin, avgLoss, profitFactor, largestWin, largestLoss };
+  const totalPnl = rows.reduce((s, t) => s + (t.pnl ?? 0), 0);
+  return { totalPnl, tradeCount, winCount, lossCount, winRate, avgWin, avgLoss, profitFactor, largestWin, largestLoss };
 }
 
 // ─── Dashboard: weekly stats — AllTimeStats shape, current Mon–Sun week ──────
@@ -603,7 +606,8 @@ export async function getWeeklyStats(accountId: string): Promise<AllTimeStats> {
   const profitFactor = avgLoss > 0 ? (avgWin * winCount) / (avgLoss * Math.max(lossCount, 1)) : 0;
   const largestWin   = wins.length   > 0 ? Math.max(...wins.map(t => t.pnl ?? 0))             : 0;
   const largestLoss  = losses.length > 0 ? Math.abs(Math.min(...losses.map(t => t.pnl ?? 0))) : 0;
-  return { tradeCount, winCount, lossCount, winRate, avgWin, avgLoss, profitFactor, largestWin, largestLoss };
+  const totalPnl = rows.reduce((s, t) => s + (t.pnl ?? 0), 0);
+  return { totalPnl, tradeCount, winCount, lossCount, winRate, avgWin, avgLoss, profitFactor, largestWin, largestLoss };
 }
 
 // ─── Dashboard: today full stats — AllTimeStats shape, current day only ───────
@@ -631,7 +635,8 @@ export async function getTodayFullStats(accountId: string): Promise<AllTimeStats
   const profitFactor = avgLoss > 0 ? (avgWin * winCount) / (avgLoss * Math.max(lossCount, 1)) : 0;
   const largestWin   = wins.length   > 0 ? Math.max(...wins.map(t => t.pnl ?? 0))                : 0;
   const largestLoss  = losses.length > 0 ? Math.abs(Math.min(...losses.map(t => t.pnl ?? 0)))    : 0;
-  return { tradeCount, winCount, lossCount, winRate, avgWin, avgLoss, profitFactor, largestWin, largestLoss };
+  const totalPnl = rows.reduce((s, t) => s + (t.pnl ?? 0), 0);
+  return { totalPnl, tradeCount, winCount, lossCount, winRate, avgWin, avgLoss, profitFactor, largestWin, largestLoss };
 }
 
 // ─── Dashboard: quotes ────────────────────────────────────────────────────────

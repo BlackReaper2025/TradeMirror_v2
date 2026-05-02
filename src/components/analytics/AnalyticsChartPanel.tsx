@@ -13,10 +13,10 @@ import {
 } from "recharts";
 
 const PRICE_COLOR = "#dce6f4";
-const EMA_COLOR = "#7ed62e";
-const ENTRY_COLOR = "#7ed62e";
-const SL_COLOR = "#f87171";
-const TP_COLOR = "#4ade80";
+const EMA_COLOR = "#60a5fa";
+const ENTRY_COLOR = "#93c5fd";
+const SL_COLOR = "#a78bfa";
+const TP_COLOR = "#60a5fa";
 const LEVEL_COLOR = "rgba(255,255,255,0.18)";
 
 function ChartTooltip({ active, payload, label }: {
