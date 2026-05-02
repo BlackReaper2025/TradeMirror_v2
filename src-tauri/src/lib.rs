@@ -48,29 +48,9 @@ fn read_credentials_file(path: String) -> Result<String, String> {
     std::fs::read_to_string(&path).map_err(|e| e.to_string())
 }
 
-// ─── Read an environment variable ────────────────────────────────────────────
-
-#[tauri::command]
-fn read_env_var(name: String) -> Result<String, String> {
-    std::env::var(&name).map_err(|_| format!("Environment variable '{}' not set", name))
-}
-
-// ─── Test: fetch OANDA daily candles (temporary) ─────────────────────────────
+// ─── Analytics V3 — sync OANDA → indicators → SQLite ─────────────────────────
 
 const OANDA_KEY_PATH: &str = "C:\\Users\\Geoff\\.trademirror\\oanda-api-key.txt";
-
-#[tauri::command]
-fn test_oanda_daily_candles() -> Result<Vec<oanda_client::RawCandle>, String> {
-    let contents = std::fs::read_to_string(OANDA_KEY_PATH)
-        .map_err(|e| format!("Could not read OANDA key file: {}", e))?;
-    let api_key = contents.lines().next().unwrap_or("").trim();
-    if api_key.is_empty() {
-        return Err("OANDA API key is empty".into());
-    }
-    oanda_client::fetch_raw_candles(api_key, "EUR_USD", 20)
-}
-
-// ─── Analytics V3 — sync OANDA → indicators → SQLite ─────────────────────────
 
 #[tauri::command]
 fn sync_oanda_candles_v3(app: tauri::AppHandle) -> Result<usize, String> {
@@ -177,7 +157,7 @@ pub fn run() {
             }
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![list_images, read_credentials_file, get_candles_v3, get_ichi_rows_v3, test_oanda_daily_candles, sync_oanda_candles_v3])
+        .invoke_handler(tauri::generate_handler![list_images, read_credentials_file, get_candles_v3, get_ichi_rows_v3, sync_oanda_candles_v3])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

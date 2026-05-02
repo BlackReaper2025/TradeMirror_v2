@@ -1987,7 +1987,7 @@ function AdxPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolean
         <ResponsiveContainer width="100%" height="100%">
           <ComposedChart data={data} margin={{ top: 4, right: 6, bottom: 0, left: 0 }}>
             <XAxis dataKey="idx" type="number" domain={[0, data.length - 1]} hide />
-            <YAxis tick={tickStyle} tickLine={false} axisLine={false} width={yAxisWidth} domain={yDomain} tickFormatter={v => v.toFixed(1)} />
+            <YAxis tick={tickStyle} tickLine={false} axisLine={false} width={yAxisWidth} domain={expanded ? [0, Math.max(yDomain[1] as number, 45)] : yDomain} ticks={[20, 25, 40]} tickFormatter={v => String(v)} />
             <Tooltip content={<MaTooltip />} cursor={{ fill: "rgba(255,255,255,0.04)" }} position={{ x: 10, y: 10 }} />
             <ReferenceLine y={25} stroke="rgba(255,255,255,0.15)" strokeWidth={1} strokeDasharray="3 3" />
             <ReferenceLine y={40} stroke="rgba(255,255,255,0.10)" strokeWidth={1} strokeDasharray="2 4" />
