@@ -276,9 +276,9 @@ function StatStrip({ label, value, sub, icon, accent, positive, negative }: Stat
   const color = accent
     ? "var(--accent-text)"
     : positive
-    ? "#4ade80"
+    ? "#7ed62e"
     : negative
-    ? "#f87171"
+    ? "#f03a3a"
     : "var(--text-secondary)";
 
   return (

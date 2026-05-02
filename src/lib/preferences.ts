@@ -62,3 +62,56 @@ export function setSlideshowInterval(seconds: number): void {
   localStorage.setItem(KEYS.slideshowInterval, String(seconds));
   window.dispatchEvent(new CustomEvent("tm:prefs-changed"));
 }
+
+const EQUITY_PANEL_VIEW_KEY = "tm_equity_panel_view";
+export type EquityPanelView = "chart" | "slideshow";
+
+export function getEquityPanelView(): EquityPanelView {
+  const v = localStorage.getItem(EQUITY_PANEL_VIEW_KEY);
+  return v === "slideshow" ? "slideshow" : "chart";
+}
+export function setEquityPanelView(view: EquityPanelView): void {
+  localStorage.setItem(EQUITY_PANEL_VIEW_KEY, view);
+}
+
+export function getSlideshowIdx(): number {
+  const n = parseInt(localStorage.getItem("tm_slideshow_idx") ?? "0", 10);
+  return isNaN(n) || n < 0 ? 0 : n;
+}
+export function setSlideshowIdx(idx: number): void {
+  localStorage.setItem("tm_slideshow_idx", String(idx));
+}
+
+export function getSlideshowPlaying(): boolean {
+  return localStorage.getItem("tm_slideshow_playing") !== "false";
+}
+export function setSlideshowPlaying(playing: boolean): void {
+  localStorage.setItem("tm_slideshow_playing", String(playing));
+}
+
+export function getQuotesIdx(): number {
+  const n = parseInt(localStorage.getItem("tm_quotes_idx") ?? "0", 10);
+  return isNaN(n) || n < 0 ? 0 : n;
+}
+export function setQuotesIdx(idx: number): void {
+  localStorage.setItem("tm_quotes_idx", String(idx));
+}
+
+export function getAnalyticsPanelOrder(defaultOrder: string[]): string[] {
+  try {
+    const raw = localStorage.getItem("tm_analytics_panel_order_v2");
+    if (!raw) return [...defaultOrder];
+    const saved = JSON.parse(raw) as unknown;
+    if (
+      !Array.isArray(saved) ||
+      saved.length !== defaultOrder.length ||
+      !saved.every((id): id is string => typeof id === "string" && defaultOrder.includes(id))
+    ) return [...defaultOrder];
+    return saved;
+  } catch {
+    return [...defaultOrder];
+  }
+}
+export function setAnalyticsPanelOrder(order: string[]): void {
+  localStorage.setItem("tm_analytics_panel_order_v2", JSON.stringify(order));
+}

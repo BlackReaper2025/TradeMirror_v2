@@ -142,7 +142,7 @@ export function TradeTable({ trades, onNewTrade, onEditTrade, onDeleteTrade }: P
             const pnl      = trade.pnl ?? 0;
             const isWin    = pnl > 0;
             const isLoss   = pnl < 0;
-            const pnlColor = isWin ? "#4ade80" : isLoss ? "#f87171" : "var(--text-secondary)";
+            const pnlColor = isWin ? "#7ed62e" : isLoss ? "#f03a3a" : "var(--text-secondary)";
             const awaitingConfirm = confirmDeleteId === trade.id;
             const prevDate = i > 0 ? (trades[i - 1].closedAt?.slice(0, 10) ?? null) : null;
             const thisDate = trade.closedAt?.slice(0, 10) ?? null;
@@ -193,14 +193,14 @@ export function TradeTable({ trades, onNewTrade, onEditTrade, onDeleteTrade }: P
                   <div className="flex items-center justify-center gap-1.5">
                     <div
                       className="w-5 h-5 rounded-md flex items-center justify-center"
-                      style={{ background: trade.side === "long" ? "rgba(34,197,94,0.12)" : "rgba(239,68,68,0.12)" }}
+                      style={{ background: trade.side === "long" ? "rgba(126,214,46,0.12)" : "rgba(240,58,58,0.12)" }}
                     >
                       {trade.side === "long"
-                        ? <ArrowUpRight size={12} style={{ color: "#4ade80" }} />
-                        : <ArrowDownRight size={12} style={{ color: "#f87171" }} />
+                        ? <ArrowUpRight size={12} style={{ color: "#7ed62e" }} />
+                        : <ArrowDownRight size={12} style={{ color: "#f03a3a" }} />
                       }
                     </div>
-                    <span className="text-[12px] font-medium capitalize" style={{ color: trade.side === "long" ? "#4ade80" : "#f87171" }}>
+                    <span className="text-[12px] font-medium capitalize" style={{ color: trade.side === "long" ? "#7ed62e" : "#f03a3a" }}>
                       {trade.side}
                     </span>
                   </div>

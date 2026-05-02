@@ -134,7 +134,7 @@ function accentShades(base: string, count: number): string[] {
 }
 
 const THEME_BASE: Record<string, string> = {
-  green:  "#22c55e",
+  green:  "#7ed62e",
   yellow: "#f59e0b",
   red:    "#ef4444",
 };
