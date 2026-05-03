@@ -135,6 +135,12 @@ pub fn run() {
             sql: include_str!("../migrations/0002_candles_v3.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 3,
+            description: "add_ema100",
+            sql: include_str!("../migrations/0003_add_ema100.sql"),
+            kind: MigrationKind::Up,
+        },
     ];
 
     tauri::Builder::default()

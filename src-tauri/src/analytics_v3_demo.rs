@@ -15,6 +15,7 @@ pub struct CandleV3 {
     pub ema9:           f64,
     pub ema20:          f64,
     pub ema50:          f64,
+    pub ema100:         f64,
     pub ema200:         f64,
     pub macd:           f64,
     pub macd_signal:    f64,
@@ -150,6 +151,7 @@ pub fn demo_rows() -> Vec<CandleV3> {
             ema9:           ema9[i],
             ema20:          e20,
             ema50:          ema50[i],
+            ema100:         ema50[i], // demo: reuse ema50 approximation
             ema200:         ema200[i],
             macd:           macd[i],
             macd_signal:    msig[i],

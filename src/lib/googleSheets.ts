@@ -22,6 +22,7 @@ export interface SheetRow {
   ema9:          number;
   ema20:         number;
   ema50:         number;
+  ema100:        number;
   ema200:        number;
   macd:          number;
   macdSignal:    number;
@@ -76,6 +77,7 @@ function parseRow(headers: string[], row: string[]): SheetRow {
     ema9:          n(get('EMA(9)')),
     ema20:         n(get('EMA(20)')),
     ema50:         n(get('EMA(50)')),
+    ema100:        0,
     ema200:        n(get('EMA(200)')),
     macd:          n(get('MACD')),
     macdSignal:    n(get('Signal')),

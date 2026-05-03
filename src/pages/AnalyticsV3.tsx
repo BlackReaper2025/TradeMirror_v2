@@ -32,7 +32,7 @@ interface RawCandleV3 {
   open: number; high: number; low: number; close: number;
   volume: number; volume_sma20: number;
   sma20: number; sma50: number; sma200: number;
-  ema9: number; ema20: number; ema50: number; ema200: number;
+  ema9: number; ema20: number; ema50: number; ema100: number; ema200: number;
   macd: number; macd_signal: number; macd_histogram: number;
   adx: number; di_plus: number; di_minus: number;
   rsi9: number; rsi14: number; rsi_trend: string;
@@ -58,7 +58,7 @@ function mapToSheetRow(c: RawCandleV3) {
     atr14: c.atr14 * 10000, histVol: c.hist_vol,
     bbUpper: c.bb_upper, bbMiddle: c.bb_middle, bbLower: c.bb_lower,
     sma20: c.sma20, sma50: c.sma50, sma200: c.sma200,
-    ema9: c.ema9, ema20: c.ema20, ema50: c.ema50, ema200: c.ema200,
+    ema9: c.ema9, ema20: c.ema20, ema50: c.ema50, ema100: c.ema100, ema200: c.ema200,
     macd: c.macd, macdSignal: c.macd_signal, macdHistogram: c.macd_histogram,
     r3: c.r3, r2: c.r2, r1: c.r1, s1: c.s1, s2: c.s2, s3: c.s3,
     keltnerUpper: c.keltner_upper, keltnerMiddle: c.keltner_middle, keltnerLower: c.keltner_lower,
@@ -156,16 +156,18 @@ const PANELS: { id: string; area: string; span?: number; label: string; sub: str
   { id: "price",           area: "price", label: "Price",                      sub: "Group 1 — OHLC · Body · Wicks" },
   { id: "session",         area: "sess",  label: "Session Context",            sub: "Group 2 — Gap · Inside Bar · % Change" },
   { id: "volume",          area: "vol",   label: "Volume",                     sub: "Group 3 — Volume · OBV · Vol SMA" },
-  { id: "avg-price",       area: "avgp",  label: "AVG Price\n& ROC",            sub: "Group 5 — Avg Price · Avg Delta · ROC(5)" },
-  { id: "volatility",      area: "vola",  label: "BB",                         sub: "Group 4 — Hist Vol · Bollinger Bands · BB %B" },
+  { id: "avg-price",       area: "avgp",  label: "AVG Price",                   sub: "Group 5 — Avg Price · Close · Avg Delta" },
+  { id: "roc",             area: "roc",   label: "ROC (5)",                      sub: "Group 5b — Rate of Change · 5-Session Momentum" },
+  { id: "volatility",      area: "vola",  label: "Bollinger",                         sub: "Group 4 — Hist Vol · Bollinger Bands · BB %B" },
   { id: "atr",             area: "atr",   label: "ATR",                        sub: "Group 15 — ATR(14) · ATR SMA(20)" },
   { id: "macd",            area: "macd",  label: "MACD",                       sub: "Group 7 — MACD · Signal · Histogram" },
   { id: "moving-averages", area: "ma",    label: "MOVING\nAVERAGES",           sub: "Group 6 — SMA(20/50/200) · EMA(9/12/20/26/50/200)" },
   { id: "pivots",          area: "pvt",   label: "Pivot Points",               sub: "Group 8 — R3/R2/R1 · S1/S2/S3" },
-  { id: "keltner",         area: "kelt",  label: "KELTNER\nCHANNELS",          sub: "Group 9 — Kelt Upper · Mid · Lower" },
+  { id: "keltner",         area: "kelt",  label: "Keltner",                    sub: "Group 9 — Kelt Upper · Mid · Lower" },
   { id: "rsi9",            area: "rsi9",  label: "RSI (9)",                    sub: "Group 10 — RSI(9) · StochRSI %K/%D" },
   { id: "rsi14",           area: "rsi14", label: "RSI (14)",                   sub: "Group 11 — RSI(14) · RSI Trend" },
-  { id: "momentum",        area: "mom",   label: "MOMENTUM\nOSCILLATORS",      sub: "Group 12 — Williams %R · CCI · Momentum(10)" },
+  { id: "cci",             area: "cci",   label: "CCI",                        sub: "Group 12a — Commodity Channel Index" },
+  { id: "wr",              area: "wr",    label: "Williams %R",                sub: "Group 12b — Williams %R" },
   { id: "adx",             area: "adx",   label: "ADX",                        sub: "Group 13 — +DI · −DI · DX · ADX" },
   { id: "ichimoku",        area: "ichi",  label: "Ichimoku",                   sub: "Group 14 — Tenkan · Kijun · Senkou · Chikou" },
   { id: "failure-swing",   area: "fsw",   label: "FAILURE\nSWING",             sub: "RSI top/bottom failure swing pattern" },
@@ -185,9 +187,9 @@ const SLOT_AREAS = [
   // ── Scrollable bottom rows ────────────────────────────────────────────────
   "sess","vol","avgp","price", // row 1
   "vola","macd","pvt","kelt",  // row 2
-  "ma","rsi9","rsi14","mom",   // row 3
+  "ma","rsi9","rsi14","cci",   // row 3
   "adx","ichi","atr","fsw",    // row 4
-  "cctx",                      // row 5 (full-width)
+  "wr","roc","cctx",           // row 5
 ] as const;
 
 const INITIAL_PANEL_ORDER: string[] = SLOT_AREAS.map(area =>
@@ -234,7 +236,7 @@ function HoverTooltip({ tip, children }: { tip: string; children: React.ReactNod
   );
 }
 
-const NO_SUB_IDS = new Set(["ai-synthesis", "price", "macd", "rsi9", "rsi14", "moving-averages", "keltner", "adx", "ichimoku", "session", "volume", "pivots", "momentum", "volatility", "avg-price", "atr", "candle-context"]);
+const NO_SUB_IDS = new Set(["ai-synthesis", "price", "macd", "rsi9", "rsi14", "moving-averages", "keltner", "adx", "ichimoku", "session", "volume", "pivots", "cci", "wr", "volatility", "avg-price", "roc", "atr", "candle-context"]);
 
 function PanelModal({ panel, onClose, badge, subtitle, children }: { panel: PanelMeta; onClose: () => void; badge?: React.ReactNode; subtitle?: string; children?: React.ReactNode }) {
   useEffect(() => {
@@ -590,9 +592,9 @@ function MacdPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolea
   const windowSize = expanded ? 40 : MACD_WINDOW;
   const maxOffset  = Math.max(0, rows.length - windowSize);
   const [offset, setOffset]       = useState(0);
-  const [showHist,   setShowHist]   = useState(true);
-  const [showMacd,   setShowMacd]   = useState(true);
-  const [showSignal, setShowSignal] = useState(true);
+  const showHist   = true;
+  const showMacd   = true;
+  const showSignal = true;
 
   const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 
@@ -646,34 +648,6 @@ function MacdPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolea
         </div>
       )}
 
-      {/* Toggle badges */}
-      <div className="shrink-0 flex items-center gap-1.5 px-2 pt-1" style={{ paddingLeft: yAxisWidth }}>
-        {([
-          { key: "hist",   label: "Histogram", color: "#60a5fa", on: showHist,   set: setShowHist   },
-          { key: "macd",   label: "MACD",       color: "#60a5fa", on: showMacd,   set: setShowMacd   },
-          { key: "signal", label: "Signal",     color: "#f59e0b", on: showSignal, set: setShowSignal },
-        ] as const).map(({ key, label, color, on, set }) => (
-          <button
-            key={key}
-            onClick={() => set(v => !v)}
-            className="flex items-center gap-1 rounded-full cursor-pointer"
-            style={{
-              fontSize: expanded ? 10 : 8,
-              fontWeight: 700,
-              letterSpacing: "0.06em",
-              padding: expanded ? "2px 8px" : "1px 6px",
-              border: `1px solid ${on ? color + "66" : "rgba(255,255,255,0.10)"}`,
-              background: on ? color + "18" : "transparent",
-              color: on ? color : "var(--text-muted)",
-              transition: "all 0.15s",
-            }}
-          >
-            <span style={{ width: expanded ? 6 : 5, height: expanded ? 6 : 5, borderRadius: "50%", background: on ? color : "var(--text-muted)", flexShrink: 0 }} />
-            {label}
-          </button>
-        ))}
-      </div>
-
       {/* Chart — no XAxis so we can insert slider before date labels */}
       <div className="flex-1 min-h-0">
         <ResponsiveContainer width="100%" height="100%">
@@ -695,7 +669,7 @@ function MacdPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolea
                 ))}
               </Bar>
             )}
-            {showMacd   && <Line dataKey="macd"   name="MACD"   type="monotone" dot={false} strokeWidth={expanded ? 1.5 : 1} stroke="#60a5fa" isAnimationActive={false} />}
+            {showMacd   && <Line dataKey="macd"   name="MACD"   type="monotone" dot={false} strokeWidth={expanded ? 2 : 1.5} stroke="#60a5fa" isAnimationActive={false} />}
             {showSignal && <Line dataKey="signal" name="Signal" type="monotone" dot={false} strokeWidth={expanded ? 1.5 : 1} stroke="#f59e0b" isAnimationActive={false} />}
           </ComposedChart>
         </ResponsiveContainer>
@@ -865,9 +839,9 @@ function RsiPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolean
   const windowSize = expanded ? 40 : RSI_WINDOW;
   const maxOffset  = Math.max(0, rows.length - windowSize);
   const [offset, setOffset] = useState(0);
-  const [showRsi, setShowRsi]   = useState(true);
-  const [showK,   setShowK]     = useState(true);
-  const [showD,   setShowD]     = useState(true);
+  const showRsi = true;
+  const showK   = true;
+  const showD   = true;
 
   const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 
@@ -911,34 +885,6 @@ function RsiPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolean
         </div>
       )}
 
-      {/* Toggle badges */}
-      <div className="shrink-0 flex items-center gap-1.5 px-2 pt-1" style={{ paddingLeft: yAxisWidth }}>
-        {([
-          { key: "rsi",  label: "RSI(9)",      color: "#60a5fa", on: showRsi, set: setShowRsi },
-          { key: "k",    label: "StochRSI %K", color: "#f59e0b", on: showK,   set: setShowK   },
-          { key: "d",    label: "StochRSI %D", color: "#c084fc", on: showD,   set: setShowD   },
-        ] as const).map(({ key, label, color, on, set }) => (
-          <button
-            key={key}
-            onClick={() => set(v => !v)}
-            className="flex items-center gap-1 rounded-full cursor-pointer"
-            style={{
-              fontSize: expanded ? 10 : 8,
-              fontWeight: 700,
-              letterSpacing: "0.06em",
-              padding: expanded ? "2px 8px" : "1px 6px",
-              border: `1px solid ${on ? color + "66" : "rgba(255,255,255,0.10)"}`,
-              background: on ? color + "18" : "transparent",
-              color: on ? color : "var(--text-muted)",
-              transition: "all 0.15s",
-            }}
-          >
-            <span style={{ width: expanded ? 6 : 5, height: expanded ? 6 : 5, borderRadius: "50%", background: on ? color : "var(--text-muted)", flexShrink: 0 }} />
-            {label}
-          </button>
-        ))}
-      </div>
-
       <div className="flex-1 min-h-0">
         <ResponsiveContainer width="100%" height="100%">
           <ComposedChart data={data} margin={{ top: 4, right: 6, bottom: 0, left: 0 }}>
@@ -959,7 +905,7 @@ function RsiPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolean
             <ReferenceLine y={30} stroke="rgba(255,255,255,0.20)" strokeWidth={1} />
             <ReferenceLine y={20} stroke="rgba(255,255,255,0.12)" strokeWidth={1} strokeDasharray="2 4" />
             <Tooltip content={<RsiTooltip />} cursor={{ fill: "rgba(255,255,255,0.04)" }} position={{ x: 10, y: 10 }} />
-            {showRsi && <Line dataKey="rsi9" name="RSI(9)"      type="monotone" dot={false} strokeWidth={expanded ? 1.5 : 1} stroke="#60a5fa" isAnimationActive={false} />}
+            {showRsi && <Line dataKey="rsi9" name="RSI(9)"      type="monotone" dot={false} strokeWidth={expanded ? 2 : 1.5} stroke="#60a5fa" isAnimationActive={false} />}
             {showK   && <Line dataKey="k"    name="StochRSI %K" type="monotone" dot={false} strokeWidth={expanded ? 1.5 : 1} stroke="#f59e0b" isAnimationActive={false} />}
             {showD   && <Line dataKey="d"    name="StochRSI %D" type="monotone" dot={false} strokeWidth={expanded ? 1.5 : 1} stroke="#c084fc" strokeDasharray="3 3" isAnimationActive={false} />}
           </ComposedChart>
@@ -1118,8 +1064,8 @@ function Rsi14PanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boole
   const windowSize = expanded ? 40 : RSI_WINDOW;
   const maxOffset  = Math.max(0, rows.length - windowSize);
   const [offset, setOffset]     = useState(0);
-  const [showRsi14, setShowRsi14] = useState(true);
-  const [showTrend, setShowTrend] = useState(true);
+  const showRsi14 = true;
+  const showTrend = true;
 
   const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 
@@ -1178,33 +1124,6 @@ function Rsi14PanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boole
         </div>
       )}
 
-      {/* Toggle badges */}
-      <div className="shrink-0 flex items-center gap-1.5 px-2 pt-1" style={{ paddingLeft: yAxisWidth }}>
-        {([
-          { key: "rsi14", label: "RSI(14)", color: "#38bdf8", on: showRsi14, set: setShowRsi14 },
-          { key: "trend", label: "Trend",   color: "#fbbf24", on: showTrend, set: setShowTrend },
-        ] as const).map(({ key, label, color, on, set }) => (
-          <button
-            key={key}
-            onClick={() => set(v => !v)}
-            className="flex items-center gap-1 rounded-full cursor-pointer"
-            style={{
-              fontSize: expanded ? 10 : 8,
-              fontWeight: 700,
-              letterSpacing: "0.06em",
-              padding: expanded ? "2px 8px" : "1px 6px",
-              border: `1px solid ${on ? color + "66" : "rgba(255,255,255,0.10)"}`,
-              background: on ? color + "18" : "transparent",
-              color: on ? color : "var(--text-muted)",
-              transition: "all 0.15s",
-            }}
-          >
-            <span style={{ width: expanded ? 6 : 5, height: expanded ? 6 : 5, borderRadius: "50%", background: on ? color : "var(--text-muted)", flexShrink: 0 }} />
-            {label}
-          </button>
-        ))}
-      </div>
-
       {/* Chart */}
       <div className="flex-1 min-h-0">
         <ResponsiveContainer width="100%" height="100%">
@@ -1215,7 +1134,7 @@ function Rsi14PanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boole
               tickLine={false}
               axisLine={false}
               width={yAxisWidth}
-              domain={yDomain}
+              domain={[20, 80]}
               ticks={[30, 50, 70]}
               tickFormatter={v => v.toFixed(0)}
             />
@@ -1224,8 +1143,8 @@ function Rsi14PanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boole
             <ReferenceLine y={50} stroke="rgba(255,255,255,0.13)" strokeWidth={1} strokeDasharray="3 3" />
             <ReferenceLine y={30} stroke="rgba(255,255,255,0.20)" strokeWidth={1} />
             <Tooltip content={<Rsi14Tooltip />} cursor={{ fill: "rgba(255,255,255,0.04)" }} position={{ x: 10, y: 10 }} />
-            {showRsi14 && <Line dataKey="rsi14" name="RSI(14)" type="monotone" dot={false} strokeWidth={expanded ? 1.5 : 1} stroke="#38bdf8" isAnimationActive={false} />}
-            {showTrend && <Line dataKey="trend" name="Trend"   type="monotone" dot={false} strokeWidth={expanded ? 1.5 : 1} stroke="#fbbf24" strokeDasharray="4 2" isAnimationActive={false} />}
+            {showRsi14 && <Line dataKey="rsi14" name="RSI(14)" type="monotone" dot={false} strokeWidth={expanded ? 2 : 1.5} stroke="#60a5fa" isAnimationActive={false} />}
+            {showTrend && <Line dataKey="trend" name="Trend"   type="monotone" dot={false} strokeWidth={expanded ? 1.5 : 1} stroke="#f59e0b" strokeDasharray="4 2" isAnimationActive={false} />}
           </ComposedChart>
         </ResponsiveContainer>
       </div>
@@ -1267,8 +1186,8 @@ function Rsi14PanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boole
       {expanded && (
         <div className="shrink-0 flex" style={{ borderTop: "1px solid var(--border-subtle)", background: "rgba(255,255,255,0.015)" }}>
           {[
-            { color: "#38bdf8", name: "RSI (14)", body: "Relative Strength Index over 14 periods — the standard setting. Smoother and more reliable than RSI(9), it filters out short-term noise and gives fewer but higher-quality signals. Above 70 = overbought; below 30 = oversold. Because it uses a longer lookback, overbought/oversold readings here carry more weight than on the 9-period." },
-            { color: "#fbbf24", name: "Trend (5-bar SMA of RSI)", body: "A 5-period simple moving average applied to RSI(14) itself. When RSI(14) is above the Trend line, momentum is accelerating upward; when below, momentum is fading. The crossover between RSI(14) and its Trend line is an early signal of a momentum shift — useful for timing entries and exits within the broader RSI context." },
+            { color: "#60a5fa", name: "RSI (14)", body: "Relative Strength Index over 14 periods — the standard setting. Smoother and more reliable than RSI(9), it filters out short-term noise and gives fewer but higher-quality signals. Above 70 = overbought; below 30 = oversold. Because it uses a longer lookback, overbought/oversold readings here carry more weight than on the 9-period." },
+            { color: "#f59e0b", name: "Trend (5-bar SMA of RSI)", body: "A 5-period simple moving average applied to RSI(14) itself. When RSI(14) is above the Trend line, momentum is accelerating upward; when below, momentum is fading. The crossover between RSI(14) and its Trend line is an early signal of a momentum shift — useful for timing entries and exits within the broader RSI context." },
           ].map((item, i, arr) => (
             <div key={item.name} className="flex-1 flex flex-col gap-1 px-4 py-2.5" style={{ borderRight: i < arr.length - 1 ? "1px solid var(--border-subtle)" : undefined }}>
               <div className="flex items-center gap-1.5">
@@ -1638,10 +1557,11 @@ function MaPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolean 
   const windowSize = expanded ? 40 : MA_WINDOW;
   const maxOffset  = Math.max(0, rows.length - windowSize);
   const [offset, setOffset]         = useState(0);
-  const [showClose,   setShowClose]  = useState(true);
+  const [showClose] = useState(true);
   const [showEma9,    setShowEma9]   = useState(true);
   const [showEma20,   setShowEma20]  = useState(true);
   const [showEma50,   setShowEma50]  = useState(true);
+  const [showEma100,  setShowEma100] = useState(true);
   const [showEma200,  setShowEma200] = useState(true);
   const [showCandles, setShowCandles] = useState(false);
   const chartRef  = useRef<HTMLDivElement>(null);
@@ -1668,6 +1588,7 @@ function MaPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolean 
         ema9:   r.ema9,
         ema20:  r.ema20,
         ema50:  r.ema50,
+        ema100: r.ema100,
         ema200: r.ema200,
         sma20:  r.sma20,
         sma50:  r.sma50,
@@ -1681,11 +1602,11 @@ function MaPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolean 
   const analysis   = useMemo(() => expanded ? buildMaAnalysis(rows) : null, [rows, expanded]);
 
   const TOGGLES = [
-    { key: "close",  label: "Close",  color: "rgba(255,255,255,0.7)", on: showClose,  set: setShowClose  },
-    { key: "ema9",   label: "EMA9",   color: "#f472b6",               on: showEma9,   set: setShowEma9   },
-    { key: "ema20",  label: "EMA20",  color: "#60a5fa",               on: showEma20,  set: setShowEma20  },
-    { key: "ema50",  label: "EMA50",  color: "#f59e0b",               on: showEma50,  set: setShowEma50  },
-    { key: "ema200", label: "EMA200", color: "#60a5fa",               on: showEma200, set: setShowEma200 },
+    { key: "ema9",   label: "EMA9",   color: "#c4b5fd",               on: showEma9,   set: setShowEma9   },
+    { key: "ema20",  label: "EMA20",  color: "#a78bfa",               on: showEma20,  set: setShowEma20  },
+    { key: "ema50",  label: "EMA50",  color: "#818cf8",               on: showEma50,  set: setShowEma50  },
+    { key: "ema100", label: "EMA100", color: "#60a5fa",               on: showEma100, set: setShowEma100 },
+    { key: "ema200", label: "EMA200", color: "#2563eb",               on: showEma200, set: setShowEma200 },
   ] as const;
 
   const yDomain = useMemo(() => {
@@ -1695,6 +1616,7 @@ function MaPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolean 
       if (showEma9)   vals.push(d.ema9);
       if (showEma20)  vals.push(d.ema20);
       if (showEma50)  vals.push(d.ema50);
+      if (showEma100) vals.push(d.ema100);
       if (showEma200) vals.push(d.ema200);
     });
     if (!vals.length) return ["auto", "auto"] as const;
@@ -1702,7 +1624,7 @@ function MaPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolean 
     const max = Math.max(...vals);
     const pad = (max - min) * 0.15;
     return [min - pad, max + pad] as const;
-  }, [data, showClose, showEma9, showEma20, showEma50, showEma200]);
+  }, [data, showClose, showEma9, showEma20, showEma50, showEma100, showEma200]);
 
   useEffect(() => {
     const el = chartRef.current;
@@ -1785,10 +1707,11 @@ function MaPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolean 
             <YAxis tick={tickStyle} tickLine={false} axisLine={false} width={yAxisWidth} domain={yDomain} tickFormatter={v => v.toFixed(4)} />
             <Tooltip content={<MaTooltip />} cursor={{ fill: "rgba(255,255,255,0.04)" }} position={{ x: 10, y: 10 }} />
             {showClose && !showCandles && <Line dataKey="close"  name="Close"  type="monotone" dot={false} strokeWidth={expanded ? 1.5 : 1} stroke="rgba(255,255,255,0.55)" isAnimationActive={false} />}
-            {showEma9   && <Line dataKey="ema9"   name="EMA9"   type="monotone" dot={false} strokeWidth={expanded ? 1.5 : 1} stroke="#f472b6" isAnimationActive={false} />}
-            {showEma20  && <Line dataKey="ema20"  name="EMA20"  type="monotone" dot={false} strokeWidth={expanded ? 1.5 : 1} stroke="#60a5fa" isAnimationActive={false} />}
-            {showEma50  && <Line dataKey="ema50"  name="EMA50"  type="monotone" dot={false} strokeWidth={expanded ? 1.5 : 1} stroke="#f59e0b" isAnimationActive={false} />}
-            {showEma200 && <Line dataKey="ema200" name="EMA200" type="monotone" dot={false} strokeWidth={expanded ? 2 : 1.5} stroke="#60a5fa" isAnimationActive={false} />}
+            {showEma9   && <Line dataKey="ema9"   name="EMA9"   type="monotone" dot={false} strokeWidth={expanded ? 1.5 : 1} stroke="#c4b5fd" isAnimationActive={false} />}
+            {showEma20  && <Line dataKey="ema20"  name="EMA20"  type="monotone" dot={false} strokeWidth={expanded ? 1.5 : 1} stroke="#a78bfa" isAnimationActive={false} />}
+            {showEma50  && <Line dataKey="ema50"  name="EMA50"  type="monotone" dot={false} strokeWidth={expanded ? 1.5 : 1} stroke="#818cf8" isAnimationActive={false} />}
+            {showEma100 && <Line dataKey="ema100" name="EMA100" type="monotone" dot={false} strokeWidth={expanded ? 1.5 : 1} stroke="#60a5fa" isAnimationActive={false} />}
+            {showEma200 && <Line dataKey="ema200" name="EMA200" type="monotone" dot={false} strokeWidth={expanded ? 2 : 1.5} stroke="#2563eb" isAnimationActive={false} />}
           </ComposedChart>
         </ResponsiveContainer>
 
@@ -1865,10 +1788,11 @@ function MaPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolean 
       {expanded && (
         <div className="shrink-0 flex" style={{ borderTop: "1px solid var(--border-subtle)", background: "rgba(255,255,255,0.015)" }}>
           {[
-            { color: "#f472b6",               name: "EMA9",   body: "9-period Exponential Moving Average. The fastest line, highly responsive to recent price action. Acts as dynamic short-term support in uptrends and resistance in downtrends. A close below EMA9 in an uptrend is often the first warning of weakness." },
-            { color: "#60a5fa",               name: "EMA20",  body: "20-period Exponential Moving Average. A responsive short-to-medium-term trend filter. Because EMAs weight recent prices more heavily than SMAs, EMA20 reacts faster to price changes. Price holding above EMA20 in an uptrend confirms short-term bullish structure; a sustained break below is an early warning of trend weakness." },
-            { color: "#f59e0b",               name: "EMA50",  body: "50-period Exponential Moving Average. The primary medium-term trend reference. Faster-reacting than SMA50, it gives earlier signals on trend changes. Institutional traders watch EMA50 closely — a price cross above or below this level often triggers significant order flow. Uptrends require price above EMA50." },
-            { color: "#60a5fa",               name: "EMA200", body: "200-period Exponential Moving Average. The long-term trend anchor. Price above EMA200 = bull market context; below = bear market. The EMA200 golden cross (EMA50 crossing above EMA200) and death cross (EMA50 crossing below) are widely followed structural signals — EMA versions react faster than their SMA equivalents." },
+            { color: "#c4b5fd",               name: "EMA9",   body: "9-period Exponential Moving Average. The fastest line, highly responsive to recent price action. Acts as dynamic short-term support in uptrends and resistance in downtrends. A close below EMA9 in an uptrend is often the first warning of weakness." },
+            { color: "#a78bfa",               name: "EMA20",  body: "20-period Exponential Moving Average. A responsive short-to-medium-term trend filter. Because EMAs weight recent prices more heavily than SMAs, EMA20 reacts faster to price changes. Price holding above EMA20 in an uptrend confirms short-term bullish structure; a sustained break below is an early warning of trend weakness." },
+            { color: "#818cf8",               name: "EMA50",  body: "50-period Exponential Moving Average. The primary medium-term trend reference. Faster-reacting than SMA50, it gives earlier signals on trend changes. Institutional traders watch EMA50 closely — a price cross above or below this level often triggers significant order flow. Uptrends require price above EMA50." },
+            { color: "#60a5fa",               name: "EMA100", body: "100-period Exponential Moving Average. A medium-to-long-term trend filter sitting between EMA50 and EMA200. Useful for confirming trend persistence — price holding above EMA100 after a pullback signals a healthy uptrend; a sustained break below warns of a deeper correction. Often used as a stop-loss reference on swing trades." },
+            { color: "#2563eb",               name: "EMA200", body: "200-period Exponential Moving Average. The long-term trend anchor. Price above EMA200 = bull market context; below = bear market. The EMA200 golden cross (EMA50 crossing above EMA200) and death cross (EMA50 crossing below) are widely followed structural signals — EMA versions react faster than their SMA equivalents." },
           ].map((item, i, arr) => (
             <div key={item.name} className="flex-1 flex flex-col gap-1 px-3 py-2.5" style={{ borderRight: i < arr.length - 1 ? "1px solid var(--border-subtle)" : undefined }}>
               <div className="flex items-center gap-1.5">
@@ -1890,9 +1814,9 @@ function AdxPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolean
   const windowSize = expanded ? 40 : ADX_WINDOW;
   const maxOffset  = Math.max(0, rows.length - windowSize);
   const [offset, setOffset]         = useState(0);
-  const [showDiPlus,  setShowDiPlus]  = useState(true);
-  const [showDiMinus, setShowDiMinus] = useState(true);
-  const [showAdx,     setShowAdx]     = useState(true);
+  const showDiPlus  = true;
+  const showDiMinus = true;
+  const showAdx     = true;
 
   const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 
@@ -1918,12 +1842,6 @@ function AdxPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolean
   const tickStyle  = { fill: "var(--text-muted)", fontSize: expanded ? 12 : 9 };
   const yAxisWidth = expanded ? 44 : 32;
   const analysis   = useMemo(() => expanded ? buildAdxAnalysis(rows) : null, [rows, expanded]);
-
-  const TOGGLES = [
-    { key: "diPlus",  label: "+DI",  color: "#60a5fa", on: showDiPlus,  set: setShowDiPlus  },
-    { key: "diMinus", label: "−DI",  color: "#a78bfa", on: showDiMinus, set: setShowDiMinus },
-    { key: "adx",     label: "ADX",  color: "#a78bfa", on: showAdx,     set: setShowAdx     },
-  ] as const;
 
   const yDomain = useMemo(() => {
     const vals: number[] = [];
@@ -1958,30 +1876,6 @@ function AdxPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolean
         </div>
       )}
 
-      {/* Toggle badges */}
-      <div className="shrink-0 flex items-center gap-1.5 px-2 pt-1" style={{ paddingLeft: yAxisWidth }}>
-        {TOGGLES.map(({ key, label, color, on, set }) => (
-          <button
-            key={key}
-            onClick={() => set(v => !v)}
-            className="flex items-center gap-1 rounded-full cursor-pointer"
-            style={{
-              fontSize: expanded ? 10 : 8,
-              fontWeight: 700,
-              letterSpacing: "0.06em",
-              padding: expanded ? "2px 8px" : "1px 6px",
-              border: `1px solid ${on ? color + "66" : "rgba(255,255,255,0.10)"}`,
-              background: on ? color + "18" : "transparent",
-              color: on ? color : "var(--text-muted)",
-              transition: "all 0.15s",
-            }}
-          >
-            <span style={{ width: expanded ? 6 : 5, height: expanded ? 6 : 5, borderRadius: "50%", background: on ? color : "var(--text-muted)", flexShrink: 0 }} />
-            {label}
-          </button>
-        ))}
-      </div>
-
       {/* Chart */}
       <div className="flex-1 min-h-0">
         <ResponsiveContainer width="100%" height="100%">
@@ -1991,9 +1885,9 @@ function AdxPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolean
             <Tooltip content={<MaTooltip />} cursor={{ fill: "rgba(255,255,255,0.04)" }} position={{ x: 10, y: 10 }} />
             <ReferenceLine y={25} stroke="rgba(255,255,255,0.15)" strokeWidth={1} strokeDasharray="3 3" />
             <ReferenceLine y={40} stroke="rgba(255,255,255,0.10)" strokeWidth={1} strokeDasharray="2 4" />
-            {showDiPlus  && <Line dataKey="diPlus"  name="+DI" type="monotone" dot={false} strokeWidth={expanded ? 1.5 : 1} stroke="#60a5fa" isAnimationActive={false} />}
-            {showDiMinus && <Line dataKey="diMinus" name="−DI" type="monotone" dot={false} strokeWidth={expanded ? 1.5 : 1} stroke="#a78bfa" isAnimationActive={false} />}
-            {showAdx     && <Line dataKey="adx"     name="ADX" type="monotone" dot={false} strokeWidth={expanded ? 2 : 1.5} stroke="#a78bfa" isAnimationActive={false} />}
+            {showDiPlus  && <Line dataKey="diPlus"  name="+DI" type="monotone" dot={false} strokeWidth={expanded ? 2 : 1.5} stroke="#60a5fa" isAnimationActive={false} />}
+            {showDiMinus && <Line dataKey="diMinus" name="−DI" type="monotone" dot={false} strokeWidth={expanded ? 2 : 1.5} stroke="#a78bfa" isAnimationActive={false} />}
+            {showAdx     && <Line dataKey="adx"     name="ADX" type="monotone" dot={false} strokeWidth={expanded ? 1.5 : 1} stroke="#f59e0b" isAnimationActive={false} />}
           </ComposedChart>
         </ResponsiveContainer>
       </div>
@@ -2037,7 +1931,7 @@ function AdxPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolean
           {[
             { color: "#60a5fa", name: "+DI (14)", body: "The Positive Directional Indicator measures the strength of upward price movement over 14 periods. When +DI is above −DI, bulls are in control of directional movement. A rising +DI confirms strengthening upside pressure; a falling +DI warns that bullish momentum is fading." },
             { color: "#a78bfa", name: "−DI (14)", body: "The Negative Directional Indicator measures the strength of downward price movement. When −DI is above +DI, bears dominate. A rising −DI signals increasing selling pressure. A crossover of −DI above +DI with ADX above 25 is a classic bearish trend entry signal." },
-            { color: "#a78bfa", name: "ADX",      body: "The Average Directional Index measures trend strength, not direction — it rises in both up and downtrends. ADX below 20 = ranging market (avoid trend signals). ADX above 25 = trending. ADX above 40 = strong trend. A rising ADX confirms a trend is developing; a falling ADX signals the trend is fading regardless of direction." },
+            { color: "#f59e0b", name: "ADX",      body: "The Average Directional Index measures trend strength, not direction — it rises in both up and downtrends. ADX below 20 = ranging market (avoid trend signals). ADX above 25 = trending. ADX above 40 = strong trend. A rising ADX confirms a trend is developing; a falling ADX signals the trend is fading regardless of direction." },
           ].map((item, i, arr) => (
             <div key={item.name} className="flex-1 flex flex-col gap-1 px-3 py-2.5" style={{ borderRight: i < arr.length - 1 ? "1px solid var(--border-subtle)" : undefined }}>
               <div className="flex items-center gap-1.5">
@@ -2061,15 +1955,21 @@ function IchiPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolea
   const totalPoints = windowSize + ICHI_SHIFT; // price window + cloud projection zone
   const maxOffset   = Math.max(0, rows.length - windowSize);
   const [offset, setOffset]           = useState(0);
-  const [showClose,   setShowClose]   = useState(true);
-  const [showTenkan,  setShowTenkan]  = useState(true);
-  const [showKijun,   setShowKijun]   = useState(true);
-  const [showSenkouA, setShowSenkouA] = useState(true);
-  const [showSenkouB, setShowSenkouB] = useState(true);
-  const [showChikou,  setShowChikou]  = useState(true);
-  const [showCandles, setShowCandles] = useState(false);
+  const showClose   = true;
+  const showTenkan  = true;
+  const showKijun   = true;
+  const showSenkouA = true;
+  const showSenkouB = true;
+  const showChikou  = true;
+  const [showCandles, setShowCandles] = useState(() => localStorage.getItem("tm_ichi_show_candles") === "1");
   const chartRef  = useRef<HTMLDivElement>(null);
   const [chartSize, setChartSize] = useState<{ w: number; h: number } | null>(null);
+
+  useEffect(() => {
+    const handler = () => setShowCandles(localStorage.getItem("tm_ichi_show_candles") === "1");
+    window.addEventListener("tm:ichi-candles-changed", handler);
+    return () => window.removeEventListener("tm:ichi-candles-changed", handler);
+  }, []);
 
   const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 
@@ -2139,15 +2039,6 @@ function IchiPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolea
     return () => obs.disconnect();
   }, []);
 
-  const TOGGLES = [
-    { key: "close",   label: "Close",    color: "rgba(255,255,255,0.7)", on: showClose,   set: setShowClose   },
-    { key: "tenkan",  label: "Tenkan",   color: "#60a5fa",               on: showTenkan,  set: setShowTenkan  },
-    { key: "kijun",   label: "Kijun",    color: "#f472b6",               on: showKijun,   set: setShowKijun   },
-    { key: "senkouA", label: "Senkou A", color: "#60a5fa",               on: showSenkouA, set: setShowSenkouA },
-    { key: "senkouB", label: "Senkou B", color: "#a78bfa",               on: showSenkouB, set: setShowSenkouB },
-    { key: "chikou",  label: "Chikou",   color: "#a78bfa",               on: showChikou,  set: setShowChikou  },
-  ] as const;
-
   const yDomain = useMemo(() => {
     const vals: number[] = [];
     data.forEach(d => {
@@ -2189,31 +2080,15 @@ function IchiPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolea
         </div>
       )}
 
-      {/* Toggle badges */}
-      <div className="shrink-0 flex items-center gap-1.5 px-2 pt-1" style={{ paddingLeft: yAxisWidth }}>
-        {TOGGLES.map(({ key, label, color, on, set }) => (
+      {expanded && <div className="shrink-0 flex items-center gap-1.5 px-2 pt-1" style={{ paddingLeft: yAxisWidth }}>
+        {(
           <button
-            key={key}
-            onClick={() => set(v => !v)}
-            className="flex items-center gap-1 rounded-full cursor-pointer"
-            style={{
-              fontSize: expanded ? 10 : 8,
-              fontWeight: 700,
-              letterSpacing: "0.06em",
-              padding: expanded ? "2px 8px" : "1px 6px",
-              border: `1px solid ${on ? color + "66" : "rgba(255,255,255,0.10)"}`,
-              background: on ? color + "18" : "transparent",
-              color: on ? color : "var(--text-muted)",
-              transition: "all 0.15s",
+            onClick={() => {
+              const next = !showCandles;
+              localStorage.setItem("tm_ichi_show_candles", next ? "1" : "0");
+              setShowCandles(next);
+              window.dispatchEvent(new Event("tm:ichi-candles-changed"));
             }}
-          >
-            <span style={{ width: expanded ? 6 : 5, height: expanded ? 6 : 5, borderRadius: "50%", background: on ? color : "var(--text-muted)", flexShrink: 0 }} />
-            {label}
-          </button>
-        ))}
-        {expanded && (
-          <button
-            onClick={() => setShowCandles(v => !v)}
             className="flex items-center gap-1 rounded-full cursor-pointer"
             style={{
               fontSize: 10,
@@ -2230,7 +2105,7 @@ function IchiPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolea
             {showCandles ? "Candles" : "Line"}
           </button>
         )}
-      </div>
+      </div>}
 
       {/* Chart */}
       <div ref={chartRef} className="flex-1 min-h-0" style={{ position: "relative" }}>
@@ -2300,7 +2175,7 @@ function IchiPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolea
             <svg style={{ position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none", overflow: "hidden" }}>
               {bullSegs.map((seg, i) => <path key={`bull${i}`} d={makePath(seg)} fill="rgba(96,165,250,0.22)"  stroke="none" />)}
               {bearSegs.map((seg, i) => <path key={`bear${i}`} d={makePath(seg)} fill="rgba(167,139,250,0.22)" stroke="none" />)}
-              {showClose && showCandles && expanded && data.map(d => {
+              {showClose && showCandles && data.map(d => {
                 if (d.open == null || d.high == null || d.low == null || d.close == null) return null;
                 const bull    = d.close >= d.open;
                 const color   = bull ? "#60a5fa" : "#a78bfa";
@@ -2602,42 +2477,76 @@ function buildAvgPriceAnalysis(rows: SheetRow[]): { headline: string; bullets: s
   const idx  = rows.length - 1;
   const cur  = rows[idx];
 
-  const typical = (r: SheetRow) => (r.high + r.low + r.close) / 3;
+  const typical   = (r: SheetRow) => (r.high + r.low + r.close) / 3;
   const avgPrice5 = rows.slice(-5).reduce((s, r) => s + typical(r), 0) / 5;
-  const roc5      = idx >= 5 ? ((cur.close - rows[idx - 5].close) / rows[idx - 5].close) * 100 : 0;
   const deltas    = rows.slice(-5).map((r, i, a) => i === 0 ? 0 : (r.close - a[i - 1].close) * 10000);
   const avgDelta  = deltas.slice(1).reduce((s, d) => s + d, 0) / 4;
   const aboveAvg  = cur.close > avgPrice5;
-  const rocSign   = roc5 >= 0 ? "+" : "";
   const deltaPips = avgDelta.toFixed(1);
-
-  const recent20  = rows.slice(-20);
-  const maxRoc    = Math.max(...recent20.map((r, i, a) => i < 5 ? 0 : Math.abs((r.close - a[i - 5].close) / a[i - 5].close * 100)));
-  const rocRatio  = maxRoc > 0 ? Math.abs(roc5) / maxRoc : 0;
+  const diffPips  = Math.round(Math.abs(cur.close - avgPrice5) * 10000);
 
   const bullets = [
     `Close: ${cur.close.toFixed(4)} · Avg Price (HLC/3 SMA5): ${avgPrice5.toFixed(4)}`,
-    `Close is ${aboveAvg ? "above" : "below"} the 5-bar avg price by ${Math.round(Math.abs(cur.close - avgPrice5) * 10000)} pips`,
-    `ROC(5): ${rocSign}${roc5.toFixed(3)}% — ${(rocRatio * 100).toFixed(0)}% of 20-bar peak rate`,
+    `Close is ${aboveAvg ? "above" : "below"} the 5-bar avg price by ${diffPips} pips`,
     `Avg Delta (5-bar): ${avgDelta >= 0 ? "+" : ""}${deltaPips} pips/session`,
   ];
 
   let headline: string, description: string;
-  if (roc5 > 0.5 && aboveAvg) {
+  if (aboveAvg && avgDelta > 0) {
+    headline    = "Bullish — Close Above Avg Price, Positive Drift";
+    description = `Close (${cur.close.toFixed(4)}) sits ${diffPips} pips above the 5-bar average price (${avgPrice5.toFixed(4)}), and the average daily delta of +${deltaPips} pips confirms consistent net buying pressure across recent sessions. Price is trading above its own recent centre of gravity — buyers have been in control of both the range and the close.`;
+  } else if (!aboveAvg && avgDelta < 0) {
+    headline    = "Bearish — Close Below Avg Price, Negative Drift";
+    description = `Close (${cur.close.toFixed(4)}) sits ${diffPips} pips below the 5-bar average price (${avgPrice5.toFixed(4)}), and the average daily delta of ${deltaPips} pips confirms persistent net selling pressure. Price is trading below its own recent centre of gravity — sellers have controlled both the range and the close across recent sessions.`;
+  } else if (aboveAvg && avgDelta <= 0) {
+    headline    = "Fading — Close Above Avg Price but Selling Drift";
+    description = `Close (${cur.close.toFixed(4)}) is ${diffPips} pips above the 5-bar average price (${avgPrice5.toFixed(4)}), but the average daily delta of ${deltaPips} pips signals selling drift. The session close is above the recent range mid-point, yet intra-session pressure has been negative — watch for a reversion toward the average.`;
+  } else if (!aboveAvg && avgDelta >= 0) {
+    headline    = "Recovery — Close Below Avg Price but Buying Drift";
+    description = `Close (${cur.close.toFixed(4)}) is ${diffPips} pips below the 5-bar average price (${avgPrice5.toFixed(4)}), but the average daily delta of +${deltaPips} pips suggests buying drift is beginning. Price has not yet closed above its recent centre of gravity, but session-by-session pressure is turning supportive.`;
+  } else {
+    headline    = "Neutral — Close Near Avg Price";
+    description = `Close (${cur.close.toFixed(4)}) sits ${diffPips} pips ${aboveAvg ? "above" : "below"} the 5-bar average price (${avgPrice5.toFixed(4)}), a minimal deviation. The average daily delta of ${deltaPips >= "0" ? "+" : ""}${deltaPips} pips confirms little sustained directional pressure. Price is near its own recent centre of gravity — a range-bound condition with no clear edge.`;
+  }
+  return { headline, bullets, description };
+}
+
+function buildRocAnalysis(rows: SheetRow[]): { headline: string; bullets: string[]; description: string } {
+  if (rows.length < 6) return { headline: "—", bullets: [], description: "—" };
+  const idx  = rows.length - 1;
+  const cur  = rows[idx];
+
+  const roc5     = idx >= 5 ? ((cur.close - rows[idx - 5].close) / rows[idx - 5].close) * 100 : 0;
+  const rocSign  = roc5 >= 0 ? "+" : "";
+  const recent20 = rows.slice(-20);
+  const maxRoc   = Math.max(...recent20.map((r, i, a) => i < 5 ? 0 : Math.abs((r.close - a[i - 5].close) / a[i - 5].close * 100)));
+  const rocRatio = maxRoc > 0 ? Math.abs(roc5) / maxRoc : 0;
+
+  const bullets = [
+    `ROC(5): ${rocSign}${roc5.toFixed(3)}%`,
+    `${(rocRatio * 100).toFixed(0)}% of 20-session peak rate (peak: ${maxRoc > 0 ? "±" + maxRoc.toFixed(3) + "%" : "n/a"})`,
+    roc5 > 0.5 ? "Strong bullish momentum — 5-session net gain above threshold" :
+    roc5 < -0.5 ? "Strong bearish momentum — 5-session net loss below threshold" :
+    Math.abs(roc5) > 0.1 ? `Moderate ${roc5 > 0 ? "bullish" : "bearish"} bias — directional but not extreme` :
+    "Flat — minimal 5-session net change, no directional bias",
+  ];
+
+  let headline: string, description: string;
+  if (roc5 > 0.5) {
     headline    = "Strong Bullish Rate of Change";
-    description = `Price has gained ${rocSign}${roc5.toFixed(3)}% over the past 5 sessions, placing close ${Math.round((cur.close - avgPrice5) * 10000)} pips above its 5-bar average price (${avgPrice5.toFixed(4)}). The average daily delta of ${deltaPips} pips confirms consistent net buying pressure. At ${(rocRatio * 100).toFixed(0)}% of the 20-session peak rate, the current move has ${rocRatio > 0.7 ? "significant momentum that is hard to fade" : "room to extend before reaching a historic extreme"}.`;
-  } else if (roc5 < -0.5 && !aboveAvg) {
+    description = `ROC(5) at ${rocSign}${roc5.toFixed(3)}% reflects a meaningful net gain over the past 5 sessions. At ${(rocRatio * 100).toFixed(0)}% of the 20-session peak rate, the current move has ${rocRatio > 0.7 ? "significant momentum that is hard to fade" : "room to extend before reaching a historic extreme"}. Accelerating ROC in the direction of a trend confirms momentum; watch for deceleration as an early warning of exhaustion.`;
+  } else if (roc5 < -0.5) {
     headline    = "Strong Bearish Rate of Change";
-    description = `Price has declined ${roc5.toFixed(3)}% over the past 5 sessions, with close ${Math.round((avgPrice5 - cur.close) * 10000)} pips below its 5-bar average price (${avgPrice5.toFixed(4)}). The average daily delta of ${deltaPips} pips confirms persistent selling pressure. At ${(rocRatio * 100).toFixed(0)}% of the 20-session peak rate, the pace of decline is ${rocRatio > 0.7 ? "elevated — watch for exhaustion and potential bounce" : "moderate with room for further extension"}.`;
+    description = `ROC(5) at ${roc5.toFixed(3)}% reflects a meaningful net decline over the past 5 sessions. At ${(rocRatio * 100).toFixed(0)}% of the 20-session peak rate, the pace of decline is ${rocRatio > 0.7 ? "elevated — watch for exhaustion and potential bounce" : "moderate with room for further extension"}. ROC divergence (price makes new low but ROC does not) is the key early reversal signal to monitor.`;
   } else if (roc5 > 0.1) {
     headline    = "Moderate Bullish Rate of Change";
-    description = `A moderate ${rocSign}${roc5.toFixed(3)}% rate of change over 5 sessions. Close is ${aboveAvg ? `${Math.round((cur.close - avgPrice5) * 10000)} pips above` : `${Math.round((avgPrice5 - cur.close) * 10000)} pips below`} the 5-bar average price (${avgPrice5.toFixed(4)}). Average daily delta of ${deltaPips} pips indicates ${Number(deltaPips) > 0 ? "net upward" : "net downward"} drift. The current ROC is at ${(rocRatio * 100).toFixed(0)}% of recent peak rate — a constructive but not extreme bullish reading.`;
+    description = `ROC(5) at ${rocSign}${roc5.toFixed(3)}% indicates moderate upside momentum over the past 5 sessions. At ${(rocRatio * 100).toFixed(0)}% of the recent peak rate, the move is constructive but not extreme. A further expansion toward +0.5% would confirm a stronger bullish impulse; a rollover back toward zero would suggest the bid is fading.`;
   } else if (roc5 < -0.1) {
     headline    = "Moderate Bearish Rate of Change";
-    description = `A moderate ${roc5.toFixed(3)}% rate of change over 5 sessions. Close is ${!aboveAvg ? `${Math.round((avgPrice5 - cur.close) * 10000)} pips below` : `${Math.round((cur.close - avgPrice5) * 10000)} pips above`} the 5-bar average price (${avgPrice5.toFixed(4)}). Average daily delta of ${deltaPips} pips. The ROC at ${(rocRatio * 100).toFixed(0)}% of recent peak points to moderate but not exhausted bearish momentum.`;
+    description = `ROC(5) at ${roc5.toFixed(3)}% indicates moderate downside momentum over the past 5 sessions. At ${(rocRatio * 100).toFixed(0)}% of the recent peak rate, the move has bearish bias but is not yet at an extreme. Continued deterioration below −0.5% would signal a stronger bearish impulse; stabilisation near zero would suggest selling pressure is abating.`;
   } else {
     headline    = "Rate of Change Flat — No Directional Bias";
-    description = `ROC(5) at ${rocSign}${roc5.toFixed(3)}% indicates a nearly flat 5-session net change. Close sits ${aboveAvg ? "slightly above" : "slightly below"} the 5-bar average price (${avgPrice5.toFixed(4)}) by ${Math.round(Math.abs(cur.close - avgPrice5) * 10000)} pips. The average daily delta of ${deltaPips} pips confirms minimal directional follow-through. This is a low-momentum environment — wait for ROC to build conviction before positioning.`;
+    description = `ROC(5) at ${rocSign}${roc5.toFixed(3)}% indicates a nearly flat 5-session net change — price has gone essentially nowhere on a week-over-week basis. At ${(rocRatio * 100).toFixed(0)}% of the 20-session peak rate, momentum is minimal. This is a low-conviction environment. Wait for ROC to build a sustained move above +0.1% or below −0.1% before reading directional bias into the tape.`;
   }
   return { headline, bullets, description };
 }
@@ -2648,9 +2557,8 @@ function AvgPricePanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: bo
   const windowSize = expanded ? 40 : AVGP_WINDOW;
   const maxOffset  = Math.max(0, rows.length - windowSize);
   const [offset, setOffset]       = useState(0);
-  const [showClose,    setShowClose]    = useState(true);
-  const [showAvgPrice, setShowAvgPrice] = useState(true);
-  const [showRoc,      setShowRoc]      = useState(true);
+  const showClose    = true;
+  const showAvgPrice = true;
 
   const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 
@@ -2666,7 +2574,6 @@ function AvgPricePanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: bo
       const prevMonth = i > 0 ? parseInt(slice[i-1].date.split("-")[1]) - 1 : -1;
       const typical5  = rows.slice(Math.max(0, rowIdx - 4), rowIdx + 1);
       const avgPrice  = typical5.reduce((s, rr) => s + (rr.high + rr.low + rr.close) / 3, 0) / typical5.length;
-      const roc5      = rowIdx >= 5 ? ((r.close - rows[rowIdx - 5].close) / rows[rowIdx - 5].close) * 100 : 0;
       const deltas    = rows.slice(Math.max(0, rowIdx - 4), rowIdx + 1);
       const avgDelta  = deltas.length > 1
         ? deltas.slice(1).reduce((s, rr, j) => s + (rr.close - deltas[j].close) * 10000, 0) / (deltas.length - 1)
@@ -2677,7 +2584,6 @@ function AvgPricePanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: bo
         month: monthIdx !== prevMonth ? MONTHS[monthIdx] : "",
         close: r.close,
         avgPrice,
-        roc5,
         avgDelta,
       };
     });
@@ -2685,7 +2591,6 @@ function AvgPricePanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: bo
 
   const tickStyle  = { fill: "var(--text-muted)", fontSize: expanded ? 12 : 9 };
   const yAxisWidth = expanded ? 60 : 44;
-  const rocWidth   = expanded ? 44 : 32;
   const analysis   = useMemo(() => expanded ? buildAvgPriceAnalysis(rows) : null, [rows, expanded]);
 
   const priceDomain = useMemo(() => {
@@ -2701,19 +2606,7 @@ function AvgPricePanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: bo
     return [min - pad, max + pad] as const;
   }, [data, showClose, showAvgPrice]);
 
-  const rocDomain = useMemo(() => {
-    if (!showRoc || !data.length) return [-1, 1] as const;
-    const abs = Math.max(0.2, ...data.map(d => Math.abs(d.roc5)));
-    return [-(abs * 1.2), abs * 1.2] as const;
-  }, [data, showRoc]);
-
   const latest = data[data.length - 1];
-
-  const TOGGLES = [
-    { key: "close",    label: "Close",     color: "rgba(255,255,255,0.75)", on: showClose,    set: setShowClose    },
-    { key: "avgPrice", label: "Avg Price", color: "#f59e0b",                on: showAvgPrice, set: setShowAvgPrice },
-    { key: "roc",      label: "ROC(5)",    color: "#a78bfa",                on: showRoc,      set: setShowRoc      },
-  ] as const;
 
   return (
     <div className="flex flex-col h-full">
@@ -2733,37 +2626,11 @@ function AvgPricePanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: bo
         </div>
       )}
 
-      <div className="shrink-0 flex items-center gap-1.5 px-2 pt-1" style={{ paddingLeft: yAxisWidth }}>
-        {TOGGLES.map(({ key, label, color, on, set }) => (
-          <button
-            key={key}
-            onClick={() => set(v => !v)}
-            className="flex items-center gap-1 rounded-full cursor-pointer"
-            style={{
-              fontSize:      expanded ? 10 : 8,
-              fontWeight:    700,
-              letterSpacing: "0.06em",
-              padding:       expanded ? "2px 8px" : "1px 6px",
-              border:        `1px solid ${on ? color + "66" : "rgba(255,255,255,0.10)"}`,
-              background:    on ? color + "18" : "transparent",
-              color:         on ? color : "var(--text-muted)",
-              transition:    "all 0.15s",
-            }}
-          >
-            <span style={{ width: expanded ? 6 : 5, height: expanded ? 6 : 5, borderRadius: "50%", background: on ? color : "var(--text-muted)", flexShrink: 0 }} />
-            {label}
-          </button>
-        ))}
-      </div>
-
       <div className="flex-1 min-h-0">
         <ResponsiveContainer width="100%" height="100%">
-          <ComposedChart data={data} margin={{ top: 4, right: showRoc ? rocWidth : 6, bottom: 0, left: 0 }}>
+          <ComposedChart data={data} margin={{ top: 4, right: 6, bottom: 0, left: 0 }}>
             <XAxis dataKey="idx" type="number" domain={[0, data.length - 1]} hide />
             <YAxis yAxisId="price" tick={tickStyle} tickLine={false} axisLine={false} width={yAxisWidth} domain={priceDomain} tickFormatter={v => v.toFixed(4)} />
-            {showRoc && (
-              <YAxis yAxisId="roc" orientation="right" tick={tickStyle} tickLine={false} axisLine={false} width={rocWidth} domain={rocDomain} tickFormatter={v => v.toFixed(2) + "%"} />
-            )}
             <Tooltip
               cursor={{ fill: "rgba(255,255,255,0.04)" }}
               position={{ x: 10, y: 10 }}
@@ -2774,9 +2641,6 @@ function AvgPricePanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: bo
                   <div className="rounded-lg px-3 py-2 text-[10px]" style={{ background: "var(--bg-panel)", border: "1px solid var(--border-medium)", color: "var(--text-secondary)" }}>
                     <div className="font-bold mb-1" style={{ color: "rgba(255,255,255,0.85)" }}>{d.close.toFixed(4)}</div>
                     <div style={{ color: "#f59e0b" }}>Avg Price: {d.avgPrice.toFixed(4)}</div>
-                    <div style={{ color: d.roc5 >= 0 ? "#60a5fa" : "#a78bfa" }}>
-                      ROC(5): {d.roc5 >= 0 ? "+" : ""}{d.roc5.toFixed(3)}%
-                    </div>
                     <div style={{ color: d.avgDelta >= 0 ? "#60a5fa" : "#a78bfa" }}>
                       Avg Δ: {d.avgDelta >= 0 ? "+" : ""}{d.avgDelta.toFixed(1)} pips/day
                     </div>
@@ -2784,16 +2648,14 @@ function AvgPricePanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: bo
                 );
               }}
             />
-            {showRoc && <ReferenceLine yAxisId="roc" y={0} stroke="rgba(255,255,255,0.10)" strokeWidth={1} />}
             {showAvgPrice && <Line yAxisId="price" dataKey="avgPrice" name="Avg Price" type="monotone" dot={false} strokeWidth={expanded ? 1.5 : 1} stroke="#f59e0b" strokeDasharray="4 2" isAnimationActive={false} />}
-            {showClose    && <Line yAxisId="price" dataKey="close"    name="Close"     type="monotone" dot={false} strokeWidth={expanded ? 2 : 1.5}   stroke="rgba(255,255,255,0.75)" isAnimationActive={false} />}
-            {showRoc      && <Line yAxisId="roc"   dataKey="roc5"     name="ROC(5)"    type="monotone" dot={false} strokeWidth={expanded ? 1.5 : 1} stroke="#a78bfa" isAnimationActive={false} />}
+            {showClose    && <Line yAxisId="price" dataKey="close"    name="Close"     type="monotone" dot={false} strokeWidth={expanded ? 2 : 1.5}   stroke="#60a5fa" isAnimationActive={false} />}
           </ComposedChart>
         </ResponsiveContainer>
       </div>
 
       {latest && expanded && (
-        <div className="shrink-0 flex items-center" style={{ paddingLeft: yAxisWidth + 6, paddingRight: showRoc ? rocWidth + 6 : 6, borderTop: "1px solid var(--border-subtle)", paddingTop: 3, paddingBottom: 3 }}>
+        <div className="shrink-0 flex items-center" style={{ paddingLeft: yAxisWidth + 6, paddingRight: 6, borderTop: "1px solid var(--border-subtle)", paddingTop: 3, paddingBottom: 3 }}>
           {[
             { label: "Avg Δ/day", value: (latest.avgDelta >= 0 ? "+" : "") + latest.avgDelta.toFixed(1) + " pips", color: latest.avgDelta >= 0 ? "#60a5fa" : "#a78bfa" },
             { label: "vs Avg Price", value: (latest.close >= latest.avgPrice ? "+" : "") + Math.round((latest.close - latest.avgPrice) * 10000) + " pips", color: latest.close >= latest.avgPrice ? "#60a5fa" : "#a78bfa" },
@@ -2811,7 +2673,7 @@ function AvgPricePanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: bo
           onChange={e => setOffset(Number(e.target.value))} style={{ direction: "rtl" }} />
       )}
 
-      <div className="flex flex-col shrink-0 pb-1" style={{ paddingLeft: yAxisWidth, paddingRight: showRoc ? rocWidth : 6 }}>
+      <div className="flex flex-col shrink-0 pb-1" style={{ paddingLeft: yAxisWidth, paddingRight: 6 }}>
         <div className="flex justify-between">
           {data.map((d, i) => (
             <span key={i} style={{ fontSize: tickStyle.fontSize, color: "var(--text-muted)" }}>{d.date}</span>
@@ -2833,9 +2695,137 @@ function AvgPricePanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: bo
       {expanded && (
         <div className="shrink-0 flex" style={{ borderTop: "1px solid var(--border-subtle)", background: "rgba(255,255,255,0.015)" }}>
           {[
-            { color: "#f59e0b", name: "Avg Price (HLC/3 SMA5)", body: "The 5-session simple moving average of the typical price — (High + Low + Close) ÷ 3. Unlike a close-only moving average, it weights the full session range, giving a more balanced representation of where price has traded. When close is above avg price, buyers have dominated recent sessions; when below, sellers hold the edge." },
-            { color: "#a78bfa", name: "ROC(5)",                 body: "Rate of Change over 5 sessions: (Close − Close[5]) ÷ Close[5] × 100. Measures the percentage gain or loss over exactly one trading week. Positive = net bullish week; negative = net bearish. Accelerating ROC in the direction of the trend confirms momentum; decelerating ROC warns of fatigue. Extreme readings signal overextension." },
-            { color: "#60a5fa", name: "Avg Delta (5-bar)",      body: "The average pip change per session over the past 5 bars: mean of (Close[i] − Close[i−1]) × 10,000. Positive avg delta = net buying drift; negative = net selling drift. A small avg delta with a large ROC means one or two sessions drove the move. A large avg delta means the directional pressure has been consistent across all five sessions." },
+            { color: "rgba(255,255,255,0.75)", name: "Close",                    body: "The session closing price — the primary reference point for all price comparisons. When close sits above the 5-bar average price, the most recent session closed with buyers in control of the recent range. When below, sellers have held the edge across the look-back window." },
+            { color: "#f59e0b",               name: "Avg Price (HLC/3 SMA5)",   body: "The 5-session simple moving average of the typical price — (High + Low + Close) ÷ 3. Unlike a close-only moving average, it weights the full session range, giving a more balanced representation of where price has traded. When close is above avg price, buyers have dominated recent sessions; when below, sellers hold the edge." },
+            { color: "#60a5fa",               name: "Avg Delta (5-bar)",        body: "The average pip change per session over the past 5 bars: mean of (Close[i] − Close[i−1]) × 10,000. Positive avg delta = net buying drift; negative = net selling drift. A small avg delta with a large ROC means one or two sessions drove the move. A large avg delta means the directional pressure has been consistent across all five sessions." },
+          ].map((item, i, arr) => (
+            <div key={item.name} className="flex-1 flex flex-col gap-1 px-3 py-2.5" style={{ borderRight: i < arr.length - 1 ? "1px solid var(--border-subtle)" : undefined }}>
+              <div className="flex items-center gap-1.5">
+                <span style={{ width: 8, height: 8, borderRadius: "50%", background: item.color, flexShrink: 0 }} />
+                <span className="text-[10px] font-bold" style={{ color: item.color }}>{item.name}</span>
+              </div>
+              <p className="text-[10px] leading-relaxed" style={{ color: "var(--text-secondary)" }}>{item.body}</p>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+const ROC_WINDOW = 20;
+
+function RocPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolean }) {
+  const windowSize = expanded ? 40 : ROC_WINDOW;
+  const maxOffset  = Math.max(0, rows.length - windowSize);
+  const [offset, setOffset] = useState(0);
+
+  const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+
+  const data = useMemo(() => {
+    const start    = rows.length - windowSize - offset;
+    const end      = rows.length - offset;
+    const slice    = rows.slice(Math.max(0, start), end);
+    const startIdx = Math.max(0, start);
+    return slice.map((r, i) => {
+      const rowIdx   = startIdx + i;
+      const parts    = r.date.split("-");
+      const monthIdx = parseInt(parts[1]) - 1;
+      const prevMonth = i > 0 ? parseInt(slice[i-1].date.split("-")[1]) - 1 : -1;
+      const roc5     = rowIdx >= 5 ? ((r.close - rows[rowIdx - 5].close) / rows[rowIdx - 5].close) * 100 : 0;
+      return {
+        idx: i,
+        date: parseInt(parts[2]).toString(),
+        month: monthIdx !== prevMonth ? MONTHS[monthIdx] : "",
+        roc5,
+      };
+    });
+  }, [rows, offset, windowSize]);
+
+  const tickStyle  = { fill: "var(--text-muted)", fontSize: expanded ? 12 : 9 };
+  const yAxisWidth = expanded ? 52 : 38;
+  const analysis   = useMemo(() => expanded ? buildRocAnalysis(rows) : null, [rows, expanded]);
+
+  const rocDomain = useMemo(() => {
+    if (!data.length) return [-1, 1] as const;
+    const abs = Math.max(0.2, ...data.map(d => Math.abs(d.roc5)));
+    return [-(abs * 1.2), abs * 1.2] as const;
+  }, [data]);
+
+  return (
+    <div className="flex flex-col h-full">
+      {expanded && analysis && (
+        <div className="shrink-0 flex" style={{ borderBottom: "1px solid var(--border-subtle)", background: "rgba(255,255,255,0.02)" }}>
+          <div className="flex flex-col items-center justify-center px-5 py-2.5" style={{ flex: "0 0 50%", minWidth: 0, maxWidth: "50%" }}>
+            <ul className="flex flex-col gap-0.5 text-center">
+              {analysis.bullets.map((b, i) => (
+                <li key={i} className="text-[11px]" style={{ color: "var(--text-secondary)" }}>{b}</li>
+              ))}
+            </ul>
+          </div>
+          <div style={{ width: 1, background: "var(--border-medium)", alignSelf: "stretch", margin: "8px 0" }} />
+          <div className="flex-1 flex items-center justify-center px-5 py-2.5">
+            <p className="text-[11px] leading-relaxed text-center" style={{ color: "var(--text-secondary)" }}>{analysis.description}</p>
+          </div>
+        </div>
+      )}
+
+      <div className="flex-1 min-h-0">
+        <ResponsiveContainer width="100%" height="100%">
+          <ComposedChart data={data} margin={{ top: 4, right: 6, bottom: 0, left: 0 }}>
+            <XAxis dataKey="idx" type="number" domain={[0, data.length - 1]} hide />
+            <YAxis tick={tickStyle} tickLine={false} axisLine={false} width={yAxisWidth} domain={rocDomain} tickFormatter={v => v.toFixed(2) + "%"} />
+            <Tooltip
+              cursor={{ fill: "rgba(255,255,255,0.04)" }}
+              position={{ x: 10, y: 10 }}
+              content={({ active, payload }) => {
+                if (!active || !payload?.length) return null;
+                const d = payload[0].payload as typeof data[0];
+                return (
+                  <div className="rounded-lg px-3 py-2 text-[10px]" style={{ background: "var(--bg-panel)", border: "1px solid var(--border-medium)", color: "var(--text-secondary)" }}>
+                    <div style={{ color: d.roc5 >= 0 ? "#60a5fa" : "#f87171" }}>
+                      ROC(5): {d.roc5 >= 0 ? "+" : ""}{d.roc5.toFixed(3)}%
+                    </div>
+                  </div>
+                );
+              }}
+            />
+            <ReferenceLine y={0} stroke="rgba(255,255,255,0.12)" strokeWidth={1} />
+            <Line dataKey="roc5" name="ROC(5)" type="monotone" dot={false} strokeWidth={expanded ? 2 : 1.5} stroke="#60a5fa" isAnimationActive={false} />
+          </ComposedChart>
+        </ResponsiveContainer>
+      </div>
+
+      {maxOffset > 0 && (
+        <input type="range" className="momentum-scroll" min={0} max={maxOffset} value={offset}
+          onChange={e => setOffset(Number(e.target.value))} style={{ direction: "rtl" }} />
+      )}
+
+      <div className="flex flex-col shrink-0 pb-1" style={{ paddingLeft: yAxisWidth, paddingRight: 6 }}>
+        <div className="flex justify-between">
+          {data.map((d, i) => (
+            <span key={i} style={{ fontSize: tickStyle.fontSize, color: "var(--text-muted)" }}>{d.date}</span>
+          ))}
+        </div>
+        <div className="flex">
+          {data.reduce<{ month: string; count: number }[]>((acc, d) => {
+            if (d.month) acc.push({ month: d.month, count: 1 });
+            else if (acc.length) acc[acc.length - 1].count++;
+            return acc;
+          }, []).map((g, i) => (
+            <div key={i} className="text-center" style={{ flex: g.count, fontSize: tickStyle.fontSize, color: "var(--text-muted)", fontWeight: 700 }}>
+              {g.month}
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {expanded && (
+        <div className="shrink-0 flex" style={{ borderTop: "1px solid var(--border-subtle)", background: "rgba(255,255,255,0.015)" }}>
+          {[
+            { color: "#a78bfa", name: "ROC(5)",           body: "Rate of Change over 5 sessions: (Close − Close[5]) ÷ Close[5] × 100. Measures the net percentage gain or loss over exactly one trading week. Positive = net bullish week; negative = net bearish. Accelerating ROC in the direction of the trend confirms momentum; decelerating ROC warns of fatigue. Extreme readings signal overextension." },
+            { color: "#60a5fa", name: "Above Zero",        body: "ROC above zero means this week's close is higher than the close five sessions ago — net buying pressure over the look-back window. The magnitude matters: readings above +0.5% indicate meaningful upside momentum. Readings approaching the 20-session peak rate suggest the move is maturing." },
+            { color: "#f87171", name: "Below Zero",        body: "ROC below zero means this week's close is lower than the close five sessions ago — net selling pressure. Readings below −0.5% indicate meaningful downside momentum. Watch for ROC divergence: if price makes a new low but ROC fails to confirm, bearish momentum may be fading." },
           ].map((item, i, arr) => (
             <div key={item.name} className="flex-1 flex flex-col gap-1 px-3 py-2.5" style={{ borderRight: i < arr.length - 1 ? "1px solid var(--border-subtle)" : undefined }}>
               <div className="flex items-center gap-1.5">
@@ -2963,8 +2953,8 @@ function AtrPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolean
   const windowSize = expanded ? 40 : ATR_WINDOW;
   const maxOffset  = Math.max(0, rows.length - windowSize);
   const [offset, setOffset]       = useState(0);
-  const [showAtr,    setShowAtr]    = useState(true);
-  const [showAtrSma, setShowAtrSma] = useState(true);
+  const showAtr    = true;
+  const showAtrSma = true;
 
   const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 
@@ -3007,11 +2997,6 @@ function AtrPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolean
     return [min - pad, max + pad] as const;
   }, [data, showAtr, showAtrSma]);
 
-  const TOGGLES = [
-    { key: "atr",    label: "ATR(14)",   color: "#a78bfa", on: showAtr,    set: setShowAtr    },
-    { key: "atrSma", label: "ATR SMA20", color: "#f59e0b", on: showAtrSma, set: setShowAtrSma },
-  ] as const;
-
   const latest = data[data.length - 1];
 
   return (
@@ -3031,22 +3016,6 @@ function AtrPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolean
           </div>
         </div>
       )}
-
-      <div className="shrink-0 flex items-center gap-1.5 px-2 pt-1" style={{ paddingLeft: yAxisWidth }}>
-        {TOGGLES.map(({ key, label, color, on, set }) => (
-          <button key={key} onClick={() => set(v => !v)} className="flex items-center gap-1 rounded-full cursor-pointer"
-            style={{
-              fontSize: expanded ? 10 : 8, fontWeight: 700, letterSpacing: "0.06em",
-              padding: expanded ? "2px 8px" : "1px 6px",
-              border: `1px solid ${on ? color + "66" : "rgba(255,255,255,0.10)"}`,
-              background: on ? color + "18" : "transparent",
-              color: on ? color : "var(--text-muted)", transition: "all 0.15s",
-            }}>
-            <span style={{ width: expanded ? 6 : 5, height: expanded ? 6 : 5, borderRadius: "50%", background: on ? color : "var(--text-muted)", flexShrink: 0 }} />
-            {label}
-          </button>
-        ))}
-      </div>
 
       <div className="flex-1 min-h-0">
         <ResponsiveContainer width="100%" height="100%">
@@ -3070,7 +3039,7 @@ function AtrPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolean
               }}
             />
             {showAtrSma && <ReferenceLine y={latest?.atrSma} stroke="rgba(245,158,11,0.15)" strokeDasharray="3 3" />}
-            {showAtr && <Line dataKey="atr" name="ATR(14)" type="monotone" dot={false} strokeWidth={expanded ? 2 : 1.5} stroke="#a78bfa" isAnimationActive={false} />}
+            {showAtr && <Line dataKey="atr" name="ATR(14)" type="monotone" dot={false} strokeWidth={expanded ? 2 : 1.5} stroke="#60a5fa" isAnimationActive={false} />}
             {showAtrSma && <Line dataKey="atrSma" name="ATR SMA20" type="monotone" dot={false} strokeWidth={expanded ? 1.5 : 1} stroke="#f59e0b" isAnimationActive={false} />}
           </ComposedChart>
         </ResponsiveContainer>
@@ -3306,9 +3275,9 @@ function fsPercentileRank(sorted: number[], value: number): number {
 }
 
 function FailureSwingPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolean }) {
-  const [showCdf,   setShowCdf]   = useState(true);
-  const [showToday, setShowToday] = useState(true);
-  const [showPercs, setShowPercs] = useState(true);
+  const showCdf   = true;
+  const showToday = true;
+  const showPercs = true;
 
   const stats = useMemo(() => {
     const all: number[] = [];
@@ -3347,12 +3316,6 @@ function FailureSwingPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?
   const tickStyle  = { fill: "var(--text-muted)", fontSize: expanded ? 11 : 9 } as const;
   const yAxisWidth = expanded ? 40 : 30;
 
-  const TOGGLES = [
-    { key: "cdf",   label: "Distribution", color: "#60a5fa", on: showCdf,   set: setShowCdf   },
-    { key: "today", label: "Today",         color: "#fbbf24", on: showToday, set: setShowToday },
-    { key: "percs", label: "Percentiles",   color: "#94a3b8", on: showPercs, set: setShowPercs },
-  ] as const;
-
   return (
     <div className="flex flex-col h-full">
       {expanded && (
@@ -3379,29 +3342,15 @@ function FailureSwingPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?
         </div>
       )}
 
-      <div className="shrink-0 flex items-center gap-1.5 px-2 pt-1" style={{ paddingLeft: yAxisWidth }}>
-        {TOGGLES.map(({ key, label, color, on, set }) => (
-          <button key={key} onClick={() => set(v => !v)} className="flex items-center gap-1 rounded-full cursor-pointer"
-            style={{
-              fontSize: expanded ? 10 : 8, fontWeight: 700, letterSpacing: "0.06em",
-              padding: expanded ? "2px 8px" : "1px 6px",
-              border: `1px solid ${on ? color + "66" : "rgba(255,255,255,0.10)"}`,
-              background: on ? color + "18" : "transparent",
-              color: on ? color : "var(--text-muted)", transition: "all 0.15s",
-            }}>
-            <span style={{ width: expanded ? 6 : 5, height: expanded ? 6 : 5, borderRadius: "50%", background: on ? color : "var(--text-muted)", flexShrink: 0 }} />
-            {label}
-          </button>
-        ))}
+      <div className="flex-1 min-h-0" style={{ position: "relative" }}>
         {!expanded && todayFs !== null && (
-          <span className="ml-auto text-[8px] tabular-nums pr-1" style={{ color: "var(--text-muted)" }}>
-            Today: <span style={{ color: "#fbbf24", fontWeight: 700 }}>{todayFs}p</span>
-            {todayRank !== null && <> · {todayRank}th pct</>}
-          </span>
+          <div style={{ position: "absolute", top: 6, left: yAxisWidth + 4, zIndex: 10, pointerEvents: "none" }}>
+            <span className="tabular-nums" style={{ fontSize: 10, fontWeight: 600, color: "var(--text-muted)" }}>
+              Today: <span style={{ color: "#f59e0b", fontWeight: 700 }}>{todayFs}p</span>
+              {todayRank !== null && <span> · {todayRank}th pct</span>}
+            </span>
+          </div>
         )}
-      </div>
-
-      <div className="flex-1 min-h-0">
         <ResponsiveContainer width="100%" height="100%">
           <ComposedChart data={cdfData} margin={{ top: 6, right: 8, bottom: 0, left: 0 }}>
             <XAxis
@@ -3446,10 +3395,10 @@ function FailureSwingPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?
             {showToday && todayFs !== null && (
               <ReferenceLine
                 x={todayFs}
-                stroke="#fbbf24"
-                strokeWidth={expanded ? 2 : 1.5}
+                stroke="#f59e0b"
+                strokeWidth={expanded ? 1.5 : 1}
                 strokeOpacity={0.75}
-                label={{ value: `${todayFs}p`, position: "insideTopRight", fontSize: expanded ? 10 : 8, fill: "#fbbf24" }}
+                label={{ value: `${todayFs}p`, position: "insideTopRight", fontSize: expanded ? 10 : 8, fill: "#f59e0b" }}
               />
             )}
             {showCdf && (
@@ -3584,13 +3533,6 @@ function VolatilityPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: 
 
   const latest = data[data.length - 1];
 
-  const TOGGLES = [
-    { key: "close", label: "Close",    color: "rgba(255,255,255,0.75)", on: showClose, set: setShowClose },
-    { key: "upper", label: "BB Upper", color: "#a78bfa",                on: showUpper, set: setShowUpper },
-    { key: "mid",   label: "BB Mid",   color: "#94a3b8",                on: showMid,   set: setShowMid   },
-    { key: "lower", label: "BB Lower", color: "#60a5fa",                on: showLower, set: setShowLower },
-  ] as const;
-
   return (
     <div className="flex flex-col h-full">
       {expanded && analysis && (
@@ -3610,26 +3552,6 @@ function VolatilityPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: 
       )}
 
       {expanded && <div className="shrink-0 flex items-center gap-1.5 px-2 pt-1" style={{ paddingLeft: yAxisWidth }}>
-        {TOGGLES.map(({ key, label, color, on, set }) => (
-          <button
-            key={key}
-            onClick={() => set(v => !v)}
-            className="flex items-center gap-1 rounded-full cursor-pointer"
-            style={{
-              fontSize:      10,
-              fontWeight:    700,
-              letterSpacing: "0.06em",
-              padding:       "2px 8px",
-              border:        `1px solid ${on ? color + "66" : "rgba(255,255,255,0.10)"}`,
-              background:    on ? color + "18" : "transparent",
-              color:         on ? color : "var(--text-muted)",
-              transition:    "all 0.15s",
-            }}
-          >
-            <span style={{ width: 6, height: 6, borderRadius: "50%", background: on ? color : "var(--text-muted)", flexShrink: 0 }} />
-            {label}
-          </button>
-        ))}
         {(
           <button
             onClick={() => {
@@ -3827,12 +3749,10 @@ function buildMomentumAnalysis(rows: SheetRow[]): { headline: string; bullets: s
 
 const MOM_WINDOW = 20;
 
-function MomentumPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolean }) {
+function CciPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolean }) {
   const windowSize = expanded ? 40 : MOM_WINDOW;
   const maxOffset  = Math.max(0, rows.length - windowSize);
-  const [offset, setOffset]   = useState(0);
-  const [showCci, setShowCci] = useState(true);
-  const [showWr,  setShowWr]  = useState(true);
+  const [offset, setOffset] = useState(0);
 
   const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 
@@ -3841,7 +3761,10 @@ function MomentumPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: bo
     const endRow   = rows.length - offset;
     const slice    = rows.slice(startRow, endRow);
     return slice.map((r, i) => {
-      const rowIdx    = startRow + i;
+      const absIdx    = startRow + i;
+      const maStart   = Math.max(0, absIdx - 13);
+      const maSlice   = rows.slice(maStart, absIdx + 1);
+      const cciMa     = maSlice.reduce((s, x) => s + x.cci, 0) / maSlice.length;
       const parts     = r.date.split("-");
       const monthIdx  = parseInt(parts[1]) - 1;
       const prevMonth = i > 0 ? parseInt(slice[i-1].date.split("-")[1]) - 1 : -1;
@@ -3850,29 +3773,20 @@ function MomentumPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: bo
         date:  parseInt(parts[2]).toString(),
         month: monthIdx !== prevMonth ? MONTHS[monthIdx] : "",
         cci:   r.cci,
-        wr:    computeWR(rows, rowIdx),
-        mom:   computeMom10(rows, rowIdx),
+        cciMa,
       };
     });
   }, [rows, offset, windowSize]);
 
   const tickStyle  = { fill: "var(--text-muted)", fontSize: expanded ? 12 : 9 };
   const yAxisWidth = expanded ? 44 : 32;
-  const wrWidth    = expanded ? 44 : 32;
   const analysis   = useMemo(() => expanded ? buildMomentumAnalysis(rows) : null, [rows, expanded]);
 
-  const cciDomain = useMemo(() => {
-    if (!showCci || !data.length) return [-220, 220] as const;
+  const yDomain = useMemo(() => {
+    if (!data.length) return [-220, 220] as const;
     const abs = Math.max(110, ...data.map(d => Math.abs(d.cci)));
     return [-(abs * 1.12), abs * 1.12] as const;
-  }, [data, showCci]);
-
-  const latest = data[data.length - 1];
-
-  const TOGGLES = [
-    { key: "cci", label: "CCI",        color: "#f59e0b", on: showCci, set: setShowCci },
-    { key: "wr",  label: "Williams %R", color: "#60a5fa", on: showWr,  set: setShowWr  },
-  ] as const;
+  }, [data]);
 
   return (
     <div className="flex flex-col h-full">
@@ -3892,37 +3806,11 @@ function MomentumPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: bo
         </div>
       )}
 
-      <div className="shrink-0 flex items-center gap-1.5 px-2 pt-1" style={{ paddingLeft: yAxisWidth }}>
-        {TOGGLES.map(({ key, label, color, on, set }) => (
-          <button
-            key={key}
-            onClick={() => set(v => !v)}
-            className="flex items-center gap-1 rounded-full cursor-pointer"
-            style={{
-              fontSize:      expanded ? 10 : 8,
-              fontWeight:    700,
-              letterSpacing: "0.06em",
-              padding:       expanded ? "2px 8px" : "1px 6px",
-              border:        `1px solid ${on ? color + "66" : "rgba(255,255,255,0.10)"}`,
-              background:    on ? color + "18" : "transparent",
-              color:         on ? color : "var(--text-muted)",
-              transition:    "all 0.15s",
-            }}
-          >
-            <span style={{ width: expanded ? 6 : 5, height: expanded ? 6 : 5, borderRadius: "50%", background: on ? color : "var(--text-muted)", flexShrink: 0 }} />
-            {label}
-          </button>
-        ))}
-      </div>
-
-      <div className="flex-1 min-h-0">
+      <div className="flex-1 min-h-0" style={{ position: "relative" }}>
         <ResponsiveContainer width="100%" height="100%">
-          <ComposedChart data={data} margin={{ top: 4, right: showWr ? wrWidth : 6, bottom: 0, left: 0 }}>
+          <ComposedChart data={data} margin={{ top: 4, right: 6, bottom: 0, left: 0 }}>
             <XAxis dataKey="idx" type="number" domain={[0, data.length - 1]} hide />
-            <YAxis yAxisId="cci" tick={tickStyle} tickLine={false} axisLine={false} width={yAxisWidth} domain={cciDomain} tickFormatter={v => v.toFixed(0)} />
-            {showWr && (
-              <YAxis yAxisId="wr" orientation="right" tick={tickStyle} tickLine={false} axisLine={false} width={wrWidth} domain={[-105, 5]} tickFormatter={v => v.toFixed(0)} />
-            )}
+            <YAxis tick={tickStyle} tickLine={false} axisLine={false} width={yAxisWidth} domain={yDomain} ticks={[-100, 0, 100]} tickFormatter={v => v.toFixed(0)} />
             <Tooltip
               cursor={{ fill: "rgba(255,255,255,0.04)" }}
               position={{ x: 10, y: 10 }}
@@ -3931,47 +3819,30 @@ function MomentumPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: bo
                 const d = payload[0].payload as typeof data[0];
                 return (
                   <div className="rounded-lg px-3 py-2 text-[10px]" style={{ background: "var(--bg-panel)", border: "1px solid var(--border-medium)", color: "var(--text-secondary)" }}>
-                    <div className="font-bold mb-1" style={{ color: d.cci > 100 ? "#a78bfa" : d.cci < -100 ? "#60a5fa" : "var(--text-primary)" }}>
+                    <div className="font-bold" style={{ color: d.cci > 100 ? "#a78bfa" : d.cci < -100 ? "#60a5fa" : "var(--text-primary)" }}>
                       CCI: {d.cci.toFixed(1)}
                     </div>
-                    <div style={{ color: d.wr > -20 ? "#a78bfa" : d.wr < -80 ? "#60a5fa" : "var(--text-secondary)" }}>
-                      %R: {d.wr.toFixed(1)}
-                    </div>
-                    <div style={{ color: d.mom >= 0 ? "#60a5fa" : "#a78bfa" }}>
-                      Mom(10): {d.mom >= 0 ? "+" : ""}{d.mom.toFixed(3)}%
-                    </div>
+                    <div style={{ color: "var(--text-muted)" }}>MA(14): {d.cciMa.toFixed(1)}</div>
                   </div>
                 );
               }}
             />
-            <ReferenceLine yAxisId="cci" y={0}    stroke="rgba(255,255,255,0.10)" strokeWidth={1} />
-            <ReferenceLine yAxisId="cci" y={100}  stroke="rgba(167,139,250,0.28)" strokeWidth={1} strokeDasharray="3 3" />
-            <ReferenceLine yAxisId="cci" y={-100} stroke="rgba(96,165,250,0.28)"  strokeWidth={1} strokeDasharray="3 3" />
-            {showWr && <ReferenceLine yAxisId="wr" y={-20} stroke="rgba(167,139,250,0.22)" strokeWidth={1} strokeDasharray="2 4" />}
-            {showWr && <ReferenceLine yAxisId="wr" y={-80} stroke="rgba(96,165,250,0.22)"  strokeWidth={1} strokeDasharray="2 4" />}
-            {showCci && <Line yAxisId="cci" dataKey="cci" name="CCI"  type="monotone" dot={false} strokeWidth={expanded ? 1.5 : 1} stroke="#f59e0b" isAnimationActive={false} />}
-            {showWr  && <Line yAxisId="wr"  dataKey="wr"  name="%R"   type="monotone" dot={false} strokeWidth={expanded ? 1.5 : 1} stroke="#60a5fa" isAnimationActive={false} />}
+            <ReferenceArea y1={-100} y2={100} fill="rgba(167,139,250,0.07)" ifOverflow="hidden" />
+            <ReferenceLine y={0}    stroke="rgba(255,255,255,0.10)" strokeWidth={1} />
+            <ReferenceLine y={100}  stroke="rgba(167,139,250,0.28)" strokeWidth={1} strokeDasharray="3 3" />
+            <ReferenceLine y={-100} stroke="rgba(96,165,250,0.28)"  strokeWidth={1} strokeDasharray="3 3" />
+            <Line dataKey="cciMa" name="CCI MA(14)" type="monotone" dot={false} strokeWidth={expanded ? 1.5 : 1} stroke="#f59e0b" isAnimationActive={false} />
+            <Line dataKey="cci"   name="CCI"        type="monotone" dot={false} strokeWidth={expanded ? 2 : 1.5} stroke="#60a5fa" isAnimationActive={false} />
           </ComposedChart>
         </ResponsiveContainer>
       </div>
-
-      {latest && expanded && (
-        <div className="shrink-0 flex items-center" style={{ paddingLeft: yAxisWidth + 6, paddingRight: showWr ? wrWidth + 6 : 6, borderTop: "1px solid var(--border-subtle)", paddingTop: 3, paddingBottom: 3 }}>
-          <div className="flex-1 flex flex-col items-center">
-            <span style={{ fontSize: 9, color: "var(--text-muted)", textTransform: "uppercase" as const, letterSpacing: "0.05em" }}>Mom(10)</span>
-            <span style={{ fontSize: 11, fontWeight: 700, color: latest.mom >= 0 ? "#60a5fa" : "#a78bfa" }}>
-              {latest.mom >= 0 ? "+" : ""}{latest.mom.toFixed(3)}%
-            </span>
-          </div>
-        </div>
-      )}
 
       {maxOffset > 0 && (
         <input type="range" className="momentum-scroll" min={0} max={maxOffset} value={offset}
           onChange={e => setOffset(Number(e.target.value))} style={{ direction: "rtl" }} />
       )}
 
-      <div className="flex flex-col shrink-0 pb-1" style={{ paddingLeft: yAxisWidth, paddingRight: showWr ? wrWidth : 6 }}>
+      <div className="flex flex-col shrink-0 pb-1" style={{ paddingLeft: yAxisWidth, paddingRight: 6 }}>
         <div className="flex justify-between">
           {data.map((d, i) => (
             <span key={i} style={{ fontSize: tickStyle.fontSize, color: "var(--text-muted)" }}>{d.date}</span>
@@ -3993,9 +3864,113 @@ function MomentumPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: bo
       {expanded && (
         <div className="shrink-0 flex" style={{ borderTop: "1px solid var(--border-subtle)", background: "rgba(255,255,255,0.015)" }}>
           {[
-            { color: "#f59e0b", name: "CCI",          body: "The Commodity Channel Index measures how far price has deviated from its statistical mean. Above +100 = overbought; below −100 = oversold. Values between ±100 are neutral. CCI is a leading indicator — it turns before price and is particularly useful for spotting momentum extremes and divergences. Extreme readings above ±200 signal unsustainable moves." },
-            { color: "#60a5fa", name: "Williams %R",  body: "Williams %R ranges from −100 (most oversold) to 0 (most overbought). Above −20 = overbought; below −80 = oversold. Like CCI, it measures where the close sits within the recent high-low range. When %R stays near 0 during a rally, it confirms bullish strength. When it fails to reach −20 on bounces in a downtrend, bearish momentum is dominant." },
-            { color: "#60a5fa", name: "Momentum(10)", body: "Momentum(10) measures the percentage change in close price over the past 10 sessions. Positive values mean price is higher than 10 sessions ago (bullish); negative means lower (bearish). Unlike oscillators bounded by 0–100, Momentum is unbounded and captures the raw speed of the move. Accelerating positive Momentum in a rally confirms trend strength; decelerating Momentum warns of a slowdown." },
+            { color: "#60a5fa", name: "CCI",       body: "Commodity Channel Index — measures how far price has deviated from its statistical mean. A leading oscillator: it turns before price and excels at identifying momentum extremes and divergences." },
+            { color: "#f59e0b", name: "CCI MA(14)", body: "14-period simple moving average of CCI. Smooths the raw CCI line so shorter-term noise doesn't obscure the underlying momentum cycle. Crossovers between CCI and its MA often signal early momentum shifts before the raw line reaches an extreme." },
+            { color: "#a78bfa", name: "Levels",     body: "Above +100 = overbought (bullish momentum extreme — consider exits or tightened stops). Below −100 = oversold (bearish extreme — watch for bounce). ±100 to 0 = neutral range. Above +200 or below −200 = unsustainable extreme — high mean-reversion probability." },
+          ].map((item, i, arr) => (
+            <div key={item.name} className="flex-1 flex flex-col gap-1 px-3 py-2.5" style={{ borderRight: i < arr.length - 1 ? "1px solid var(--border-subtle)" : undefined }}>
+              <div className="flex items-center gap-1.5">
+                <span style={{ width: 8, height: 8, borderRadius: "50%", background: item.color, flexShrink: 0 }} />
+                <span className="text-[10px] font-bold" style={{ color: item.color }}>{item.name}</span>
+              </div>
+              <p className="text-[10px] leading-relaxed" style={{ color: "var(--text-secondary)" }}>{item.body}</p>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function WrPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolean }) {
+  const windowSize = expanded ? 40 : MOM_WINDOW;
+  const maxOffset  = Math.max(0, rows.length - windowSize);
+  const [offset, setOffset] = useState(0);
+
+  const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+
+  const data = useMemo(() => {
+    const startRow = Math.max(0, rows.length - windowSize - offset);
+    const endRow   = rows.length - offset;
+    const slice    = rows.slice(startRow, endRow);
+    return slice.map((r, i) => {
+      const rowIdx    = startRow + i;
+      const parts     = r.date.split("-");
+      const monthIdx  = parseInt(parts[1]) - 1;
+      const prevMonth = i > 0 ? parseInt(slice[i-1].date.split("-")[1]) - 1 : -1;
+      return {
+        idx:   i,
+        date:  parseInt(parts[2]).toString(),
+        month: monthIdx !== prevMonth ? MONTHS[monthIdx] : "",
+        wr:    computeWR(rows, rowIdx),
+      };
+    });
+  }, [rows, offset, windowSize]);
+
+  const tickStyle  = { fill: "var(--text-muted)", fontSize: expanded ? 12 : 9 };
+  const yAxisWidth = expanded ? 44 : 32;
+
+  return (
+    <div className="flex flex-col h-full">
+      <div className="flex-1 min-h-0" style={{ position: "relative" }}>
+        <ResponsiveContainer width="100%" height="100%">
+          <ComposedChart data={data} margin={{ top: 4, right: 6, bottom: 0, left: 0 }}>
+            <XAxis dataKey="idx" type="number" domain={[0, data.length - 1]} hide />
+            <YAxis tick={tickStyle} tickLine={false} axisLine={false} width={yAxisWidth} domain={[-105, 5]} ticks={[-80, -50, -20]} tickFormatter={v => v.toFixed(0)} />
+            <Tooltip
+              cursor={{ fill: "rgba(255,255,255,0.04)" }}
+              position={{ x: 10, y: 10 }}
+              content={({ active, payload }) => {
+                if (!active || !payload?.length) return null;
+                const d = payload[0].payload as typeof data[0];
+                return (
+                  <div className="rounded-lg px-3 py-2 text-[10px]" style={{ background: "var(--bg-panel)", border: "1px solid var(--border-medium)", color: "var(--text-secondary)" }}>
+                    <div className="font-bold" style={{ color: d.wr > -20 ? "#a78bfa" : d.wr < -80 ? "#60a5fa" : "var(--text-primary)" }}>
+                      Williams %R: {d.wr.toFixed(1)}
+                    </div>
+                  </div>
+                );
+              }}
+            />
+            <ReferenceArea y1={-80} y2={-20} fill="rgba(255,255,255,0.045)" ifOverflow="hidden" />
+            <ReferenceLine y={-20} stroke="rgba(167,139,250,0.28)" strokeWidth={1} strokeDasharray="3 3" />
+            <ReferenceLine y={-50} stroke="rgba(255,255,255,0.10)" strokeWidth={1} />
+            <ReferenceLine y={-80} stroke="rgba(96,165,250,0.28)"  strokeWidth={1} strokeDasharray="3 3" />
+            <Line dataKey="wr" name="Williams %R" type="monotone" dot={false} strokeWidth={expanded ? 2 : 1.5} stroke="#60a5fa" isAnimationActive={false} />
+          </ComposedChart>
+        </ResponsiveContainer>
+      </div>
+
+      {maxOffset > 0 && (
+        <input type="range" className="momentum-scroll" min={0} max={maxOffset} value={offset}
+          onChange={e => setOffset(Number(e.target.value))} style={{ direction: "rtl" }} />
+      )}
+
+      <div className="flex flex-col shrink-0 pb-1" style={{ paddingLeft: yAxisWidth, paddingRight: 6 }}>
+        <div className="flex justify-between">
+          {data.map((d, i) => (
+            <span key={i} style={{ fontSize: tickStyle.fontSize, color: "var(--text-muted)" }}>{d.date}</span>
+          ))}
+        </div>
+        <div className="flex">
+          {data.reduce<{ month: string; count: number }[]>((acc, d) => {
+            if (d.month) acc.push({ month: d.month, count: 1 });
+            else if (acc.length) acc[acc.length - 1].count++;
+            return acc;
+          }, []).map((g, i) => (
+            <div key={i} className="text-center" style={{ flex: g.count, fontSize: tickStyle.fontSize, color: "var(--text-muted)", fontWeight: 700 }}>
+              {g.month}
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {expanded && (
+        <div className="shrink-0 flex" style={{ borderTop: "1px solid var(--border-subtle)", background: "rgba(255,255,255,0.015)" }}>
+          {[
+            { color: "#60a5fa", name: "Williams %R",  body: "Measures where the most recent close sits within the high-low range of the last 14 bars. Ranges from −100 (close at the period low — most oversold) to 0 (close at the period high — most overbought). A fast, reactive oscillator that leads price turns." },
+            { color: "#a78bfa", name: "Overbought >−20",  body: "When %R rises above −20 the close is in the top 20% of the recent range. In a trending market this confirms bullish strength. In a ranging market or after an extended rally it signals reversal risk — watch for %R to roll back below −20 as an exit trigger." },
+            { color: "#60a5fa", name: "Oversold <−80",    body: "When %R drops below −80 the close is in the bottom 20% of the recent range. Potential mean-reversion bounce zone. Confirmation requires %R crossing back above −80. In a strong downtrend oversold can persist — don't buy the first touch; wait for the cross." },
           ].map((item, i, arr) => (
             <div key={item.name} className="flex-1 flex flex-col gap-1 px-3 py-2.5" style={{ borderRight: i < arr.length - 1 ? "1px solid var(--border-subtle)" : undefined }}>
               <div className="flex items-center gap-1.5">
@@ -4068,16 +4043,22 @@ function PivotPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boole
   const windowSize = expanded ? 40 : PVT_WINDOW;
   const maxOffset  = Math.max(0, rows.length - windowSize);
   const [offset, setOffset]       = useState(0);
-  const [showClose, setShowClose]  = useState(true);
-  const [showR1,    setShowR1]     = useState(true);
-  const [showR2,    setShowR2]     = useState(true);
-  const [showR3,    setShowR3]     = useState(false);
-  const [showS1,    setShowS1]     = useState(true);
-  const [showS2,    setShowS2]     = useState(true);
-  const [showS3,    setShowS3]     = useState(false);
-  const [showCandles, setShowCandles] = useState(false);
+  const showClose   = true;
+  const showR1      = true;
+  const showR2      = true;
+  const showR3      = true;
+  const showS1      = true;
+  const showS2      = true;
+  const showS3      = true;
+  const [showCandles, setShowCandles] = useState(() => localStorage.getItem("tm_pvt_show_candles") === "1");
   const chartRef  = useRef<HTMLDivElement>(null);
   const [chartSize, setChartSize] = useState<{ w: number; h: number } | null>(null);
+
+  useEffect(() => {
+    const handler = () => setShowCandles(localStorage.getItem("tm_pvt_show_candles") === "1");
+    window.addEventListener("tm:pvt-candles-changed", handler);
+    return () => window.removeEventListener("tm:pvt-candles-changed", handler);
+  }, []);
 
   useEffect(() => {
     const el = chartRef.current; if (!el) return;
@@ -4116,16 +4097,6 @@ function PivotPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boole
   const yAxisWidth = expanded ? 60 : 44;
   const analysis   = useMemo(() => expanded ? buildPivotAnalysis(rows) : null, [rows, expanded]);
 
-  const TOGGLES = [
-    { key: "close", label: "Close", color: "rgba(255,255,255,0.75)", on: showClose, set: setShowClose },
-    { key: "r1",    label: "R1",    color: "#fca5a5",                on: showR1,    set: setShowR1    },
-    { key: "r2",    label: "R2",    color: "#a78bfa",                on: showR2,    set: setShowR2    },
-    { key: "r3",    label: "R3",    color: "#ef4444",                on: showR3,    set: setShowR3    },
-    { key: "s1",    label: "S1",    color: "#86efac",                on: showS1,    set: setShowS1    },
-    { key: "s2",    label: "S2",    color: "#60a5fa",                on: showS2,    set: setShowS2    },
-    { key: "s3",    label: "S3",    color: "#22c55e",                on: showS3,    set: setShowS3    },
-  ] as const;
-
   const yDomain = useMemo(() => {
     const vals: number[] = [];
     data.forEach(d => {
@@ -4150,12 +4121,12 @@ function PivotPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boole
         const cur    = rows[rows.length - 1];
         const close  = cur.close;
         const levels = [
-          { label: "R3", value: cur.r3, color: "#ef4444" },
-          { label: "R2", value: cur.r2, color: "#a78bfa" },
-          { label: "R1", value: cur.r1, color: "#fca5a5" },
-          { label: "S1", value: cur.s1, color: "#86efac" },
-          { label: "S2", value: cur.s2, color: "#60a5fa" },
-          { label: "S3", value: cur.s3, color: "#22c55e" },
+          { label: "R3", value: cur.r3, color: "#1e40af" },
+          { label: "R2", value: cur.r2, color: "#3b82f6" },
+          { label: "R1", value: cur.r1, color: "#93c5fd" },
+          { label: "S1", value: cur.s1, color: "#c4b5fd" },
+          { label: "S2", value: cur.s2, color: "#a78bfa" },
+          { label: "S3", value: cur.s3, color: "#7c3aed" },
         ];
         const nearRes = levels.filter(l => l.value > close).sort((a, b) => a.value - b.value)[0];
         const nearSup = levels.filter(l => l.value <= close).sort((a, b) => b.value - a.value)[0];
@@ -4199,30 +4170,15 @@ function PivotPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boole
         );
       })()}
 
-      <div className="shrink-0 flex items-center gap-1.5 px-2 pt-1" style={{ paddingLeft: yAxisWidth }}>
-        {TOGGLES.map(({ key, label, color, on, set }) => (
+      {expanded && <div className="shrink-0 flex items-center gap-1.5 px-2 pt-1" style={{ paddingLeft: yAxisWidth }}>
+        {(
           <button
-            key={key}
-            onClick={() => set(v => !v)}
-            className="flex items-center gap-1 rounded-full cursor-pointer"
-            style={{
-              fontSize:      expanded ? 10 : 8,
-              fontWeight:    700,
-              letterSpacing: "0.06em",
-              padding:       expanded ? "2px 8px" : "1px 6px",
-              border:        `1px solid ${on ? color + "66" : "rgba(255,255,255,0.10)"}`,
-              background:    on ? color + "18" : "transparent",
-              color:         on ? color : "var(--text-muted)",
-              transition:    "all 0.15s",
+            onClick={() => {
+              const next = !showCandles;
+              localStorage.setItem("tm_pvt_show_candles", next ? "1" : "0");
+              setShowCandles(next);
+              window.dispatchEvent(new Event("tm:pvt-candles-changed"));
             }}
-          >
-            <span style={{ width: expanded ? 6 : 5, height: expanded ? 6 : 5, borderRadius: "50%", background: on ? color : "var(--text-muted)", flexShrink: 0 }} />
-            {label}
-          </button>
-        ))}
-        {expanded && (
-          <button
-            onClick={() => setShowCandles(v => !v)}
             className="flex items-center gap-1 rounded-full cursor-pointer"
             style={{
               fontSize: 10,
@@ -4239,7 +4195,7 @@ function PivotPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boole
             {showCandles ? "Candles" : "Line"}
           </button>
         )}
-      </div>
+      </div>}
 
       <div ref={chartRef} className="flex-1 min-h-0" style={{ position: "relative" }}>
         <ResponsiveContainer width="100%" height="100%">
@@ -4265,12 +4221,12 @@ function PivotPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boole
                 );
               }}
             />
-            {showR3    && <Line dataKey="r3"    name="R3"    type="monotone" dot={false} strokeWidth={expanded ? 1.5 : 1} stroke="#ef4444" strokeDasharray="3 2" isAnimationActive={false} />}
-            {showR2    && <Line dataKey="r2"    name="R2"    type="monotone" dot={false} strokeWidth={expanded ? 1.5 : 1} stroke="#a78bfa" strokeDasharray="3 2" isAnimationActive={false} />}
-            {showR1    && <Line dataKey="r1"    name="R1"    type="monotone" dot={false} strokeWidth={expanded ? 1.5 : 1} stroke="#fca5a5" strokeDasharray="3 2" isAnimationActive={false} />}
-            {showS1    && <Line dataKey="s1"    name="S1"    type="monotone" dot={false} strokeWidth={expanded ? 1.5 : 1} stroke="#86efac" strokeDasharray="3 2" isAnimationActive={false} />}
-            {showS2    && <Line dataKey="s2"    name="S2"    type="monotone" dot={false} strokeWidth={expanded ? 1.5 : 1} stroke="#60a5fa" strokeDasharray="3 2" isAnimationActive={false} />}
-            {showS3    && <Line dataKey="s3"    name="S3"    type="monotone" dot={false} strokeWidth={expanded ? 1.5 : 1} stroke="#22c55e" strokeDasharray="3 2" isAnimationActive={false} />}
+            {showR3    && <Line dataKey="r3"    name="R3"    type="monotone" dot={false} strokeWidth={expanded ? 1.5 : 1} stroke="#1e40af" strokeDasharray="3 2" isAnimationActive={false} />}
+            {showR2    && <Line dataKey="r2"    name="R2"    type="monotone" dot={false} strokeWidth={expanded ? 1.5 : 1} stroke="#3b82f6" strokeDasharray="3 2" isAnimationActive={false} />}
+            {showR1    && <Line dataKey="r1"    name="R1"    type="monotone" dot={false} strokeWidth={expanded ? 1.5 : 1} stroke="#93c5fd" strokeDasharray="3 2" isAnimationActive={false} />}
+            {showS1    && <Line dataKey="s1"    name="S1"    type="monotone" dot={false} strokeWidth={expanded ? 1.5 : 1} stroke="#c4b5fd" strokeDasharray="3 2" isAnimationActive={false} />}
+            {showS2    && <Line dataKey="s2"    name="S2"    type="monotone" dot={false} strokeWidth={expanded ? 1.5 : 1} stroke="#a78bfa" strokeDasharray="3 2" isAnimationActive={false} />}
+            {showS3    && <Line dataKey="s3"    name="S3"    type="monotone" dot={false} strokeWidth={expanded ? 1.5 : 1} stroke="#7c3aed" strokeDasharray="3 2" isAnimationActive={false} />}
             {showClose && !showCandles && <Line dataKey="close" name="Close" type="monotone" dot={false} strokeWidth={expanded ? 2 : 1.5} stroke="rgba(255,255,255,0.75)" isAnimationActive={false} />}
           </ComposedChart>
         </ResponsiveContainer>
@@ -4337,8 +4293,8 @@ function PivotPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boole
       {expanded && (
         <div className="shrink-0 flex" style={{ borderTop: "1px solid var(--border-subtle)", background: "rgba(255,255,255,0.015)" }}>
           {[
-            { color: "#ef4444", name: "R1 / R2 / R3", body: "Resistance levels derived from the prior session's high, low, and close. R1 is the first target above the pivot; R2 and R3 mark progressively stronger resistance. A close above any resistance level turns it into new support. R3 is rarely tested in a single session — reaching it signals an exceptionally strong bullish move." },
-            { color: "#60a5fa", name: "S1 / S2 / S3", body: "Support levels below the classic pivot point. S1 is the first demand zone; S2 and S3 are deeper levels that come into play on pronounced selling sessions. A close below any support level turns it into new resistance. S3 violations are typically associated with high-volatility, trend-driven sessions." },
+            { color: "#3b82f6", name: "R1 / R2 / R3", body: "Resistance levels derived from the prior session's high, low, and close. R1 is the first target above the pivot; R2 and R3 mark progressively stronger resistance. A close above any resistance level turns it into new support. R3 is rarely tested in a single session — reaching it signals an exceptionally strong bullish move." },
+            { color: "#a78bfa", name: "S1 / S2 / S3", body: "Support levels below the classic pivot point. S1 is the first demand zone; S2 and S3 are deeper levels that come into play on pronounced selling sessions. A close below any support level turns it into new resistance. S3 violations are typically associated with high-volatility, trend-driven sessions." },
           ].map((item, i, arr) => (
             <div key={item.name} className="flex-1 flex flex-col gap-1 px-3 py-2.5" style={{ borderRight: i < arr.length - 1 ? "1px solid var(--border-subtle)" : undefined }}>
               <div className="flex items-center gap-1.5">
@@ -4407,8 +4363,8 @@ function VolumePanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: bool
   const windowSize = expanded ? 40 : VOL_WINDOW;
   const maxOffset  = Math.max(0, rows.length - windowSize);
   const [offset, setOffset]   = useState(0);
-  const [showVol, setShowVol] = useState(true);
-  const [showSma, setShowSma] = useState(true);
+  const showVol = true;
+  const showSma = true;
 
   const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 
@@ -4452,11 +4408,6 @@ function VolumePanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: bool
     return [0, Math.max(...vals) * 1.15] as const;
   }, [data, showVol, showSma]);
 
-  const TOGGLES = [
-    { key: "vol", label: "Volume",   color: "rgba(255,255,255,0.65)", on: showVol, set: setShowVol },
-    { key: "sma", label: "Vol SMA",  color: "#f59e0b",                on: showSma, set: setShowSma },
-  ] as const;
-
   return (
     <div className="flex flex-col h-full">
       {expanded && analysis && (
@@ -4474,29 +4425,6 @@ function VolumePanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: bool
           </div>
         </div>
       )}
-
-      <div className="shrink-0 flex items-center gap-1.5 px-2 pt-1" style={{ paddingLeft: yAxisWidth }}>
-        {TOGGLES.map(({ key, label, color, on, set }) => (
-          <button
-            key={key}
-            onClick={() => set(v => !v)}
-            className="flex items-center gap-1 rounded-full cursor-pointer"
-            style={{
-              fontSize:      expanded ? 10 : 8,
-              fontWeight:    700,
-              letterSpacing: "0.06em",
-              padding:       expanded ? "2px 8px" : "1px 6px",
-              border:        `1px solid ${on ? color + "66" : "rgba(255,255,255,0.10)"}`,
-              background:    on ? color + "18" : "transparent",
-              color:         on ? color : "var(--text-muted)",
-              transition:    "all 0.15s",
-            }}
-          >
-            <span style={{ width: expanded ? 6 : 5, height: expanded ? 6 : 5, borderRadius: "50%", background: on ? color : "var(--text-muted)", flexShrink: 0 }} />
-            {label}
-          </button>
-        ))}
-      </div>
 
       <div className="flex-1 min-h-0">
         <ResponsiveContainer width="100%" height="100%">
@@ -4582,10 +4510,10 @@ function KeltPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolea
   const windowSize = expanded ? 40 : KELT_WINDOW;
   const maxOffset  = Math.max(0, rows.length - windowSize);
   const [offset, setOffset]           = useState(0);
-  const [showClose,   setShowClose]   = useState(true);
-  const [showUpper,   setShowUpper]   = useState(true);
-  const [showMid,     setShowMid]     = useState(true);
-  const [showLower,   setShowLower]   = useState(true);
+  const showClose   = true;
+  const showUpper   = true;
+  const showMid     = true;
+  const showLower   = true;
   const [showCandles, setShowCandles] = useState(() => localStorage.getItem("tm_kelt_show_candles") === "1");
   const chartRef  = useRef<HTMLDivElement>(null);
   const [chartSize, setChartSize] = useState<{ w: number; h: number } | null>(null);
@@ -4624,13 +4552,6 @@ function KeltPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolea
   const tickStyle  = { fill: "var(--text-muted)", fontSize: expanded ? 12 : 9 };
   const yAxisWidth = expanded ? 60 : 44;
   const analysis   = useMemo(() => expanded ? buildKeltAnalysis(rows) : null, [rows, expanded]);
-
-  const TOGGLES = [
-    { key: "close", label: "Close", color: "rgba(255,255,255,0.7)", on: showClose, set: setShowClose },
-    { key: "upper", label: "Upper", color: "#a78bfa",               on: showUpper, set: setShowUpper },
-    { key: "mid",   label: "Mid",   color: "#94a3b8",               on: showMid,   set: setShowMid   },
-    { key: "lower", label: "Lower", color: "#60a5fa",               on: showLower, set: setShowLower },
-  ] as const;
 
   const yDomain = useMemo(() => {
     const vals: number[] = [];
@@ -4678,29 +4599,8 @@ function KeltPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolea
         </div>
       )}
 
-      {/* Toggle badges */}
-      <div className="shrink-0 flex items-center gap-1.5 px-2 pt-1" style={{ paddingLeft: yAxisWidth }}>
-        {TOGGLES.map(({ key, label, color, on, set }) => (
-          <button
-            key={key}
-            onClick={() => set(v => !v)}
-            className="flex items-center gap-1 rounded-full cursor-pointer"
-            style={{
-              fontSize: expanded ? 10 : 8,
-              fontWeight: 700,
-              letterSpacing: "0.06em",
-              padding: expanded ? "2px 8px" : "1px 6px",
-              border: `1px solid ${on ? color + "66" : "rgba(255,255,255,0.10)"}`,
-              background: on ? color + "18" : "transparent",
-              color: on ? color : "var(--text-muted)",
-              transition: "all 0.15s",
-            }}
-          >
-            <span style={{ width: expanded ? 6 : 5, height: expanded ? 6 : 5, borderRadius: "50%", background: on ? color : "var(--text-muted)", flexShrink: 0 }} />
-            {label}
-          </button>
-        ))}
-        {expanded && (
+      {expanded && <div className="shrink-0 flex items-center gap-1.5 px-2 pt-1" style={{ paddingLeft: yAxisWidth }}>
+        {(
           <button
             onClick={() => {
               const next = !showCandles;
@@ -4724,7 +4624,7 @@ function KeltPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolea
             {showCandles ? "Candles" : "Line"}
           </button>
         )}
-      </div>
+      </div>}
 
       {/* Chart */}
       <div ref={chartRef} className="flex-1 min-h-0" style={{ position: "relative" }}>
@@ -5921,6 +5821,41 @@ export function AnalyticsV3() {
   const momBadge         = makeMomBadge();
   const momBadgeExpanded = makeMomBadge(true);
 
+  const latestWr = useMemo(() =>
+    sheetRows.length > 0 ? computeWR(sheetRows, sheetRows.length - 1) : -50,
+  [sheetRows]);
+  const wrHeadline = sheetRows.length > 0
+    ? (latestWr > -20 ? "Overbought — Reversal Watch"
+      : latestWr < -80 ? "Oversold — Bounce Watch"
+      : `Neutral Zone — %R ${latestWr.toFixed(1)}`)
+    : "";
+  const wrBias: "bullish" | "bearish" | "neutral" = !latestRow ? "neutral"
+    : latestWr > -20 ? "bearish"
+    : latestWr < -80 ? "bullish"
+    : "neutral";
+  const wrScore = useMemo(() => {
+    return Math.round(Math.abs(latestWr + 50) / 50 * 100);
+  }, [latestWr]);
+  const makeWrBadge = (large?: boolean) => (
+    <HoverTooltip tip={`Score ${wrScore}/100 — Williams %R distance from the −50 midpoint. Above −20 = overbought; below −80 = oversold. Current: ${latestWr.toFixed(1)}.`}>
+      <span
+        className={`${large ? "text-[11px]" : "text-[8px]"} font-black uppercase rounded-full`}
+        style={{
+          color:         BIAS_STYLE[wrBias].color,
+          background:    BIAS_STYLE[wrBias].bg,
+          border:        `1px solid ${BIAS_STYLE[wrBias].border}`,
+          boxShadow:     large ? `${BIAS_STYLE[wrBias].glow}, 0 0 16px ${BIAS_STYLE[wrBias].border}` : BIAS_STYLE[wrBias].glow,
+          letterSpacing: "0.10em",
+          padding:       large ? "4px 12px" : "2px 8px",
+          cursor:        "default",
+        }}>
+        {wrBias} {wrScore}
+      </span>
+    </HoverTooltip>
+  );
+  const wrBadge         = makeWrBadge();
+  const wrBadgeExpanded = makeWrBadge(true);
+
   const atrHeadline = sheetRows.length > 0 ? buildAtrAnalysis(sheetRows).headline : "";
   const atrBias = useMemo(() => {
     if (!latestRow || sheetRows.length < 3) return "neutral";
@@ -6048,6 +5983,39 @@ export function AnalyticsV3() {
   );
   const avgpBadge         = makeAvgpBadge();
   const avgpBadgeExpanded = makeAvgpBadge(true);
+
+  const rocHeadline = sheetRows.length > 0 ? buildRocAnalysis(sheetRows).headline : "";
+  const rocBias = useMemo(() => {
+    if (sheetRows.length < 6) return "neutral" as const;
+    const idx  = sheetRows.length - 1;
+    const roc5 = ((sheetRows[idx].close - sheetRows[idx - 5].close) / sheetRows[idx - 5].close) * 100;
+    return roc5 > 0.05 ? "bullish" as const : roc5 < -0.05 ? "bearish" as const : "neutral" as const;
+  }, [sheetRows]);
+  const rocScore = useMemo(() => {
+    if (sheetRows.length < 6) return 0;
+    const idx  = sheetRows.length - 1;
+    const roc5 = Math.abs(((sheetRows[idx].close - sheetRows[idx - 5].close) / sheetRows[idx - 5].close) * 100);
+    return Math.min(100, Math.round(roc5 * 20));
+  }, [sheetRows]);
+  const makeRocBadge = (large?: boolean) => (
+    <HoverTooltip tip={`Score ${rocScore}/100 — ROC(5) magnitude × 20, capped at 100 (±5% ROC = score 100). Higher = stronger 5-session directional momentum. ${sheetRows.length >= 6 ? `ROC(5) is ${(((sheetRows[sheetRows.length - 1].close - sheetRows[sheetRows.length - 6].close) / sheetRows[sheetRows.length - 6].close) * 100).toFixed(3)}%.` : ""}`}>
+      <span
+        className={`${large ? "text-[11px]" : "text-[8px]"} font-black uppercase rounded-full`}
+        style={{
+          color:         BIAS_STYLE[rocBias].color,
+          background:    BIAS_STYLE[rocBias].bg,
+          border:        `1px solid ${BIAS_STYLE[rocBias].border}`,
+          boxShadow:     large ? `${BIAS_STYLE[rocBias].glow}, 0 0 16px ${BIAS_STYLE[rocBias].border}` : BIAS_STYLE[rocBias].glow,
+          letterSpacing: "0.10em",
+          padding:       large ? "4px 12px" : "2px 8px",
+          cursor:        "default",
+        }}>
+        {rocBias} {rocScore}
+      </span>
+    </HoverTooltip>
+  );
+  const rocBadge         = makeRocBadge();
+  const rocBadgeExpanded = makeRocBadge(true);
 
   const rsi14Bias = !latestRow ? "neutral"
     : latestRow.rsi14 >= 65 ? "bearish"
@@ -6237,11 +6205,11 @@ export function AnalyticsV3() {
             gridTemplateAreas:   `
               "sess vol  avgp price"
               "vola macd pvt  kelt"
-              "ma   rsi9 rsi14 mom"
+              "ma   rsi9 rsi14 cci"
               "adx  ichi atr  fsw"
-              "cctx .    .    ."
+              "wr   roc  cctx ."
             `,
-            gridTemplateRows: "repeat(4, 200px) 220px",
+            gridTemplateRows: "repeat(5, 200px)",
             gap:              "10px",
           }}>
             {panelOrder.slice(PINNED_SLOT_COUNT).map((panelId, i) => {
@@ -6255,24 +6223,26 @@ export function AnalyticsV3() {
                   isDragOver={dragOverSlot === slotIdx}
                   containerRef={setPanelRef(slotIdx)}
                   onHeaderMouseDown={e => startPanelDrag(slotIdx, e)}
-                  badge={p.id === "price" ? priceBadge : p.id === "macd" ? macdBadge : p.id === "rsi9" ? rsiBadge : p.id === "rsi14" ? rsi14Badge : p.id === "moving-averages" ? maBadge : p.id === "keltner" ? keltBadge : p.id === "adx" ? adxBadge : p.id === "ichimoku" ? ichiBadge : p.id === "session" ? sessionBadge : p.id === "volume" ? volBadge : p.id === "pivots" ? pivotBadge : p.id === "momentum" ? momBadge : p.id === "volatility" ? volaBadge : p.id === "avg-price" ? avgpBadge : p.id === "atr" ? atrBadge : p.id === "candle-context" ? cctxBadge : undefined}
-                  subtitle={p.id === "price" ? priceHeadline : p.id === "macd" ? macdHeadline : p.id === "rsi9" ? rsiHeadline : p.id === "rsi14" ? rsi14Headline : p.id === "moving-averages" ? maHeadline : p.id === "keltner" ? keltHeadline : p.id === "adx" ? adxHeadline : p.id === "ichimoku" ? ichiHeadline : p.id === "session" ? sessionHeadline : p.id === "volume" ? volHeadline : p.id === "pivots" ? pivotHeadline : p.id === "momentum" ? momHeadline : p.id === "volatility" ? volaHeadline : p.id === "avg-price" ? avgpHeadline : p.id === "atr" ? atrHeadline : p.id === "failure-swing" ? fswHeadline : p.id === "candle-context" ? cctxHeadline : undefined}
+                  badge={p.id === "price" ? priceBadge : p.id === "macd" ? macdBadge : p.id === "rsi9" ? rsiBadge : p.id === "rsi14" ? rsi14Badge : p.id === "moving-averages" ? maBadge : p.id === "keltner" ? keltBadge : p.id === "adx" ? adxBadge : p.id === "ichimoku" ? ichiBadge : p.id === "session" ? sessionBadge : p.id === "volume" ? volBadge : p.id === "pivots" ? pivotBadge : p.id === "cci" ? momBadge : p.id === "wr" ? wrBadge : p.id === "volatility" ? volaBadge : p.id === "avg-price" ? avgpBadge : p.id === "roc" ? rocBadge : p.id === "atr" ? atrBadge : p.id === "candle-context" ? cctxBadge : undefined}
+                  subtitle={p.id === "price" ? priceHeadline : p.id === "macd" ? macdHeadline : p.id === "rsi9" ? rsiHeadline : p.id === "rsi14" ? rsi14Headline : p.id === "moving-averages" ? maHeadline : p.id === "keltner" ? keltHeadline : p.id === "adx" ? adxHeadline : p.id === "ichimoku" ? ichiHeadline : p.id === "session" ? sessionHeadline : p.id === "volume" ? volHeadline : p.id === "pivots" ? pivotHeadline : p.id === "cci" ? momHeadline : p.id === "wr" ? wrHeadline : p.id === "volatility" ? volaHeadline : p.id === "avg-price" ? avgpHeadline : p.id === "roc" ? rocHeadline : p.id === "atr" ? atrHeadline : p.id === "failure-swing" ? fswHeadline : p.id === "candle-context" ? cctxHeadline : undefined}
                   onExpand={() => setExpanded({ id: p.id, label: p.label, sub: p.sub })}>
                   {p.id === "price"           && <PricePanelBody        rows={sheetRows} />}
-                  {p.id === "macd"            && <MacdPanelBody         rows={sheetRows} />}
-                  {p.id === "rsi9"            && <RsiPanelBody          rows={sheetRows} />}
-                  {p.id === "rsi14"           && <Rsi14PanelBody        rows={sheetRows} />}
-                  {p.id === "moving-averages" && <MaPanelBody           rows={sheetRows} />}
-                  {p.id === "keltner"         && <KeltPanelBody         rows={sheetRows} />}
-                  {p.id === "adx"             && <AdxPanelBody          rows={sheetRows} />}
+                  {p.id === "macd"            && <MacdPanelBody         rows={ichiRows.length > 0 ? ichiRows : sheetRows} />}
+                  {p.id === "rsi9"            && <RsiPanelBody          rows={ichiRows.length > 0 ? ichiRows : sheetRows} />}
+                  {p.id === "rsi14"           && <Rsi14PanelBody        rows={ichiRows.length > 0 ? ichiRows : sheetRows} />}
+                  {p.id === "moving-averages" && <MaPanelBody           rows={ichiRows.length > 0 ? ichiRows : sheetRows} />}
+                  {p.id === "keltner"         && <KeltPanelBody         rows={ichiRows.length > 0 ? ichiRows : sheetRows} />}
+                  {p.id === "adx"             && <AdxPanelBody          rows={ichiRows.length > 0 ? ichiRows : sheetRows} />}
                   {p.id === "ichimoku"        && <IchiPanelBody         rows={ichiRows.length > 0 ? ichiRows : sheetRows} />}
                   {p.id === "session"         && <SessionPanelBody      rows={sheetRows} />}
                   {p.id === "volume"          && <VolumePanelBody       rows={sheetRows} />}
-                  {p.id === "pivots"          && <PivotPanelBody        rows={sheetRows} />}
-                  {p.id === "momentum"        && <MomentumPanelBody     rows={sheetRows} />}
-                  {p.id === "volatility"      && <VolatilityPanelBody   rows={sheetRows} />}
-                  {p.id === "avg-price"       && <AvgPricePanelBody     rows={sheetRows} />}
-                  {p.id === "atr"             && <AtrPanelBody          rows={sheetRows} />}
+                  {p.id === "pivots"          && <PivotPanelBody        rows={ichiRows.length > 0 ? ichiRows : sheetRows} />}
+                  {p.id === "cci"             && <CciPanelBody          rows={ichiRows.length > 0 ? ichiRows : sheetRows} />}
+                  {p.id === "wr"              && <WrPanelBody           rows={ichiRows.length > 0 ? ichiRows : sheetRows} />}
+                  {p.id === "volatility"      && <VolatilityPanelBody   rows={ichiRows.length > 0 ? ichiRows : sheetRows} />}
+                  {p.id === "avg-price"       && <AvgPricePanelBody     rows={ichiRows.length > 0 ? ichiRows : sheetRows} />}
+                  {p.id === "roc"             && <RocPanelBody          rows={ichiRows.length > 0 ? ichiRows : sheetRows} />}
+                  {p.id === "atr"             && <AtrPanelBody          rows={ichiRows.length > 0 ? ichiRows : sheetRows} />}
                   {p.id === "failure-swing"   && <FailureSwingPanelBody  rows={sheetRows} />}
                   {p.id === "ai-chat"         && <AiChatPanelBody        rows={sheetRows} />}
                   {p.id === "candle-context"  && <CandleContextPanelBody rows={sheetRows} />}
@@ -6284,23 +6254,25 @@ export function AnalyticsV3() {
       </div>
 
       {expanded && (
-        <PanelModal panel={expanded} onClose={close} badge={expanded.id === "ai-synthesis" ? aisBadgeExpanded : expanded.id === "macd" ? macdBadgeExpanded : expanded.id === "price" ? priceBadgeExpanded : expanded.id === "rsi9" ? rsiBadgeExpanded : expanded.id === "rsi14" ? rsi14BadgeExpanded : expanded.id === "moving-averages" ? maBadgeExpanded : expanded.id === "keltner" ? keltBadgeExpanded : expanded.id === "adx" ? adxBadgeExpanded : expanded.id === "ichimoku" ? ichiBadgeExpanded : expanded.id === "session" ? sessionBadgeExpanded : expanded.id === "volume" ? volBadgeExpanded : expanded.id === "pivots" ? pivotBadgeExpanded : expanded.id === "momentum" ? momBadgeExpanded : expanded.id === "volatility" ? volaBadgeExpanded : expanded.id === "avg-price" ? avgpBadgeExpanded : expanded.id === "atr" ? atrBadgeExpanded : expanded.id === "candle-context" ? cctxBadgeExpanded : undefined} subtitle={expanded.id === "ai-synthesis" ? aisHeadline : expanded.id === "macd" ? macdHeadline : expanded.id === "price" ? priceHeadline : expanded.id === "rsi9" ? rsiHeadline : expanded.id === "rsi14" ? rsi14Headline : expanded.id === "moving-averages" ? maHeadline : expanded.id === "keltner" ? keltHeadline : expanded.id === "adx" ? adxHeadline : expanded.id === "ichimoku" ? ichiHeadline : expanded.id === "session" ? sessionHeadline : expanded.id === "volume" ? volHeadline : expanded.id === "pivots" ? pivotHeadline : expanded.id === "momentum" ? momHeadline : expanded.id === "volatility" ? volaHeadline : expanded.id === "avg-price" ? avgpHeadline : expanded.id === "atr" ? atrHeadline : expanded.id === "failure-swing" ? fswHeadline : expanded.id === "candle-context" ? cctxHeadline : undefined}>
+        <PanelModal panel={expanded} onClose={close} badge={expanded.id === "ai-synthesis" ? aisBadgeExpanded : expanded.id === "macd" ? macdBadgeExpanded : expanded.id === "price" ? priceBadgeExpanded : expanded.id === "rsi9" ? rsiBadgeExpanded : expanded.id === "rsi14" ? rsi14BadgeExpanded : expanded.id === "moving-averages" ? maBadgeExpanded : expanded.id === "keltner" ? keltBadgeExpanded : expanded.id === "adx" ? adxBadgeExpanded : expanded.id === "ichimoku" ? ichiBadgeExpanded : expanded.id === "session" ? sessionBadgeExpanded : expanded.id === "volume" ? volBadgeExpanded : expanded.id === "pivots" ? pivotBadgeExpanded : expanded.id === "cci" ? momBadgeExpanded : expanded.id === "wr" ? wrBadgeExpanded : expanded.id === "volatility" ? volaBadgeExpanded : expanded.id === "avg-price" ? avgpBadgeExpanded : expanded.id === "roc" ? rocBadgeExpanded : expanded.id === "atr" ? atrBadgeExpanded : expanded.id === "candle-context" ? cctxBadgeExpanded : undefined} subtitle={expanded.id === "ai-synthesis" ? aisHeadline : expanded.id === "macd" ? macdHeadline : expanded.id === "price" ? priceHeadline : expanded.id === "rsi9" ? rsiHeadline : expanded.id === "rsi14" ? rsi14Headline : expanded.id === "moving-averages" ? maHeadline : expanded.id === "keltner" ? keltHeadline : expanded.id === "adx" ? adxHeadline : expanded.id === "ichimoku" ? ichiHeadline : expanded.id === "session" ? sessionHeadline : expanded.id === "volume" ? volHeadline : expanded.id === "pivots" ? pivotHeadline : expanded.id === "cci" ? momHeadline : expanded.id === "wr" ? wrHeadline : expanded.id === "volatility" ? volaHeadline : expanded.id === "avg-price" ? avgpHeadline : expanded.id === "roc" ? rocHeadline : expanded.id === "atr" ? atrHeadline : expanded.id === "failure-swing" ? fswHeadline : expanded.id === "candle-context" ? cctxHeadline : undefined}>
           {expanded.id === "ai-synthesis"    && <AiSynthesisPanelBody result={analysisResult} expanded />}
           {expanded.id === "price"           && <PricePanelBody      rows={sheetRows} expanded />}
-          {expanded.id === "macd"            && <MacdPanelBody       rows={sheetRows} expanded />}
-          {expanded.id === "rsi9"            && <RsiPanelBody        rows={sheetRows} expanded />}
-          {expanded.id === "rsi14"           && <Rsi14PanelBody      rows={sheetRows} expanded />}
-          {expanded.id === "moving-averages" && <MaPanelBody         rows={sheetRows} expanded />}
-          {expanded.id === "keltner"         && <KeltPanelBody       rows={sheetRows} expanded />}
-          {expanded.id === "adx"             && <AdxPanelBody        rows={sheetRows} expanded />}
+          {expanded.id === "macd"            && <MacdPanelBody       rows={ichiRows.length > 0 ? ichiRows : sheetRows} expanded />}
+          {expanded.id === "rsi9"            && <RsiPanelBody        rows={ichiRows.length > 0 ? ichiRows : sheetRows} expanded />}
+          {expanded.id === "rsi14"           && <Rsi14PanelBody      rows={ichiRows.length > 0 ? ichiRows : sheetRows} expanded />}
+          {expanded.id === "moving-averages" && <MaPanelBody         rows={ichiRows.length > 0 ? ichiRows : sheetRows} expanded />}
+          {expanded.id === "keltner"         && <KeltPanelBody       rows={ichiRows.length > 0 ? ichiRows : sheetRows} expanded />}
+          {expanded.id === "adx"             && <AdxPanelBody        rows={ichiRows.length > 0 ? ichiRows : sheetRows} expanded />}
           {expanded.id === "ichimoku"        && <IchiPanelBody       rows={ichiRows.length > 0 ? ichiRows : sheetRows} expanded />}
           {expanded.id === "session"         && <SessionPanelBody    rows={sheetRows} expanded />}
           {expanded.id === "volume"          && <VolumePanelBody     rows={sheetRows} expanded />}
-          {expanded.id === "pivots"          && <PivotPanelBody      rows={sheetRows} expanded />}
-          {expanded.id === "momentum"        && <MomentumPanelBody   rows={sheetRows} expanded />}
-          {expanded.id === "volatility"      && <VolatilityPanelBody rows={sheetRows} expanded />}
-          {expanded.id === "avg-price"       && <AvgPricePanelBody   rows={sheetRows} expanded />}
-          {expanded.id === "atr"             && <AtrPanelBody             rows={sheetRows} expanded />}
+          {expanded.id === "pivots"          && <PivotPanelBody      rows={ichiRows.length > 0 ? ichiRows : sheetRows} expanded />}
+          {expanded.id === "cci"             && <CciPanelBody        rows={ichiRows.length > 0 ? ichiRows : sheetRows} expanded />}
+          {expanded.id === "wr"              && <WrPanelBody         rows={ichiRows.length > 0 ? ichiRows : sheetRows} expanded />}
+          {expanded.id === "volatility"      && <VolatilityPanelBody rows={ichiRows.length > 0 ? ichiRows : sheetRows} expanded />}
+          {expanded.id === "avg-price"       && <AvgPricePanelBody   rows={ichiRows.length > 0 ? ichiRows : sheetRows} expanded />}
+          {expanded.id === "roc"             && <RocPanelBody        rows={ichiRows.length > 0 ? ichiRows : sheetRows} expanded />}
+          {expanded.id === "atr"             && <AtrPanelBody             rows={ichiRows.length > 0 ? ichiRows : sheetRows} expanded />}
           {expanded.id === "failure-swing"   && <FailureSwingPanelBody   rows={sheetRows} expanded />}
           {expanded.id === "ai-chat"         && <AiChatPanelBody         rows={sheetRows} expanded />}
           {expanded.id === "candle-context"  && <CandleContextPanelBody  rows={sheetRows} expanded />}

@@ -267,6 +267,7 @@ pub fn compute(raw: Vec<RawCandle>) -> Vec<CandleV3> {
     let ema9_v   = ema_series(&closes,   9);
     let ema20_v  = ema_series(&closes,  20);
     let ema50_v  = ema_series(&closes,  50);
+    let ema100_v = ema_series(&closes, 100);
     let ema200_v = ema_series(&closes, 200);
     let rsi9_v   = rsi_series(&closes,   9);
     let rsi14_v  = rsi_series(&closes,  14);
@@ -325,6 +326,7 @@ pub fn compute(raw: Vec<RawCandle>) -> Vec<CandleV3> {
         ema9:           ema9_v[i],
         ema20:          ema20_v[i],
         ema50:          ema50_v[i],
+        ema100:         ema100_v[i],
         ema200:         ema200_v[i],
         macd:           macd_v[i],
         macd_signal:    macd_sig_v[i],
