@@ -161,8 +161,8 @@ const PANELS: { id: string; area: string; span?: number; label: string; sub: str
   { id: "volatility",      area: "vola",  label: "Bollinger",                         sub: "Group 4 — Hist Vol · Bollinger Bands · BB %B" },
   { id: "atr",             area: "atr",   label: "ATR",                        sub: "Group 15 — ATR(14) · ATR SMA(20)" },
   { id: "macd",            area: "macd",  label: "MACD",                       sub: "Group 7 — MACD · Signal · Histogram" },
-  { id: "moving-averages", area: "ma",    label: "MOVING\nAVERAGES",           sub: "Group 6 — SMA(20/50/200) · EMA(9/12/20/26/50/200)" },
-  { id: "pivots",          area: "pvt",   label: "Pivot Points",               sub: "Group 8 — R3/R2/R1 · S1/S2/S3" },
+  { id: "moving-averages", area: "ma",    label: "EMAs",           sub: "Group 6 — SMA(20/50/200) · EMA(9/12/20/26/50/200)" },
+  { id: "pivots",          area: "pvt",   label: "Pivots",               sub: "Group 8 — R3/R2/R1 · S1/S2/S3" },
   { id: "keltner",         area: "kelt",  label: "Keltner",                    sub: "Group 9 — Kelt Upper · Mid · Lower" },
   { id: "rsi9",            area: "rsi9",  label: "RSI (9)",                    sub: "Group 10 — RSI(9) · StochRSI %K/%D" },
   { id: "rsi14",           area: "rsi14", label: "RSI (14)",                   sub: "Group 11 — RSI(14) · RSI Trend" },
@@ -170,9 +170,10 @@ const PANELS: { id: string; area: string; span?: number; label: string; sub: str
   { id: "wr",              area: "wr",    label: "Williams %R",                sub: "Group 12b — Williams %R" },
   { id: "adx",             area: "adx",   label: "ADX",                        sub: "Group 13 — +DI · −DI · DX · ADX" },
   { id: "ichimoku",        area: "ichi",  label: "Ichimoku",                   sub: "Group 14 — Tenkan · Kijun · Senkou · Chikou" },
-  { id: "failure-swing",   area: "fsw",   label: "FAILURE\nSWING",             sub: "RSI top/bottom failure swing pattern" },
+  { id: "failure-swing",   area: "fsw",   label: "FAILURE\nSWING",             sub: "" },
   { id: "ai-chat",         area: "aic",   label: "AI\nCHAT",                   sub: "Ask Claude about the current setup" },
   { id: "candle-context",  area: "cctx",  label: "CANDLE\nCONTEXT",            sub: "Last 5 candles · Pattern recognition" },
+  { id: "market-structure", area: "mstr", label: "MARKET\nSTRUCTURE",           sub: "" },
 ];
 
 
@@ -189,7 +190,7 @@ const SLOT_AREAS = [
   "vola","macd","pvt","kelt",  // row 2
   "ma","rsi9","rsi14","cci",   // row 3
   "adx","ichi","atr","fsw",    // row 4
-  "wr","roc","cctx",           // row 5
+  "wr","roc","cctx","mstr",    // row 5
 ] as const;
 
 const INITIAL_PANEL_ORDER: string[] = SLOT_AREAS.map(area =>
@@ -2048,11 +2049,11 @@ function IchiPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolea
       } else if (showClose && d.close != null) {
         vals.push(d.close);
       }
-      if (showTenkan  && d.tenkan  != null) vals.push(d.tenkan);
-      if (showKijun   && d.kijun   != null) vals.push(d.kijun);
-      if (showSenkouA && d.senkouA != null) vals.push(d.senkouA);
-      if (showSenkouB && d.senkouB != null) vals.push(d.senkouB);
-      if (showChikou  && d.chikou  != null) vals.push(d.chikou);
+      if (showTenkan  && d.tenkan  != null && d.tenkan  !== 0) vals.push(d.tenkan);
+      if (showKijun   && d.kijun   != null && d.kijun   !== 0) vals.push(d.kijun);
+      if (showSenkouA && d.senkouA != null && d.senkouA !== 0) vals.push(d.senkouA);
+      if (showSenkouB && d.senkouB != null && d.senkouB !== 0) vals.push(d.senkouB);
+      if (showChikou  && d.chikou  != null && d.chikou  !== 0) vals.push(d.chikou);
     });
     if (!vals.length) return ["auto", "auto"] as const;
     const min = Math.min(...vals);
@@ -2113,7 +2114,22 @@ function IchiPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolea
           <ComposedChart data={data} margin={{ top: 4, right: 6, bottom: 0, left: 0 }}>
             <XAxis dataKey="idx" type="number" domain={[0, totalPoints - 1]} hide />
             <YAxis tick={tickStyle} tickLine={false} axisLine={false} width={yAxisWidth} domain={yDomain} tickFormatter={v => v.toFixed(4)} />
-            <Tooltip content={<MaTooltip />} cursor={{ fill: "rgba(255,255,255,0.04)" }} position={{ x: 10, y: 10 }} />
+            <Tooltip
+              cursor={{ fill: "rgba(255,255,255,0.04)" }}
+              position={{ x: 10, y: 10 }}
+              content={({ active, payload }) => {
+                if (!active || !payload?.length) return null;
+                const filtered = showCandles ? payload.filter(p => p.name !== "Close") : payload;
+                if (!filtered.length) return null;
+                return (
+                  <div style={{ background: "var(--bg-panel-alt)", border: "1px solid var(--border-medium)", borderRadius: 8, padding: "6px 10px", fontSize: 10 }}>
+                    {filtered.map(p => (
+                      <div key={p.name} style={{ color: p.color }}>{p.name}: {(p.value as number).toFixed(5)}</div>
+                    ))}
+                  </div>
+                );
+              }}
+            />
             {/* Senkou spans — dashed */}
             {showSenkouB && <Line dataKey="senkouB" name="Senkou B" type="monotone" dot={false} strokeWidth={expanded ? 1.5 : 1} stroke="#a78bfa" strokeDasharray="3 2" isAnimationActive={false} connectNulls={false} />}
             {showSenkouA && <Line dataKey="senkouA" name="Senkou A" type="monotone" dot={false} strokeWidth={expanded ? 1.5 : 1} stroke="#60a5fa" strokeDasharray="3 2" isAnimationActive={false} connectNulls={false} />}
@@ -3343,14 +3359,6 @@ function FailureSwingPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?
       )}
 
       <div className="flex-1 min-h-0" style={{ position: "relative" }}>
-        {!expanded && todayFs !== null && (
-          <div style={{ position: "absolute", top: 6, left: yAxisWidth + 4, zIndex: 10, pointerEvents: "none" }}>
-            <span className="tabular-nums" style={{ fontSize: 10, fontWeight: 600, color: "var(--text-muted)" }}>
-              Today: <span style={{ color: "#f59e0b", fontWeight: 700 }}>{todayFs}p</span>
-              {todayRank !== null && <span> · {todayRank}th pct</span>}
-            </span>
-          </div>
-        )}
         <ResponsiveContainer width="100%" height="100%">
           <ComposedChart data={cdfData} margin={{ top: 6, right: 8, bottom: 0, left: 0 }}>
             <XAxis
@@ -3398,7 +3406,7 @@ function FailureSwingPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?
                 stroke="#f59e0b"
                 strokeWidth={expanded ? 1.5 : 1}
                 strokeOpacity={0.75}
-                label={{ value: `${todayFs}p`, position: "insideTopRight", fontSize: expanded ? 10 : 8, fill: "#f59e0b" }}
+                label={expanded ? { value: `${todayFs}p`, position: "insideTopRight", fontSize: 10, fill: "#f59e0b" } : undefined}
               />
             )}
             {showCdf && (
@@ -3424,7 +3432,7 @@ function FailureSwingPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?
             { label: "p50",    value: `${p50} pips`, color: "#94a3b8" },
             { label: "p75",    value: `${p75} pips`, color: "#60a5fa" },
             { label: "p90",    value: `${p90} pips`, color: "#a78bfa" },
-            ...(todayFs !== null ? [{ label: "Today", value: `${todayFs}p · ${todayRank}th`, color: "#fbbf24" }] : []),
+            ...(todayFs !== null ? [{ label: "Today", value: `${todayFs}p · ${todayRank}th`, color: "#f59e0b" }] : []),
           ].map((m, i) => (
             <div key={i} className="flex-1 flex flex-col items-center">
               <span style={{ fontSize: 8, color: "var(--text-muted)", textTransform: "uppercase" as const, letterSpacing: "0.05em" }}>{m.label}</span>
@@ -3439,6 +3447,348 @@ function FailureSwingPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?
           {[
             { color: "#60a5fa", name: "Failure Swing CDF", body: "The Cumulative Distribution Function plots the probability that a failure swing is ≤ a given pip value. Find any pip value on the x-axis, trace up to the blue line, then read the y-axis — that percentage of qualifying sessions had a failure swing at or below that level. A steep early rise means most failure swings are small and clustered near zero. A gradual slope indicates a wide distribution — price regularly makes large intra-day wicks before reversing." },
             { color: "#94a3b8", name: "Percentile Bands",  body: "Dashed lines mark the 25th, 50th (median), 75th, and 90th percentiles. The 75th percentile is the most actionable reference: it separates routine intra-day noise from meaningful rejection. When the yellow Today line sits above the 75th percentile the market is showing above-average intra-candle rejection. Above the 90th marks an extreme session. Below the 50th is a quiet, low-conviction day with little directional conviction inside the candle." },
+          ].map((item, i, arr) => (
+            <div key={item.name} className="flex-1 flex flex-col gap-1 px-3 py-2.5" style={{ borderRight: i < arr.length - 1 ? "1px solid var(--border-subtle)" : undefined }}>
+              <div className="flex items-center gap-1.5">
+                <span style={{ width: 8, height: 8, borderRadius: "50%", background: item.color, flexShrink: 0 }} />
+                <span className="text-[10px] font-bold" style={{ color: item.color }}>{item.name}</span>
+              </div>
+              <p className="text-[10px] leading-relaxed" style={{ color: "var(--text-secondary)" }}>{item.body}</p>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Market Structure ─────────────────────────────────────────────────────────
+const MS_WINDOW   = 20;
+const MS_LOOKBACK = 3;
+
+type MsSwing = { idx: number; type: "SH" | "SL"; price: number };
+type MsEvent = { idx: number; type: "BOS" | "CHOCH"; direction: "bull" | "bear" };
+
+function computeMarketStructure(rows: SheetRow[], N = MS_LOOKBACK): {
+  swings: MsSwing[]; events: MsEvent[]; state: "Bullish" | "Bearish" | "Range";
+} {
+  if (rows.length < N * 2 + 1) return { swings: [], events: [], state: "Range" };
+  const swings: MsSwing[] = [];
+  for (let i = N; i < rows.length - N; i++) {
+    let sh = true, sl = true;
+    for (let k = 1; k <= N; k++) {
+      if (rows[i - k].high >= rows[i].high || rows[i + k].high >= rows[i].high) sh = false;
+      if (rows[i - k].low  <= rows[i].low  || rows[i + k].low  <= rows[i].low)  sl = false;
+    }
+    if (sh) swings.push({ idx: i, type: "SH", price: rows[i].high });
+    if (sl) swings.push({ idx: i, type: "SL", price: rows[i].low  });
+  }
+  swings.sort((a, b) => a.idx - b.idx);
+  const SHs = swings.filter(s => s.type === "SH");
+  const SLs = swings.filter(s => s.type === "SL");
+  let state: "Bullish" | "Bearish" | "Range" = "Range";
+  if (SHs.length >= 2 && SLs.length >= 2) {
+    const hh = SHs[SHs.length - 1].price > SHs[SHs.length - 2].price;
+    const hl = SLs[SLs.length - 1].price > SLs[SLs.length - 2].price;
+    const lh = SHs[SHs.length - 1].price < SHs[SHs.length - 2].price;
+    const ll = SLs[SLs.length - 1].price < SLs[SLs.length - 2].price;
+    if (hh && hl)      state = "Bullish";
+    else if (lh && ll) state = "Bearish";
+  }
+  const events: MsEvent[] = [];
+  let trend: "bull" | "bear" | null = null;
+  let lastSH: MsSwing | null = null;
+  let lastSL: MsSwing | null = null;
+  for (const s of swings) {
+    if (s.type === "SH") {
+      if (lastSH !== null && s.price > lastSH.price) {
+        events.push({ idx: s.idx, type: trend === "bear" ? "CHOCH" : "BOS", direction: "bull" });
+        trend = "bull";
+      }
+      lastSH = s;
+    } else {
+      if (lastSL !== null && s.price < lastSL.price) {
+        events.push({ idx: s.idx, type: trend === "bull" ? "CHOCH" : "BOS", direction: "bear" });
+        trend = "bear";
+      }
+      lastSL = s;
+    }
+  }
+  return { swings, events, state };
+}
+
+function buildMarketStructureAnalysis(rows: SheetRow[]): { bullets: string[]; description: string } {
+  const { swings, events, state } = computeMarketStructure(rows);
+  const SHs      = swings.filter(s => s.type === "SH");
+  const SLs      = swings.filter(s => s.type === "SL");
+  const lastEv   = events[events.length - 1];
+  const hhhl     = SHs.length >= 2 && SLs.length >= 2
+    ? `HH: ${SHs[SHs.length-1].price > SHs[SHs.length-2].price ? "Yes" : "No"} · HL: ${SLs[SLs.length-1].price > SLs[SLs.length-2].price ? "Yes" : "No"}`
+    : "Insufficient swing data";
+  const bullets = [
+    `State: ${state}`,
+    `Swing Highs: ${SHs.length}  ·  Swing Lows: ${SLs.length}`,
+    hhhl,
+    lastEv ? `Last signal: ${lastEv.type} ${lastEv.direction === "bull" ? "↑ Bullish" : "↓ Bearish"}` : "No BOS / CHOCH detected",
+  ];
+  const description =
+    state === "Bullish"
+      ? "Price is forming higher highs and higher lows — classic bullish market structure. Smart money is accumulating at each pullback into support. Look for BOS signals to confirm continuation."
+      : state === "Bearish"
+      ? "Price is forming lower highs and lower lows — classic bearish market structure. Distribution is occurring at each rally into resistance. BOS to the downside confirms continuation."
+      : "No consistent pattern of higher highs/lows or lower highs/lows. Market is in a ranging structure — avoid momentum bias and wait for a structural break before committing to a direction.";
+  return { bullets, description };
+}
+
+function MarketStructurePanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolean }) {
+  const windowSize = expanded ? 40 : MS_WINDOW;
+  const maxOffset  = Math.max(0, rows.length - windowSize);
+  const [offset, setOffset] = useState(0);
+  const chartRef   = useRef<HTMLDivElement>(null);
+  const [chartSize, setChartSize] = useState<{ w: number; h: number } | null>(null);
+
+  useEffect(() => {
+    const el = chartRef.current; if (!el) return;
+    const obs = new ResizeObserver(entries => {
+      const r = entries[0].contentRect;
+      setChartSize({ w: r.width, h: r.height });
+    });
+    obs.observe(el); return () => obs.disconnect();
+  }, []);
+
+  const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+  const structure = useMemo(() => computeMarketStructure(rows), [rows]);
+
+  const data = useMemo(() => {
+    const start = rows.length - windowSize - offset;
+    const end   = rows.length - offset;
+    const slice = rows.slice(Math.max(0, start), end);
+    return slice.map((r, i) => {
+      const globalIdx = Math.max(0, start) + i;
+      const parts     = r.date.split("-");
+      const monthIdx  = parseInt(parts[1]) - 1;
+      const prevMonth = i > 0 ? parseInt(slice[i - 1].date.split("-")[1]) - 1 : -1;
+      return {
+        idx:         i,
+        globalIdx,
+        date:        parseInt(parts[2]).toString(),
+        month:       monthIdx !== prevMonth ? MONTHS[monthIdx] : "",
+        open:        r.open,
+        high:        r.high,
+        low:         r.low,
+        close:       r.close,
+        isSwingHigh: structure.swings.some(s => s.idx === globalIdx && s.type === "SH"),
+        isSwingLow:  structure.swings.some(s => s.idx === globalIdx && s.type === "SL"),
+        events:      structure.events.filter(e => e.idx === globalIdx),
+      };
+    });
+  }, [rows, offset, windowSize, structure]);
+
+  const tickStyle  = { fill: "var(--text-muted)", fontSize: expanded ? 12 : 9 };
+  const yAxisWidth = expanded ? 60 : 44;
+
+  const yDomain = useMemo(() => {
+    if (!data.length) return ["auto", "auto"] as const;
+    const min = Math.min(...data.map(d => d.low));
+    const max = Math.max(...data.map(d => d.high));
+    const pad = (max - min) * 0.18;
+    return [min - pad, max + pad] as const;
+  }, [data]);
+
+  const { state } = structure;
+  const stateColor = state === "Bullish" ? "#60a5fa" : state === "Bearish" ? "#a78bfa" : "#94a3b8";
+  const analysis   = useMemo(() => expanded ? buildMarketStructureAnalysis(rows) : null, [rows, expanded]);
+
+  return (
+    <div className="flex flex-col h-full">
+      {expanded && analysis && (
+        <div className="shrink-0 flex" style={{ borderBottom: "1px solid var(--border-subtle)", background: "rgba(255,255,255,0.02)" }}>
+          <div className="flex flex-col items-center justify-center px-5 py-2.5" style={{ flex: "0 0 35%", minWidth: 0 }}>
+            <ul className="flex flex-col gap-0.5 text-center">
+              {analysis.bullets.map((b, i) => (
+                <li key={i} className="text-[11px]" style={{ color: "var(--text-secondary)" }}>{b}</li>
+              ))}
+            </ul>
+          </div>
+          <div style={{ width: 1, background: "var(--border-medium)", alignSelf: "stretch", margin: "8px 0" }} />
+          <div className="flex-1 flex items-center justify-center px-5 py-2.5">
+            <p className="text-[11px] leading-relaxed text-center" style={{ color: "var(--text-secondary)" }}>{analysis.description}</p>
+          </div>
+        </div>
+      )}
+
+      <div ref={chartRef} className="flex-1 min-h-0" style={{ position: "relative" }}>
+        {!expanded && (
+          <div style={{ position: "absolute", top: 6, left: yAxisWidth + 4, zIndex: 10, pointerEvents: "none" }}>
+            <span className="text-[8px] font-black uppercase rounded-full" style={{
+              color: stateColor, background: `${stateColor}22`,
+              border: `1px solid ${stateColor}55`, padding: "1px 6px",
+            }}>{state}</span>
+          </div>
+        )}
+        <ResponsiveContainer width="100%" height="100%">
+          <ComposedChart data={data} margin={{ top: 4, right: 6, bottom: 0, left: 0 }}>
+            <XAxis dataKey="idx" type="number" domain={[0, data.length - 1]} hide />
+            <YAxis tick={tickStyle} tickLine={false} axisLine={false} width={yAxisWidth} domain={yDomain} tickFormatter={v => v.toFixed(4)} />
+            <Tooltip
+              cursor={{ fill: "rgba(255,255,255,0.04)" }}
+              position={{ x: 10, y: 10 }}
+              content={({ active, payload }) => {
+                if (!active || !payload?.length) return null;
+                const d = payload[0]?.payload as typeof data[0];
+                if (!d) return null;
+                return (
+                  <div style={{ background: "var(--bg-panel-alt)", border: "1px solid var(--border-medium)", borderRadius: 8, padding: "6px 10px", fontSize: 10, color: "var(--text-secondary)" }}>
+                    <div style={{ color: "rgba(255,255,255,0.85)", fontWeight: 700 }}>{d.close.toFixed(4)}</div>
+                    {d.isSwingHigh && <div style={{ color: "#f59e0b" }}>↑ Swing High</div>}
+                    {d.isSwingLow  && <div style={{ color: "#34d399" }}>↓ Swing Low</div>}
+                    {d.events.map((ev, i) => (
+                      <div key={i} style={{ color: ev.type === "BOS" ? (ev.direction === "bull" ? "#60a5fa" : "#a78bfa") : "#f59e0b" }}>
+                        {ev.type} {ev.direction === "bull" ? "↑" : "↓"}
+                      </div>
+                    ))}
+                  </div>
+                );
+              }}
+            />
+            <Line dataKey="close" dot={false} stroke="transparent" isAnimationActive={false} />
+          </ComposedChart>
+        </ResponsiveContainer>
+
+        {chartSize && (() => {
+          const plotLeft   = yAxisWidth;
+          const plotTop    = 4;
+          const plotWidth  = chartSize.w - yAxisWidth - 6;
+          const plotHeight = chartSize.h - plotTop;
+          const [yMin, yMax] = yDomain as [number, number];
+          if (typeof yMin !== "number" || typeof yMax !== "number" || yMax === yMin) return null;
+          const xPx     = (idx: number) => plotLeft + (idx / Math.max(data.length - 1, 1)) * plotWidth;
+          const yPx     = (val: number) => plotTop + ((yMax - val) / (yMax - yMin)) * plotHeight;
+          const candleW = Math.max(2, Math.floor((plotWidth / Math.max(data.length - 1, 1)) * 0.6));
+          const fs      = expanded ? 11 : 9;
+          return (
+            <svg style={{ position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none", overflow: "visible" }}>
+              {/* Candles */}
+              {data.map(d => {
+                const bull    = d.close >= d.open;
+                const color   = bull ? "#60a5fa" : "#a78bfa";
+                const cx      = xPx(d.idx);
+                const bodyTop = Math.min(yPx(d.open), yPx(d.close));
+                const bodyH   = Math.max(1, Math.abs(yPx(d.close) - yPx(d.open)));
+                return (
+                  <g key={`c${d.idx}`}>
+                    <line x1={cx} y1={yPx(d.high)} x2={cx} y2={yPx(d.low)} stroke={color} strokeWidth={1} />
+                    <rect x={cx - candleW / 2} y={bodyTop} width={candleW} height={bodyH} fill={color} stroke={color} strokeWidth={1} />
+                  </g>
+                );
+              })}
+              {/* Structure markers — stacked per candle to prevent overlap */}
+              {data.map(d => {
+                const cx      = xPx(d.idx);
+                const highY   = yPx(d.high);
+                const lowY    = yPx(d.low);
+                const bullEvs = d.events.filter(e => e.direction === "bull");
+                const bearEvs = d.events.filter(e => e.direction === "bear");
+                const TRI_H   = 8;
+                const PILL_H  = expanded ? 14 : 11;
+                const GAP     = expanded ? 4 : 3;
+                const bw      = expanded ? 38 : 28;
+
+                const above: React.ReactNode[] = [];
+                const below: React.ReactNode[] = [];
+
+                // ── Above: SH triangle → SH text (expanded) → bull events ──
+                if (d.isSwingHigh || bullEvs.length > 0) {
+                  const triBase = highY - GAP;
+                  const triTip  = triBase - TRI_H;
+                  above.push(
+                    <polygon key="sh-tri" points={`${cx},${triTip} ${cx - 4},${triBase} ${cx + 4},${triBase}`} fill="#f59e0b" />
+                  );
+                  let curY = triTip - GAP;
+                  if (d.isSwingHigh && expanded) {
+                    above.push(
+                      <text key="sh-txt" x={cx} y={curY} textAnchor="middle" fill="#f59e0b" fontSize={fs} fontWeight={700} fontFamily="monospace">SH</text>
+                    );
+                    curY -= (fs + GAP);
+                  }
+                  bullEvs.forEach((ev, i) => {
+                    const color = ev.type === "BOS" ? "#60a5fa" : "#f59e0b";
+                    above.push(
+                      <g key={`be${i}`}>
+                        <rect x={cx - bw / 2} y={curY - PILL_H + 2} width={bw} height={PILL_H} fill="rgba(0,0,0,0.65)" rx={2} />
+                        <text x={cx} y={curY - 1} textAnchor="middle" fill={color} fontSize={fs} fontWeight={800} fontFamily="monospace">{ev.type}</text>
+                      </g>
+                    );
+                    curY -= (PILL_H + GAP);
+                  });
+                }
+
+                // ── Below: SL triangle → SL text (expanded) → bear events ──
+                if (d.isSwingLow || bearEvs.length > 0) {
+                  const triBase = lowY + GAP;
+                  const triTip  = triBase + TRI_H;
+                  below.push(
+                    <polygon key="sl-tri" points={`${cx},${triTip} ${cx - 4},${triBase} ${cx + 4},${triBase}`} fill="#34d399" />
+                  );
+                  let curY = triTip + GAP;
+                  if (d.isSwingLow && expanded) {
+                    curY += fs;
+                    below.push(
+                      <text key="sl-txt" x={cx} y={curY} textAnchor="middle" fill="#34d399" fontSize={fs} fontWeight={700} fontFamily="monospace">SL</text>
+                    );
+                    curY += GAP;
+                  }
+                  bearEvs.forEach((ev, i) => {
+                    const color = ev.type === "BOS" ? "#a78bfa" : "#f59e0b";
+                    below.push(
+                      <g key={`be${i}`}>
+                        <rect x={cx - bw / 2} y={curY} width={bw} height={PILL_H} fill="rgba(0,0,0,0.65)" rx={2} />
+                        <text x={cx} y={curY + PILL_H - 3} textAnchor="middle" fill={color} fontSize={fs} fontWeight={800} fontFamily="monospace">{ev.type}</text>
+                      </g>
+                    );
+                    curY += (PILL_H + GAP);
+                  });
+                }
+
+                if (!above.length && !below.length) return null;
+                return <g key={`ms${d.idx}`}>{above}{below}</g>;
+              })}
+            </svg>
+          );
+        })()}
+      </div>
+
+      {maxOffset > 0 && (
+        <input type="range" className="momentum-scroll" min={0} max={maxOffset} value={offset}
+          onChange={e => setOffset(Number(e.target.value))} style={{ direction: "rtl" }} />
+      )}
+
+      <div className="flex flex-col shrink-0 pb-1" style={{ paddingLeft: yAxisWidth, paddingRight: 6 }}>
+        <div className="flex justify-between">
+          {data.map((d, i) => (
+            <span key={i} style={{ fontSize: tickStyle.fontSize, color: "var(--text-muted)" }}>{d.date}</span>
+          ))}
+        </div>
+        <div className="flex">
+          {data.reduce<{ month: string; count: number }[]>((acc, d) => {
+            if (d.month) acc.push({ month: d.month, count: 1 });
+            else if (acc.length) acc[acc.length - 1].count++;
+            return acc;
+          }, []).map((g, i) => (
+            <div key={i} className="text-center" style={{ flex: g.count, fontSize: tickStyle.fontSize, color: "var(--text-muted)", fontWeight: 700 }}>
+              {g.month}
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {expanded && (
+        <div className="shrink-0 flex" style={{ borderTop: "1px solid var(--border-subtle)", background: "rgba(255,255,255,0.015)" }}>
+          {[
+            { color: "#f59e0b", name: "Swing High (SH)", body: "A local price peak confirmed by being the highest high within the surrounding N bars on each side. Marks potential resistance and defines the upper boundary of structure. Used to identify HH/LH sequences." },
+            { color: "#34d399", name: "Swing Low (SL)",  body: "A local price trough confirmed by being the lowest low within the surrounding N bars on each side. Marks potential support and the lower boundary of structure. Used to identify HL/LL sequences." },
+            { color: "#60a5fa", name: "BOS — Break of Structure", body: "Price closes beyond the last swing high (bull BOS) or swing low (bear BOS) in the direction of the prevailing trend, confirming continuation. Smart money is defending and extending the move." },
+            { color: "#a78bfa", name: "CHOCH — Change of Character", body: "Price breaks a swing level counter to the current trend, signalling a potential reversal. CHOCH is the first warning that dominant structure is failing. Watch for follow-through confirmation before acting." },
           ].map((item, i, arr) => (
             <div key={item.name} className="flex-1 flex flex-col gap-1 px-3 py-2.5" style={{ borderRight: i < arr.length - 1 ? "1px solid var(--border-subtle)" : undefined }}>
               <div className="flex items-center gap-1.5">
@@ -4213,8 +4563,8 @@ function PivotPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boole
                 const nearRes = above.sort((a, b) => a.v - b.v)[0];
                 const nearSup = below.sort((a, b) => b.v - a.v)[0];
                 return (
-                  <div className="rounded-lg px-3 py-2 text-[10px]" style={{ background: "var(--bg-panel)", border: "1px solid var(--border-medium)", color: "var(--text-secondary)" }}>
-                    <div className="font-bold mb-1" style={{ color: "rgba(255,255,255,0.85)" }}>{d.close.toFixed(4)}</div>
+                  <div style={{ background: "var(--bg-panel-alt)", border: "1px solid var(--border-medium)", borderRadius: 8, padding: "6px 10px", fontSize: 10, color: "var(--text-secondary)" }}>
+                    {!showCandles && <div className="font-bold mb-1" style={{ color: "rgba(255,255,255,0.85)" }}>{d.close.toFixed(4)}</div>}
                     {nearRes && <div style={{ color: "#a78bfa" }}>↑ {nearRes.n}: {nearRes.v.toFixed(4)} ({Math.round((nearRes.v - d.close) * 10000)} pips)</div>}
                     {nearSup && <div style={{ color: "#60a5fa" }}>↓ {nearSup.n}: {nearSup.v.toFixed(4)} ({Math.round((d.close - nearSup.v) * 10000)} pips)</div>}
                   </div>
@@ -5892,6 +6242,40 @@ export function AnalyticsV3() {
   const atrBadge         = makeAtrBadge();
   const atrBadgeExpanded = makeAtrBadge(true);
 
+  const msStructure = useMemo(() => computeMarketStructure(ichiRows.length > 0 ? ichiRows : sheetRows), [ichiRows, sheetRows]);
+  const msState     = msStructure.state;
+  const msHeadline  = msState;
+  const msBias      = msState === "Bullish" ? "bullish" : msState === "Bearish" ? "bearish" : "neutral";
+  const makeMsBadge = (large?: boolean) => (
+    <span
+      className={`${large ? "text-[11px]" : "text-[8px]"} font-black uppercase rounded-full`}
+      style={{
+        color:         BIAS_STYLE[msBias].color,
+        background:    BIAS_STYLE[msBias].bg,
+        border:        `1px solid ${BIAS_STYLE[msBias].border}`,
+        boxShadow:     large ? `${BIAS_STYLE[msBias].glow}, 0 0 16px ${BIAS_STYLE[msBias].border}` : BIAS_STYLE[msBias].glow,
+        letterSpacing: "0.10em",
+        padding:       large ? "4px 12px" : "2px 8px",
+        cursor:        "default",
+      }}
+    >{msState}</span>
+  );
+  const msBadge         = makeMsBadge();
+  const msBadgeExpanded = makeMsBadge(true);
+
+  const fswStats = useMemo(() => {
+    const all: number[] = [];
+    for (const r of sheetRows) { const v = computeFsWick(r); if (v !== null) all.push(v); }
+    const sorted = [...all].sort((a, b) => a - b);
+    if (!sorted.length || !sheetRows.length) return null;
+    const cur = sheetRows[sheetRows.length - 1];
+    const todayFs = cur ? computeFsWick(cur) : null;
+    const todayRank = todayFs !== null ? fsPercentileRank(sorted, todayFs) : null;
+    return { todayFs, todayRank };
+  }, [sheetRows]);
+  const fswBadge = (fswStats?.todayFs != null)
+    ? <span className="tabular-nums" style={{ fontSize: 10, fontWeight: 600, color: "#f59e0b" }}>{fswStats.todayFs}p{fswStats.todayRank != null ? ` · ${fswStats.todayRank}th` : ""}</span>
+    : undefined;
   const fswHeadline = "";
 
   const cctxPatterns   = useMemo(() => detectCandlePatterns(sheetRows.slice(-5)), [sheetRows]);
@@ -6207,7 +6591,7 @@ export function AnalyticsV3() {
               "vola macd pvt  kelt"
               "ma   rsi9 rsi14 cci"
               "adx  ichi atr  fsw"
-              "wr   roc  cctx ."
+              "wr   roc  cctx mstr"
             `,
             gridTemplateRows: "repeat(5, 200px)",
             gap:              "10px",
@@ -6223,8 +6607,8 @@ export function AnalyticsV3() {
                   isDragOver={dragOverSlot === slotIdx}
                   containerRef={setPanelRef(slotIdx)}
                   onHeaderMouseDown={e => startPanelDrag(slotIdx, e)}
-                  badge={p.id === "price" ? priceBadge : p.id === "macd" ? macdBadge : p.id === "rsi9" ? rsiBadge : p.id === "rsi14" ? rsi14Badge : p.id === "moving-averages" ? maBadge : p.id === "keltner" ? keltBadge : p.id === "adx" ? adxBadge : p.id === "ichimoku" ? ichiBadge : p.id === "session" ? sessionBadge : p.id === "volume" ? volBadge : p.id === "pivots" ? pivotBadge : p.id === "cci" ? momBadge : p.id === "wr" ? wrBadge : p.id === "volatility" ? volaBadge : p.id === "avg-price" ? avgpBadge : p.id === "roc" ? rocBadge : p.id === "atr" ? atrBadge : p.id === "candle-context" ? cctxBadge : undefined}
-                  subtitle={p.id === "price" ? priceHeadline : p.id === "macd" ? macdHeadline : p.id === "rsi9" ? rsiHeadline : p.id === "rsi14" ? rsi14Headline : p.id === "moving-averages" ? maHeadline : p.id === "keltner" ? keltHeadline : p.id === "adx" ? adxHeadline : p.id === "ichimoku" ? ichiHeadline : p.id === "session" ? sessionHeadline : p.id === "volume" ? volHeadline : p.id === "pivots" ? pivotHeadline : p.id === "cci" ? momHeadline : p.id === "wr" ? wrHeadline : p.id === "volatility" ? volaHeadline : p.id === "avg-price" ? avgpHeadline : p.id === "roc" ? rocHeadline : p.id === "atr" ? atrHeadline : p.id === "failure-swing" ? fswHeadline : p.id === "candle-context" ? cctxHeadline : undefined}
+                  badge={p.id === "price" ? priceBadge : p.id === "macd" ? macdBadge : p.id === "rsi9" ? rsiBadge : p.id === "rsi14" ? rsi14Badge : p.id === "moving-averages" ? maBadge : p.id === "keltner" ? keltBadge : p.id === "adx" ? adxBadge : p.id === "ichimoku" ? ichiBadge : p.id === "session" ? sessionBadge : p.id === "volume" ? volBadge : p.id === "pivots" ? pivotBadge : p.id === "cci" ? momBadge : p.id === "wr" ? wrBadge : p.id === "volatility" ? volaBadge : p.id === "avg-price" ? avgpBadge : p.id === "roc" ? rocBadge : p.id === "atr" ? atrBadge : p.id === "candle-context" ? cctxBadge : p.id === "failure-swing" ? fswBadge : p.id === "market-structure" ? msBadge : undefined}
+                  subtitle={p.id === "price" ? priceHeadline : p.id === "macd" ? macdHeadline : p.id === "rsi9" ? rsiHeadline : p.id === "rsi14" ? rsi14Headline : p.id === "moving-averages" ? maHeadline : p.id === "keltner" ? keltHeadline : p.id === "adx" ? adxHeadline : p.id === "ichimoku" ? ichiHeadline : p.id === "session" ? sessionHeadline : p.id === "volume" ? volHeadline : p.id === "pivots" ? pivotHeadline : p.id === "cci" ? momHeadline : p.id === "wr" ? wrHeadline : p.id === "volatility" ? volaHeadline : p.id === "avg-price" ? avgpHeadline : p.id === "roc" ? rocHeadline : p.id === "atr" ? atrHeadline : p.id === "failure-swing" ? fswHeadline : p.id === "candle-context" ? cctxHeadline : p.id === "market-structure" ? msHeadline : undefined}
                   onExpand={() => setExpanded({ id: p.id, label: p.label, sub: p.sub })}>
                   {p.id === "price"           && <PricePanelBody        rows={sheetRows} />}
                   {p.id === "macd"            && <MacdPanelBody         rows={ichiRows.length > 0 ? ichiRows : sheetRows} />}
@@ -6245,7 +6629,8 @@ export function AnalyticsV3() {
                   {p.id === "atr"             && <AtrPanelBody          rows={ichiRows.length > 0 ? ichiRows : sheetRows} />}
                   {p.id === "failure-swing"   && <FailureSwingPanelBody  rows={sheetRows} />}
                   {p.id === "ai-chat"         && <AiChatPanelBody        rows={sheetRows} />}
-                  {p.id === "candle-context"  && <CandleContextPanelBody rows={sheetRows} />}
+                  {p.id === "candle-context"   && <CandleContextPanelBody    rows={sheetRows} />}
+                  {p.id === "market-structure" && <MarketStructurePanelBody  rows={ichiRows.length > 0 ? ichiRows : sheetRows} />}
                 </BlankPanel>
               );
             })}
@@ -6254,7 +6639,7 @@ export function AnalyticsV3() {
       </div>
 
       {expanded && (
-        <PanelModal panel={expanded} onClose={close} badge={expanded.id === "ai-synthesis" ? aisBadgeExpanded : expanded.id === "macd" ? macdBadgeExpanded : expanded.id === "price" ? priceBadgeExpanded : expanded.id === "rsi9" ? rsiBadgeExpanded : expanded.id === "rsi14" ? rsi14BadgeExpanded : expanded.id === "moving-averages" ? maBadgeExpanded : expanded.id === "keltner" ? keltBadgeExpanded : expanded.id === "adx" ? adxBadgeExpanded : expanded.id === "ichimoku" ? ichiBadgeExpanded : expanded.id === "session" ? sessionBadgeExpanded : expanded.id === "volume" ? volBadgeExpanded : expanded.id === "pivots" ? pivotBadgeExpanded : expanded.id === "cci" ? momBadgeExpanded : expanded.id === "wr" ? wrBadgeExpanded : expanded.id === "volatility" ? volaBadgeExpanded : expanded.id === "avg-price" ? avgpBadgeExpanded : expanded.id === "roc" ? rocBadgeExpanded : expanded.id === "atr" ? atrBadgeExpanded : expanded.id === "candle-context" ? cctxBadgeExpanded : undefined} subtitle={expanded.id === "ai-synthesis" ? aisHeadline : expanded.id === "macd" ? macdHeadline : expanded.id === "price" ? priceHeadline : expanded.id === "rsi9" ? rsiHeadline : expanded.id === "rsi14" ? rsi14Headline : expanded.id === "moving-averages" ? maHeadline : expanded.id === "keltner" ? keltHeadline : expanded.id === "adx" ? adxHeadline : expanded.id === "ichimoku" ? ichiHeadline : expanded.id === "session" ? sessionHeadline : expanded.id === "volume" ? volHeadline : expanded.id === "pivots" ? pivotHeadline : expanded.id === "cci" ? momHeadline : expanded.id === "wr" ? wrHeadline : expanded.id === "volatility" ? volaHeadline : expanded.id === "avg-price" ? avgpHeadline : expanded.id === "roc" ? rocHeadline : expanded.id === "atr" ? atrHeadline : expanded.id === "failure-swing" ? fswHeadline : expanded.id === "candle-context" ? cctxHeadline : undefined}>
+        <PanelModal panel={expanded} onClose={close} badge={expanded.id === "ai-synthesis" ? aisBadgeExpanded : expanded.id === "macd" ? macdBadgeExpanded : expanded.id === "price" ? priceBadgeExpanded : expanded.id === "rsi9" ? rsiBadgeExpanded : expanded.id === "rsi14" ? rsi14BadgeExpanded : expanded.id === "moving-averages" ? maBadgeExpanded : expanded.id === "keltner" ? keltBadgeExpanded : expanded.id === "adx" ? adxBadgeExpanded : expanded.id === "ichimoku" ? ichiBadgeExpanded : expanded.id === "session" ? sessionBadgeExpanded : expanded.id === "volume" ? volBadgeExpanded : expanded.id === "pivots" ? pivotBadgeExpanded : expanded.id === "cci" ? momBadgeExpanded : expanded.id === "wr" ? wrBadgeExpanded : expanded.id === "volatility" ? volaBadgeExpanded : expanded.id === "avg-price" ? avgpBadgeExpanded : expanded.id === "roc" ? rocBadgeExpanded : expanded.id === "atr" ? atrBadgeExpanded : expanded.id === "candle-context" ? cctxBadgeExpanded : expanded.id === "market-structure" ? msBadgeExpanded : undefined} subtitle={expanded.id === "ai-synthesis" ? aisHeadline : expanded.id === "macd" ? macdHeadline : expanded.id === "price" ? priceHeadline : expanded.id === "rsi9" ? rsiHeadline : expanded.id === "rsi14" ? rsi14Headline : expanded.id === "moving-averages" ? maHeadline : expanded.id === "keltner" ? keltHeadline : expanded.id === "adx" ? adxHeadline : expanded.id === "ichimoku" ? ichiHeadline : expanded.id === "session" ? sessionHeadline : expanded.id === "volume" ? volHeadline : expanded.id === "pivots" ? pivotHeadline : expanded.id === "cci" ? momHeadline : expanded.id === "wr" ? wrHeadline : expanded.id === "volatility" ? volaHeadline : expanded.id === "avg-price" ? avgpHeadline : expanded.id === "roc" ? rocHeadline : expanded.id === "atr" ? atrHeadline : expanded.id === "failure-swing" ? fswHeadline : expanded.id === "candle-context" ? cctxHeadline : expanded.id === "market-structure" ? msHeadline : undefined}>
           {expanded.id === "ai-synthesis"    && <AiSynthesisPanelBody result={analysisResult} expanded />}
           {expanded.id === "price"           && <PricePanelBody      rows={sheetRows} expanded />}
           {expanded.id === "macd"            && <MacdPanelBody       rows={ichiRows.length > 0 ? ichiRows : sheetRows} expanded />}
@@ -6275,7 +6660,8 @@ export function AnalyticsV3() {
           {expanded.id === "atr"             && <AtrPanelBody             rows={ichiRows.length > 0 ? ichiRows : sheetRows} expanded />}
           {expanded.id === "failure-swing"   && <FailureSwingPanelBody   rows={sheetRows} expanded />}
           {expanded.id === "ai-chat"         && <AiChatPanelBody         rows={sheetRows} expanded />}
-          {expanded.id === "candle-context"  && <CandleContextPanelBody  rows={sheetRows} expanded />}
+          {expanded.id === "candle-context"   && <CandleContextPanelBody    rows={sheetRows} expanded />}
+          {expanded.id === "market-structure" && <MarketStructurePanelBody  rows={ichiRows.length > 0 ? ichiRows : sheetRows} expanded />}
         </PanelModal>
       )}
 
