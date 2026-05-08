@@ -3485,8 +3485,21 @@ function computeMarketStructure(rows: SheetRow[], N = MS_LOOKBACK): {
     if (sl) swings.push({ idx: i, type: "SL", price: rows[i].low  });
   }
   swings.sort((a, b) => a.idx - b.idx);
-  const SHs = swings.filter(s => s.type === "SH");
-  const SLs = swings.filter(s => s.type === "SL");
+
+  // Enforce alternation: collapse consecutive same-type swings, keeping highest SH / lowest SL
+  const alternating: MsSwing[] = [];
+  for (const s of swings) {
+    const prev = alternating[alternating.length - 1];
+    if (prev && prev.type === s.type) {
+      if (s.type === "SH" && s.price > prev.price) alternating[alternating.length - 1] = s;
+      if (s.type === "SL" && s.price < prev.price) alternating[alternating.length - 1] = s;
+    } else {
+      alternating.push(s);
+    }
+  }
+
+  const SHs = alternating.filter(s => s.type === "SH");
+  const SLs = alternating.filter(s => s.type === "SL");
   let state: "Bullish" | "Bearish" | "Range" = "Range";
   if (SHs.length >= 2 && SLs.length >= 2) {
     const hh = SHs[SHs.length - 1].price > SHs[SHs.length - 2].price;
@@ -3500,7 +3513,7 @@ function computeMarketStructure(rows: SheetRow[], N = MS_LOOKBACK): {
   let trend: "bull" | "bear" | null = null;
   let lastSH: MsSwing | null = null;
   let lastSL: MsSwing | null = null;
-  for (const s of swings) {
+  for (const s of alternating) {
     if (s.type === "SH") {
       if (lastSH !== null && s.price > lastSH.price) {
         events.push({ idx: s.idx, type: trend === "bear" ? "CHOCH" : "BOS", direction: "bull" });
@@ -3515,7 +3528,7 @@ function computeMarketStructure(rows: SheetRow[], N = MS_LOOKBACK): {
       lastSL = s;
     }
   }
-  return { swings, events, state };
+  return { swings: alternating, events, state };
 }
 
 function buildMarketStructureAnalysis(rows: SheetRow[]): { bullets: string[]; description: string } {
@@ -3545,6 +3558,7 @@ function MarketStructurePanelBody({ rows, expanded }: { rows: SheetRow[]; expand
   const windowSize = expanded ? 40 : MS_WINDOW;
   const maxOffset  = Math.max(0, rows.length - windowSize);
   const [offset, setOffset] = useState(0);
+  const [showZones, setShowZones] = useState(true);
   const chartRef   = useRef<HTMLDivElement>(null);
   const [chartSize, setChartSize] = useState<{ w: number; h: number } | null>(null);
 
@@ -3600,6 +3614,18 @@ function MarketStructurePanelBody({ rows, expanded }: { rows: SheetRow[]; expand
   const stateColor = state === "Bullish" ? "#60a5fa" : state === "Bearish" ? "#a78bfa" : "#94a3b8";
   const analysis   = useMemo(() => expanded ? buildMarketStructureAnalysis(rows) : null, [rows, expanded]);
 
+  const lastBos = useMemo(() => {
+    const ev = [...structure.events].reverse().find(e => e.type === "BOS");
+    if (!ev) return null;
+    return { direction: ev.direction === "bull" ? "Bullish" : "Bearish", barsAgo: rows.length - 1 - ev.idx };
+  }, [structure, rows.length]);
+
+  const lastChoch = useMemo(() => {
+    const ev = [...structure.events].reverse().find(e => e.type === "CHOCH");
+    if (!ev) return null;
+    return { direction: ev.direction === "bull" ? "Bullish" : "Bearish", barsAgo: rows.length - 1 - ev.idx };
+  }, [structure, rows.length]);
+
   return (
     <div className="flex flex-col h-full">
       {expanded && analysis && (
@@ -3618,6 +3644,18 @@ function MarketStructurePanelBody({ rows, expanded }: { rows: SheetRow[]; expand
         </div>
       )}
 
+      <div className="shrink-0 flex items-center justify-center gap-4 px-3 py-1" style={{ borderBottom: "1px solid var(--border-subtle)" }}>
+        <span style={{ fontSize: 9, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.05em", flexShrink: 0 }}>Last BOS</span>
+        {lastBos
+          ? <span style={{ fontSize: 9, fontWeight: 700, color: lastBos.direction === "Bullish" ? "#60a5fa" : "#a78bfa" }}>{lastBos.direction} · {lastBos.barsAgo} bars ago</span>
+          : <span style={{ fontSize: 9, color: "var(--text-muted)" }}>—</span>}
+        <div style={{ width: 1, height: 10, background: "var(--border-subtle)", flexShrink: 0 }} />
+        <span style={{ fontSize: 9, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.05em", flexShrink: 0 }}>Last CHOCH</span>
+        {lastChoch
+          ? <span style={{ fontSize: 9, fontWeight: 700, color: lastChoch.direction === "Bullish" ? "#60a5fa" : "#a78bfa" }}>{lastChoch.direction} · {lastChoch.barsAgo} bars ago</span>
+          : <span style={{ fontSize: 9, color: "var(--text-muted)" }}>—</span>}
+      </div>
+
       <div ref={chartRef} className="flex-1 min-h-0" style={{ position: "relative" }}>
         {!expanded && (
           <div style={{ position: "absolute", top: 6, left: yAxisWidth + 4, zIndex: 10, pointerEvents: "none" }}>
@@ -3627,6 +3665,15 @@ function MarketStructurePanelBody({ rows, expanded }: { rows: SheetRow[]; expand
             }}>{state}</span>
           </div>
         )}
+        <div style={{ position: "absolute", top: 6, right: 8, zIndex: 10 }}>
+          <button onClick={() => setShowZones(z => !z)} style={{
+            fontSize: 8, fontWeight: 700, fontFamily: "monospace", textTransform: "uppercase",
+            letterSpacing: "0.05em", padding: "1px 6px", borderRadius: 999, cursor: "pointer",
+            color: showZones ? "#94a3b8" : "#475569",
+            background: showZones ? "rgba(148,163,184,0.12)" : "transparent",
+            border: `1px solid ${showZones ? "rgba(148,163,184,0.3)" : "rgba(71,85,105,0.3)"}`,
+          }}>Zones</button>
+        </div>
         <ResponsiveContainer width="100%" height="100%">
           <ComposedChart data={data} margin={{ top: 4, right: 6, bottom: 0, left: 0 }}>
             <XAxis dataKey="idx" type="number" domain={[0, data.length - 1]} hide />
@@ -3641,10 +3688,10 @@ function MarketStructurePanelBody({ rows, expanded }: { rows: SheetRow[]; expand
                 return (
                   <div style={{ background: "var(--bg-panel-alt, #181c2a)", border: "1px solid var(--border-medium)", borderRadius: 8, padding: "6px 10px", fontSize: 10, color: "var(--text-secondary)", opacity: 1 }}>
                     <div style={{ color: "rgba(255,255,255,0.85)", fontWeight: 700 }}>{d.close.toFixed(4)}</div>
-                    {d.isSwingHigh && <div style={{ color: "#f59e0b" }}>↑ Swing High</div>}
+                    {d.isSwingHigh && <div style={{ color: "#f87171" }}>↑ Swing High</div>}
                     {d.isSwingLow  && <div style={{ color: "#34d399" }}>↓ Swing Low</div>}
                     {d.events.map((ev, i) => (
-                      <div key={i} style={{ color: ev.type === "BOS" ? (ev.direction === "bull" ? "#60a5fa" : "#a78bfa") : "#f59e0b" }}>
+                      <div key={i} style={{ color: ev.type === "BOS" ? "#ffffff" : ev.direction === "bull" ? "#34d399" : "#f87171" }}>
                         {ev.type} {ev.direction === "bull" ? "↑" : "↓"}
                       </div>
                     ))}
@@ -3670,6 +3717,27 @@ function MarketStructurePanelBody({ rows, expanded }: { rows: SheetRow[]; expand
           const fs      = expanded ? 11 : 9;
           return (
             <svg style={{ position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none", overflow: "visible" }}>
+              {/* Supply / demand zones — rendered behind candles */}
+              {showZones && (() => {
+                const zoneH = plotHeight * 0.018;
+                const rightEdge = plotLeft + plotWidth;
+                return (
+                  <>
+                    {data.filter(d => d.isSwingHigh).map(d => (
+                      <rect key={`sz${d.idx}`}
+                        x={xPx(d.idx)} y={yPx(d.high)}
+                        width={rightEdge - xPx(d.idx)} height={zoneH}
+                        fill="rgba(248,113,113,0.10)" />
+                    ))}
+                    {data.filter(d => d.isSwingLow).map(d => (
+                      <rect key={`dz${d.idx}`}
+                        x={xPx(d.idx)} y={yPx(d.low) - zoneH}
+                        width={rightEdge - xPx(d.idx)} height={zoneH}
+                        fill="rgba(52,211,153,0.10)" />
+                    ))}
+                  </>
+                );
+              })()}
               {/* Candles */}
               {data.map(d => {
                 const bull    = d.close >= d.open;
@@ -3695,29 +3763,40 @@ function MarketStructurePanelBody({ rows, expanded }: { rows: SheetRow[]; expand
                 const PILL_H  = expanded ? 14 : 11;
                 const GAP     = expanded ? 4 : 3;
                 const bw      = expanded ? 38 : 28;
+                const glow    = (c: string) => ({ filter: `drop-shadow(0 0 4px ${c})` });
 
                 const above: React.ReactNode[] = [];
                 const below: React.ReactNode[] = [];
 
-                // ── Above: SH triangle → SH text (expanded) → bull events ──
+                // ── Above: SH triangle → SH text + price (expanded) / price (compact) → bull events ──
                 if (d.isSwingHigh || bullEvs.length > 0) {
                   const triBase = highY - GAP;
                   const triTip  = triBase - TRI_H;
                   above.push(
-                    <polygon key="sh-tri" points={`${cx},${triTip} ${cx - 4},${triBase} ${cx + 4},${triBase}`} fill="#f59e0b" />
+                    <polygon key="sh-tri" points={`${cx},${triTip} ${cx - 4},${triBase} ${cx + 4},${triBase}`} fill="#f87171" />
                   );
                   let curY = triTip - GAP;
-                  if (d.isSwingHigh && expanded) {
-                    above.push(
-                      <text key="sh-txt" x={cx} y={curY} textAnchor="middle" fill="#f59e0b" fontSize={fs} fontWeight={700} fontFamily="monospace">SH</text>
-                    );
-                    curY -= (fs + GAP);
+                  if (d.isSwingHigh) {
+                    if (expanded) {
+                      above.push(
+                        <text key="sh-txt" x={cx} y={curY} textAnchor="middle" fill="#f87171" fontSize={fs} fontWeight={700} fontFamily="monospace">SH</text>
+                      );
+                      curY -= (fs + 1);
+                      above.push(
+                        <text key="sh-price" x={cx} y={curY} textAnchor="middle" fill="#f87171" fontSize={fs - 2} fontFamily="monospace">{d.high.toFixed(4)}</text>
+                      );
+                      curY -= ((fs - 2) + GAP);
+                    } else {
+                      above.push(
+                        <text key="sh-price" x={cx} y={curY} textAnchor="middle" fill="#f87171" fontSize={7} fontFamily="monospace">{d.high.toFixed(4)}</text>
+                      );
+                      curY -= (7 + GAP);
+                    }
                   }
                   bullEvs.forEach((ev, i) => {
-                    const color = ev.type === "BOS" ? "#60a5fa" : "#f59e0b";
+                    const color = ev.type === "BOS" ? "#ffffff" : "#34d399";
                     above.push(
                       <g key={`be${i}`}>
-                        <rect x={cx - bw / 2} y={curY - PILL_H + 2} width={bw} height={PILL_H} fill="rgba(0,0,0,0.65)" rx={2} />
                         <text x={cx} y={curY - 1} textAnchor="middle" fill={color} fontSize={fs} fontWeight={800} fontFamily="monospace">{ev.type}</text>
                       </g>
                     );
@@ -3725,7 +3804,7 @@ function MarketStructurePanelBody({ rows, expanded }: { rows: SheetRow[]; expand
                   });
                 }
 
-                // ── Below: SL triangle → SL text (expanded) → bear events ──
+                // ── Below: SL triangle → SL text + price (expanded) / price (compact) → bear events ──
                 if (d.isSwingLow || bearEvs.length > 0) {
                   const triBase = lowY + GAP;
                   const triTip  = triBase + TRI_H;
@@ -3733,18 +3812,28 @@ function MarketStructurePanelBody({ rows, expanded }: { rows: SheetRow[]; expand
                     <polygon key="sl-tri" points={`${cx},${triTip} ${cx - 4},${triBase} ${cx + 4},${triBase}`} fill="#34d399" />
                   );
                   let curY = triTip + GAP;
-                  if (d.isSwingLow && expanded) {
-                    curY += fs;
-                    below.push(
-                      <text key="sl-txt" x={cx} y={curY} textAnchor="middle" fill="#34d399" fontSize={fs} fontWeight={700} fontFamily="monospace">SL</text>
-                    );
-                    curY += GAP;
+                  if (d.isSwingLow) {
+                    if (expanded) {
+                      curY += fs;
+                      below.push(
+                        <text key="sl-txt" x={cx} y={curY} textAnchor="middle" fill="#34d399" fontSize={fs} fontWeight={700} fontFamily="monospace">SL</text>
+                      );
+                      curY += (1);
+                      below.push(
+                        <text key="sl-price" x={cx} y={curY + (fs - 2)} textAnchor="middle" fill="#34d399" fontSize={fs - 2} fontFamily="monospace">{d.low.toFixed(4)}</text>
+                      );
+                      curY += ((fs - 2) + GAP);
+                    } else {
+                      below.push(
+                        <text key="sl-price" x={cx} y={curY + 7} textAnchor="middle" fill="#34d399" fontSize={7} fontFamily="monospace">{d.low.toFixed(4)}</text>
+                      );
+                      curY += (7 + GAP);
+                    }
                   }
                   bearEvs.forEach((ev, i) => {
-                    const color = ev.type === "BOS" ? "#a78bfa" : "#f59e0b";
+                    const color = ev.type === "BOS" ? "#ffffff" : "#f87171";
                     below.push(
                       <g key={`be${i}`}>
-                        <rect x={cx - bw / 2} y={curY} width={bw} height={PILL_H} fill="rgba(0,0,0,0.65)" rx={2} />
                         <text x={cx} y={curY + PILL_H - 3} textAnchor="middle" fill={color} fontSize={fs} fontWeight={800} fontFamily="monospace">{ev.type}</text>
                       </g>
                     );
@@ -3787,10 +3876,10 @@ function MarketStructurePanelBody({ rows, expanded }: { rows: SheetRow[]; expand
       {expanded && (
         <div className="shrink-0 flex" style={{ borderTop: "1px solid var(--border-subtle)", background: "rgba(255,255,255,0.015)" }}>
           {[
-            { color: "#f59e0b", name: "Swing High (SH)", body: "A local price peak confirmed by being the highest high within the surrounding N bars on each side. Marks potential resistance and defines the upper boundary of structure. Used to identify HH/LH sequences." },
+            { color: "#f87171", name: "Swing High (SH)", body: "A local price peak confirmed by being the highest high within the surrounding N bars on each side. Marks potential resistance and defines the upper boundary of structure. Used to identify HH/LH sequences." },
             { color: "#34d399", name: "Swing Low (SL)",  body: "A local price trough confirmed by being the lowest low within the surrounding N bars on each side. Marks potential support and the lower boundary of structure. Used to identify HL/LL sequences." },
-            { color: "#60a5fa", name: "BOS — Break of Structure", body: "Price closes beyond the last swing high (bull BOS) or swing low (bear BOS) in the direction of the prevailing trend, confirming continuation. Smart money is defending and extending the move." },
-            { color: "#a78bfa", name: "CHOCH — Change of Character", body: "Price breaks a swing level counter to the current trend, signalling a potential reversal. CHOCH is the first warning that dominant structure is failing. Watch for follow-through confirmation before acting." },
+            { color: "#ffffff", name: "BOS — Break of Structure", body: "Price closes beyond the last swing high (bull BOS) or swing low (bear BOS) in the direction of the prevailing trend, confirming continuation. Smart money is defending and extending the move." },
+            { color: "#f59e0b", name: "CHOCH — Change of Character", body: "Price breaks a swing level counter to the current trend, signalling a potential reversal. CHOCH is the first warning that dominant structure is failing. Watch for follow-through confirmation before acting." },
           ].map((item, i, arr) => (
             <div key={item.name} className="flex-1 flex flex-col gap-1 px-3 py-2.5" style={{ borderRight: i < arr.length - 1 ? "1px solid var(--border-subtle)" : undefined }}>
               <div className="flex items-center gap-1.5">
