@@ -10,7 +10,7 @@ import {
   ComposedChart, Bar, Line, Area, XAxis, YAxis, ReferenceLine, ReferenceArea,
   ResponsiveContainer, Cell, Tooltip,
 } from "recharts";
-import { Maximize2, X, GripVertical } from "lucide-react";
+import { Maximize2, X, GripVertical, ChevronDown } from "lucide-react";
 import { VerdictPanel }          from "../components/analytics/VerdictPanel";
 import { EvidenceCards }         from "../components/analytics/EvidenceCards";
 import { EntryExitPanel }        from "../components/analytics/EntryExitPanel";
@@ -2117,12 +2117,13 @@ function IchiPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolea
             <Tooltip
               cursor={{ fill: "rgba(255,255,255,0.04)" }}
               position={{ x: 10, y: 10 }}
+              wrapperStyle={{ background: "none", border: "none", boxShadow: "none", zIndex: 50 }}
               content={({ active, payload }) => {
                 if (!active || !payload?.length) return null;
                 const filtered = showCandles ? payload.filter(p => p.name !== "Close") : payload;
                 if (!filtered.length) return null;
                 return (
-                  <div style={{ background: "var(--bg-panel-alt)", border: "1px solid var(--border-medium)", borderRadius: 8, padding: "6px 10px", fontSize: 10 }}>
+                  <div style={{ background: "var(--bg-panel-alt, #181c2a)", border: "1px solid var(--border-medium)", borderRadius: 8, padding: "6px 10px", fontSize: 10, opacity: 1 }}>
                     {filtered.map(p => (
                       <div key={p.name} style={{ color: p.color }}>{p.name}: {(p.value as number).toFixed(5)}</div>
                     ))}
@@ -3638,7 +3639,7 @@ function MarketStructurePanelBody({ rows, expanded }: { rows: SheetRow[]; expand
                 const d = payload[0]?.payload as typeof data[0];
                 if (!d) return null;
                 return (
-                  <div style={{ background: "var(--bg-panel-alt)", border: "1px solid var(--border-medium)", borderRadius: 8, padding: "6px 10px", fontSize: 10, color: "var(--text-secondary)" }}>
+                  <div style={{ background: "var(--bg-panel-alt, #181c2a)", border: "1px solid var(--border-medium)", borderRadius: 8, padding: "6px 10px", fontSize: 10, color: "var(--text-secondary)", opacity: 1 }}>
                     <div style={{ color: "rgba(255,255,255,0.85)", fontWeight: 700 }}>{d.close.toFixed(4)}</div>
                     {d.isSwingHigh && <div style={{ color: "#f59e0b" }}>↑ Swing High</div>}
                     {d.isSwingLow  && <div style={{ color: "#34d399" }}>↓ Swing Low</div>}
@@ -3650,6 +3651,7 @@ function MarketStructurePanelBody({ rows, expanded }: { rows: SheetRow[]; expand
                   </div>
                 );
               }}
+              wrapperStyle={{ background: "none", border: "none", boxShadow: "none", zIndex: 50 }}
             />
             <Line dataKey="close" dot={false} stroke="transparent" isAnimationActive={false} />
           </ComposedChart>
@@ -4563,13 +4565,14 @@ function PivotPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boole
                 const nearRes = above.sort((a, b) => a.v - b.v)[0];
                 const nearSup = below.sort((a, b) => b.v - a.v)[0];
                 return (
-                  <div style={{ background: "var(--bg-panel-alt)", border: "1px solid var(--border-medium)", borderRadius: 8, padding: "6px 10px", fontSize: 10, color: "var(--text-secondary)" }}>
+                  <div style={{ background: "var(--bg-panel-alt, #181c2a)", border: "1px solid var(--border-medium)", borderRadius: 8, padding: "6px 10px", fontSize: 10, color: "var(--text-secondary)", opacity: 1 }}>
                     {!showCandles && <div className="font-bold mb-1" style={{ color: "rgba(255,255,255,0.85)" }}>{d.close.toFixed(4)}</div>}
                     {nearRes && <div style={{ color: "#a78bfa" }}>↑ {nearRes.n}: {nearRes.v.toFixed(4)} ({Math.round((nearRes.v - d.close) * 10000)} pips)</div>}
                     {nearSup && <div style={{ color: "#60a5fa" }}>↓ {nearSup.n}: {nearSup.v.toFixed(4)} ({Math.round((d.close - nearSup.v) * 10000)} pips)</div>}
                   </div>
                 );
               }}
+              wrapperStyle={{ background: "none", border: "none", boxShadow: "none", zIndex: 50 }}
             />
             {showR3    && <Line dataKey="r3"    name="R3"    type="monotone" dot={false} strokeWidth={expanded ? 1.5 : 1} stroke="#1e40af" strokeDasharray="3 2" isAnimationActive={false} />}
             {showR2    && <Line dataKey="r2"    name="R2"    type="monotone" dot={false} strokeWidth={expanded ? 1.5 : 1} stroke="#3b82f6" strokeDasharray="3 2" isAnimationActive={false} />}
@@ -5747,6 +5750,8 @@ export function AnalyticsV3() {
   const [error, setError]       = useState<string | null>(null);
   const [expanded, setExpanded] = useState<PanelMeta | null>(null);
   const [ichiRows, setIchiRows] = useState<SheetRow[]>([]);
+  const [timeframe, setTimeframe] = useState("1D");
+  const [tfOpen, setTfOpen]       = useState(false);
   const close = useCallback(() => setExpanded(null), []);
 
   // ── Panel drag-and-drop (mouse-event based — avoids HTML5 DnD cursor issues) ─
@@ -6523,9 +6528,71 @@ export function AnalyticsV3() {
       }}
     >
 
-      {/* ── Top bar: Pair Selector + Data date ────────────────────── */}
+      {/* ── Top bar: Pair Selector + Timeframe + Data date ─────────── */}
       <div className="flex items-center gap-3 shrink-0" style={{ height: "40px" }}>
         <PairSelector />
+        <div className="relative h-full" style={{ zIndex: tfOpen ? 20 : "auto" }}>
+          <div
+            className="h-full flex items-center rounded-[14px] overflow-hidden"
+            style={{ background: "var(--bg-panel)", border: "1px solid var(--border-subtle)", position: "relative", zIndex: 1 }}
+          >
+            {/* Trigger */}
+            <button
+              onClick={() => setTfOpen((o) => !o)}
+              className="h-full flex items-center gap-2 px-4 shrink-0"
+            >
+              <span className="text-[13px] font-bold tracking-wide" style={{ color: "var(--text-primary)" }}>
+                {timeframe}
+              </span>
+              <ChevronDown
+                size={13}
+                style={{
+                  color:     "var(--text-muted)",
+                  transform:  tfOpen ? "rotate(180deg)" : "rotate(0deg)",
+                  transition: "transform 0.18s",
+                }}
+              />
+            </button>
+
+            {/* Expanded options */}
+            <div
+              className="flex items-center overflow-hidden"
+              style={{
+                maxWidth:      tfOpen ? "300px" : "0px",
+                opacity:       tfOpen ? 1 : 0,
+                transition:    "max-width 0.3s cubic-bezier(0.4,0,0.2,1), opacity 0.2s ease",
+                pointerEvents: tfOpen ? "auto" : "none",
+              }}
+            >
+              <div className="h-5 w-px shrink-0" style={{ background: "var(--border-medium)" }} />
+              <div className="flex items-center gap-1 px-2.5">
+                {(["1W","1D","4H","1H","15M"] as const).map((tf) => {
+                  const active   = tf === timeframe;
+                  const disabled = tf !== "1D";
+                  return (
+                    <button
+                      key={tf}
+                      disabled={disabled}
+                      onClick={() => { if (!disabled) { setTimeframe(tf); setTfOpen(false); } }}
+                      className="px-2.5 py-1 rounded-[8px] text-[10px] font-semibold uppercase tracking-widest transition-all"
+                      style={{
+                        background: active   ? "var(--accent-dim)"          : "transparent",
+                        border:     active   ? "1px solid var(--accent-border)" : "1px solid transparent",
+                        color:      active   ? "var(--accent-text)"
+                                  : disabled ? "var(--text-muted)"
+                                  :            "var(--text-secondary)",
+                        opacity:    disabled ? 0.45 : 1,
+                        cursor:     disabled ? "default" : "pointer",
+                      }}
+                    >
+                      {tf}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        </div>
         <div className="flex items-center gap-4 px-4 h-full rounded-[14px]"
           style={{
             background: "var(--bg-panel)",

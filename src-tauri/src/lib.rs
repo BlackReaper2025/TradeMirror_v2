@@ -93,7 +93,7 @@ fn get_candles_v3(app: tauri::AppHandle) -> Result<Vec<CandleV3>, String> {
 
     let rows = candle_store::read_candles(
         db_path.to_str().unwrap_or(""),
-        "EURUSD", "D", 20,
+        "EURUSD", "D", 500,
     ).unwrap_or_default();
 
     if rows.is_empty() {
