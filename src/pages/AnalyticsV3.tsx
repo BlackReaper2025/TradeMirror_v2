@@ -1,4 +1,4 @@
-// ─── Analytics — 3-row layout + pair selector ─────────────────────────────────
+﻿// ─── Analytics — 3-row layout + pair selector ─────────────────────────────────
 //
 //  PairSelector  — top strip, EUR/USD active, others placeholder
 //  Row 1         — Verdict:  direction · confidence bar · signal tags · history %
@@ -198,22 +198,37 @@ const PINNED_SLOT_COUNT = 2;
 // Grid slot areas in row-major order.
 // Slots 0-1 are pinned (top row). Slots 2+ are scrollable (bottom rows).
 const SLOT_AREAS = [
-  // ── Pinned top row ────────────────────────────────────────────────────────
+  // ── Pinned ────────────────────────────────────────────────────────────────
   "ais", "aic",
-  // ── Scrollable bottom rows ────────────────────────────────────────────────
-  "sess","vol","avgp","price", // row 1
-  "vola","macd","pvt","kelt",  // row 2
-  "ma","rsi9","rsi14","cci",   // row 3
-  "adx","ichi","atr","fsw",    // row 4
-  "wr","roc","cctx","mstr",    // row 5
-  "rgme",                      // row 6
+  // ── Price Structure ───────────────────────────────────────────────────────
+  "price", "avgp", "pvt",
+  // ── Regime & Structure ────────────────────────────────────────────────────
+  "mstr", "rgme",
+  // ── Context & Patterns ────────────────────────────────────────────────────
+  "vol", "cctx", "sess", "fsw",
+  // ── Trend & Direction ─────────────────────────────────────────────────────
+  "ma", "adx", "macd", "ichi",
+  // ── Momentum & Oscillators ────────────────────────────────────────────────
+  "rsi9", "rsi14", "cci", "wr", "roc",
+  // ── Volatility & Bands ────────────────────────────────────────────────────
+  "vola", "kelt", "atr",
 ] as const;
+
+const CATEGORIES: { label: string; count: number; visibleCols?: number }[] = [
+  { label: "Price Structure",        count: 3, visibleCols: 2 },
+  { label: "Regime & Structure",     count: 2 },
+  { label: "Context & Patterns",     count: 4 },
+  { label: "Trend & Direction",      count: 4 },
+  { label: "Momentum & Oscillators", count: 5 },
+  { label: "Volatility & Bands",     count: 3 },
+];
 
 const INITIAL_PANEL_ORDER: string[] = SLOT_AREAS.map(area =>
   PANELS.find(p => p.area === area)?.id ?? "__empty__"
 );
 
 interface PanelMeta { id: string; label: string; sub: string }
+
 
 function HoverTooltip({ tip, children }: { tip: string; children: React.ReactNode }) {
   const [rect, setRect] = useState<DOMRect | null>(null);
@@ -701,7 +716,7 @@ function MacdPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolea
       </div>
 
       {/* Slider — sits between chart and date labels */}
-      {maxOffset > 0 && (
+      {expanded && maxOffset > 0 && (
         <input
           type="range"
           className="momentum-scroll"
@@ -714,25 +729,27 @@ function MacdPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolea
       )}
 
       {/* Date labels rows — days on top, month name below at first day of each month */}
-      <div className="flex flex-col shrink-0 pb-1" style={{ paddingLeft: yAxisWidth, paddingRight: 6 }}>
-        <div className="flex justify-between">
-          {data.map((d, i) => (
-            <span key={i} style={{ fontSize: tickStyle.fontSize, color: "var(--text-muted)" }}>{d.date}</span>
-          ))}
+      {expanded && (
+        <div className="flex flex-col shrink-0 pb-1" style={{ paddingLeft: yAxisWidth, paddingRight: 6 }}>
+          <div className="flex justify-between">
+            {data.map((d, i) => (
+              <span key={i} style={{ fontSize: tickStyle.fontSize, color: "var(--text-muted)" }}>{d.date}</span>
+            ))}
+          </div>
+          {/* Month labels: group by month, flex proportional to count so label centers over its dates */}
+          <div className="flex">
+            {data.reduce<{ month: string; count: number }[]>((acc, d) => {
+              if (d.month) acc.push({ month: d.month, count: 1 });
+              else if (acc.length) acc[acc.length - 1].count++;
+              return acc;
+            }, []).map((g, i) => (
+              <div key={i} className="text-center" style={{ flex: g.count, fontSize: tickStyle.fontSize, color: "var(--text-muted)", fontWeight: 700 }}>
+                {g.month}
+              </div>
+            ))}
+          </div>
         </div>
-        {/* Month labels: group by month, flex proportional to count so label centers over its dates */}
-        <div className="flex">
-          {data.reduce<{ month: string; count: number }[]>((acc, d) => {
-            if (d.month) acc.push({ month: d.month, count: 1 });
-            else if (acc.length) acc[acc.length - 1].count++;
-            return acc;
-          }, []).map((g, i) => (
-            <div key={i} className="text-center" style={{ flex: g.count, fontSize: tickStyle.fontSize, color: "var(--text-muted)", fontWeight: 700 }}>
-              {g.month}
-            </div>
-          ))}
-        </div>
-      </div>
+      )}
 
       {/* Indicator glossary — expanded only */}
       {expanded && (
@@ -937,7 +954,7 @@ function RsiPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolean
         </ResponsiveContainer>
       </div>
 
-      {maxOffset > 0 && (
+      {expanded && maxOffset > 0 && (
         <input
           type="range"
           className="momentum-scroll"
@@ -949,24 +966,26 @@ function RsiPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolean
         />
       )}
 
-      <div className="flex flex-col shrink-0 pb-1" style={{ paddingLeft: yAxisWidth, paddingRight: 6 }}>
-        <div className="flex justify-between">
-          {data.map((d, i) => (
-            <span key={i} style={{ fontSize: tickStyle.fontSize, color: "var(--text-muted)" }}>{d.date}</span>
-          ))}
+      {expanded && (
+        <div className="flex flex-col shrink-0 pb-1" style={{ paddingLeft: yAxisWidth, paddingRight: 6 }}>
+          <div className="flex justify-between">
+            {data.map((d, i) => (
+              <span key={i} style={{ fontSize: tickStyle.fontSize, color: "var(--text-muted)" }}>{d.date}</span>
+            ))}
+          </div>
+          <div className="flex">
+            {data.reduce<{ month: string; count: number }[]>((acc, d) => {
+              if (d.month) acc.push({ month: d.month, count: 1 });
+              else if (acc.length) acc[acc.length - 1].count++;
+              return acc;
+            }, []).map((g, i) => (
+              <div key={i} className="text-center" style={{ flex: g.count, fontSize: tickStyle.fontSize, color: "var(--text-muted)", fontWeight: 700 }}>
+                {g.month}
+              </div>
+            ))}
+          </div>
         </div>
-        <div className="flex">
-          {data.reduce<{ month: string; count: number }[]>((acc, d) => {
-            if (d.month) acc.push({ month: d.month, count: 1 });
-            else if (acc.length) acc[acc.length - 1].count++;
-            return acc;
-          }, []).map((g, i) => (
-            <div key={i} className="text-center" style={{ flex: g.count, fontSize: tickStyle.fontSize, color: "var(--text-muted)", fontWeight: 700 }}>
-              {g.month}
-            </div>
-          ))}
-        </div>
-      </div>
+      )}
 
       {/* Indicator glossary — expanded only */}
       {expanded && (
@@ -1175,7 +1194,7 @@ function Rsi14PanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boole
       </div>
 
       {/* Slider */}
-      {maxOffset > 0 && (
+      {expanded && maxOffset > 0 && (
         <input
           type="range"
           className="momentum-scroll"
@@ -1188,24 +1207,26 @@ function Rsi14PanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boole
       )}
 
       {/* Date labels */}
-      <div className="flex flex-col shrink-0 pb-1" style={{ paddingLeft: yAxisWidth, paddingRight: 6 }}>
-        <div className="flex justify-between">
-          {data.map((d, i) => (
-            <span key={i} style={{ fontSize: tickStyle.fontSize, color: "var(--text-muted)" }}>{d.date}</span>
-          ))}
+      {expanded && (
+        <div className="flex flex-col shrink-0 pb-1" style={{ paddingLeft: yAxisWidth, paddingRight: 6 }}>
+          <div className="flex justify-between">
+            {data.map((d, i) => (
+              <span key={i} style={{ fontSize: tickStyle.fontSize, color: "var(--text-muted)" }}>{d.date}</span>
+            ))}
+          </div>
+          <div className="flex">
+            {data.reduce<{ month: string; count: number }[]>((acc, d) => {
+              if (d.month) acc.push({ month: d.month, count: 1 });
+              else if (acc.length) acc[acc.length - 1].count++;
+              return acc;
+            }, []).map((g, i) => (
+              <div key={i} className="text-center" style={{ flex: g.count, fontSize: tickStyle.fontSize, color: "var(--text-muted)", fontWeight: 700 }}>
+                {g.month}
+              </div>
+            ))}
+          </div>
         </div>
-        <div className="flex">
-          {data.reduce<{ month: string; count: number }[]>((acc, d) => {
-            if (d.month) acc.push({ month: d.month, count: 1 });
-            else if (acc.length) acc[acc.length - 1].count++;
-            return acc;
-          }, []).map((g, i) => (
-            <div key={i} className="text-center" style={{ flex: g.count, fontSize: tickStyle.fontSize, color: "var(--text-muted)", fontWeight: 700 }}>
-              {g.month}
-            </div>
-          ))}
-        </div>
-      </div>
+      )}
 
       {/* Indicator glossary — expanded only */}
       {expanded && (
@@ -1585,9 +1606,9 @@ function MaPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolean 
   const [showClose] = useState(true);
   const [showEma9,    setShowEma9]   = useState(true);
   const [showEma20,   setShowEma20]  = useState(true);
-  const [showEma50,   setShowEma50]  = useState(true);
-  const [showEma100,  setShowEma100] = useState(true);
-  const [showEma200,  setShowEma200] = useState(true);
+  const [showEma50,   setShowEma50]  = useState(!!expanded);
+  const [showEma100,  setShowEma100] = useState(!!expanded);
+  const [showEma200,  setShowEma200] = useState(!!expanded);
   const [showCandles, setShowCandles] = useState(false);
   const chartRef  = useRef<HTMLDivElement>(null);
   const [chartSize, setChartSize] = useState<{ w: number; h: number } | null>(null);
@@ -1777,7 +1798,7 @@ function MaPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolean 
       </div>
 
       {/* Slider */}
-      {maxOffset > 0 && (
+      {expanded && maxOffset > 0 && (
         <input
           type="range"
           className="momentum-scroll"
@@ -1790,24 +1811,26 @@ function MaPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolean 
       )}
 
       {/* Date labels */}
-      <div className="flex flex-col shrink-0 pb-1" style={{ paddingLeft: yAxisWidth, paddingRight: 6 }}>
-        <div className="flex justify-between">
-          {data.map((d, i) => (
-            <span key={i} style={{ fontSize: tickStyle.fontSize, color: "var(--text-muted)" }}>{d.date}</span>
-          ))}
+      {expanded && (
+        <div className="flex flex-col shrink-0 pb-1" style={{ paddingLeft: yAxisWidth, paddingRight: 6 }}>
+          <div className="flex justify-between">
+            {data.map((d, i) => (
+              <span key={i} style={{ fontSize: tickStyle.fontSize, color: "var(--text-muted)" }}>{d.date}</span>
+            ))}
+          </div>
+          <div className="flex">
+            {data.reduce<{ month: string; count: number }[]>((acc, d) => {
+              if (d.month) acc.push({ month: d.month, count: 1 });
+              else if (acc.length) acc[acc.length - 1].count++;
+              return acc;
+            }, []).map((g, i) => (
+              <div key={i} className="text-center" style={{ flex: g.count, fontSize: tickStyle.fontSize, color: "var(--text-muted)", fontWeight: 700 }}>
+                {g.month}
+              </div>
+            ))}
+          </div>
         </div>
-        <div className="flex">
-          {data.reduce<{ month: string; count: number }[]>((acc, d) => {
-            if (d.month) acc.push({ month: d.month, count: 1 });
-            else if (acc.length) acc[acc.length - 1].count++;
-            return acc;
-          }, []).map((g, i) => (
-            <div key={i} className="text-center" style={{ flex: g.count, fontSize: tickStyle.fontSize, color: "var(--text-muted)", fontWeight: 700 }}>
-              {g.month}
-            </div>
-          ))}
-        </div>
-      </div>
+      )}
 
       {/* Indicator glossary — expanded only */}
       {expanded && (
@@ -1918,7 +1941,7 @@ function AdxPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolean
       </div>
 
       {/* Slider */}
-      {maxOffset > 0 && (
+      {expanded && maxOffset > 0 && (
         <input
           type="range"
           className="momentum-scroll"
@@ -1931,24 +1954,26 @@ function AdxPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolean
       )}
 
       {/* Date labels */}
-      <div className="flex flex-col shrink-0 pb-1" style={{ paddingLeft: yAxisWidth, paddingRight: 6 }}>
-        <div className="flex justify-between">
-          {data.map((d, i) => (
-            <span key={i} style={{ fontSize: tickStyle.fontSize, color: "var(--text-muted)" }}>{d.date}</span>
-          ))}
+      {expanded && (
+        <div className="flex flex-col shrink-0 pb-1" style={{ paddingLeft: yAxisWidth, paddingRight: 6 }}>
+          <div className="flex justify-between">
+            {data.map((d, i) => (
+              <span key={i} style={{ fontSize: tickStyle.fontSize, color: "var(--text-muted)" }}>{d.date}</span>
+            ))}
+          </div>
+          <div className="flex">
+            {data.reduce<{ month: string; count: number }[]>((acc, d) => {
+              if (d.month) acc.push({ month: d.month, count: 1 });
+              else if (acc.length) acc[acc.length - 1].count++;
+              return acc;
+            }, []).map((g, i) => (
+              <div key={i} className="text-center" style={{ flex: g.count, fontSize: tickStyle.fontSize, color: "var(--text-muted)", fontWeight: 700 }}>
+                {g.month}
+              </div>
+            ))}
+          </div>
         </div>
-        <div className="flex">
-          {data.reduce<{ month: string; count: number }[]>((acc, d) => {
-            if (d.month) acc.push({ month: d.month, count: 1 });
-            else if (acc.length) acc[acc.length - 1].count++;
-            return acc;
-          }, []).map((g, i) => (
-            <div key={i} className="text-center" style={{ flex: g.count, fontSize: tickStyle.fontSize, color: "var(--text-muted)", fontWeight: 700 }}>
-              {g.month}
-            </div>
-          ))}
-        </div>
-      </div>
+      )}
 
       {/* Indicator glossary — expanded only */}
       {expanded && (
@@ -2235,9 +2260,8 @@ function IchiPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolea
           );
         })()}
       </div>
-
       {/* Slider */}
-      {maxOffset > 0 && (
+      {expanded && maxOffset > 0 && (
         <input
           type="range"
           className="momentum-scroll"
@@ -2250,24 +2274,26 @@ function IchiPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolea
       )}
 
       {/* Date labels — only for price positions (0..windowSize-1); last 26 slots are the cloud projection zone */}
-      <div className="flex flex-col shrink-0 pb-1" style={{ paddingLeft: yAxisWidth, paddingRight: 6 }}>
-        <div className="flex justify-between">
-          {data.map((d, i) => (
-            <span key={i} style={{ fontSize: tickStyle.fontSize, color: i < windowSize ? "var(--text-muted)" : "transparent" }}>{d.date || " "}</span>
-          ))}
+      {expanded && (
+        <div className="flex flex-col shrink-0 pb-1" style={{ paddingLeft: yAxisWidth, paddingRight: 6 }}>
+          <div className="flex justify-between">
+            {data.map((d, i) => (
+              <span key={i} style={{ fontSize: tickStyle.fontSize, color: i < windowSize ? "var(--text-muted)" : "transparent" }}>{d.date || " "}</span>
+            ))}
+          </div>
+          <div className="flex">
+            {data.reduce<{ month: string; count: number }[]>((acc, d) => {
+              if (d.month) acc.push({ month: d.month, count: 1 });
+              else if (acc.length) acc[acc.length - 1].count++;
+              return acc;
+            }, []).map((g, i) => (
+              <div key={i} className="text-center" style={{ flex: g.count, fontSize: tickStyle.fontSize, color: "var(--text-muted)", fontWeight: 700 }}>
+                {g.month}
+              </div>
+            ))}
+          </div>
         </div>
-        <div className="flex">
-          {data.reduce<{ month: string; count: number }[]>((acc, d) => {
-            if (d.month) acc.push({ month: d.month, count: 1 });
-            else if (acc.length) acc[acc.length - 1].count++;
-            return acc;
-          }, []).map((g, i) => (
-            <div key={i} className="text-center" style={{ flex: g.count, fontSize: tickStyle.fontSize, color: "var(--text-muted)", fontWeight: 700 }}>
-              {g.month}
-            </div>
-          ))}
-        </div>
-      </div>
+      )}
 
       {/* Indicator glossary — expanded only */}
       {expanded && (
@@ -2452,29 +2478,31 @@ function SessionPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boo
         </div>
       )}
 
-      {maxOffset > 0 && (
+      {expanded && maxOffset > 0 && (
         <input type="range" className="momentum-scroll" min={0} max={maxOffset} value={offset}
           onChange={e => setOffset(Number(e.target.value))} style={{ direction: "rtl" }} />
       )}
 
-      <div className="flex flex-col shrink-0 pb-1" style={{ paddingLeft: yAxisWidth, paddingRight: 6 }}>
-        <div className="flex justify-between">
-          {data.map((d, i) => (
-            <span key={i} style={{ fontSize: tickStyle.fontSize, color: "var(--text-muted)" }}>{d.date}</span>
-          ))}
+      {expanded && (
+        <div className="flex flex-col shrink-0 pb-1" style={{ paddingLeft: yAxisWidth, paddingRight: 6 }}>
+          <div className="flex justify-between">
+            {data.map((d, i) => (
+              <span key={i} style={{ fontSize: tickStyle.fontSize, color: "var(--text-muted)" }}>{d.date}</span>
+            ))}
+          </div>
+          <div className="flex">
+            {data.reduce<{ month: string; count: number }[]>((acc, d) => {
+              if (d.month) acc.push({ month: d.month, count: 1 });
+              else if (acc.length) acc[acc.length - 1].count++;
+              return acc;
+            }, []).map((g, i) => (
+              <div key={i} className="text-center" style={{ flex: g.count, fontSize: tickStyle.fontSize, color: "var(--text-muted)", fontWeight: 700 }}>
+                {g.month}
+              </div>
+            ))}
+          </div>
         </div>
-        <div className="flex">
-          {data.reduce<{ month: string; count: number }[]>((acc, d) => {
-            if (d.month) acc.push({ month: d.month, count: 1 });
-            else if (acc.length) acc[acc.length - 1].count++;
-            return acc;
-          }, []).map((g, i) => (
-            <div key={i} className="text-center" style={{ flex: g.count, fontSize: tickStyle.fontSize, color: "var(--text-muted)", fontWeight: 700 }}>
-              {g.month}
-            </div>
-          ))}
-        </div>
-      </div>
+      )}
 
       {expanded && (
         <div className="shrink-0 flex" style={{ borderTop: "1px solid var(--border-subtle)", background: "rgba(255,255,255,0.015)" }}>
@@ -2709,29 +2737,31 @@ function AvgPricePanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: bo
         </div>
       )}
 
-      {maxOffset > 0 && (
+      {expanded && maxOffset > 0 && (
         <input type="range" className="momentum-scroll" min={0} max={maxOffset} value={offset}
           onChange={e => setOffset(Number(e.target.value))} style={{ direction: "rtl" }} />
       )}
 
-      <div className="flex flex-col shrink-0 pb-1" style={{ paddingLeft: yAxisWidth, paddingRight: 6 }}>
-        <div className="flex justify-between">
-          {data.map((d, i) => (
-            <span key={i} style={{ fontSize: tickStyle.fontSize, color: "var(--text-muted)" }}>{d.date}</span>
-          ))}
+      {expanded && (
+        <div className="flex flex-col shrink-0 pb-1" style={{ paddingLeft: yAxisWidth, paddingRight: 6 }}>
+          <div className="flex justify-between">
+            {data.map((d, i) => (
+              <span key={i} style={{ fontSize: tickStyle.fontSize, color: "var(--text-muted)" }}>{d.date}</span>
+            ))}
+          </div>
+          <div className="flex">
+            {data.reduce<{ month: string; count: number }[]>((acc, d) => {
+              if (d.month) acc.push({ month: d.month, count: 1 });
+              else if (acc.length) acc[acc.length - 1].count++;
+              return acc;
+            }, []).map((g, i) => (
+              <div key={i} className="text-center" style={{ flex: g.count, fontSize: tickStyle.fontSize, color: "var(--text-muted)", fontWeight: 700 }}>
+                {g.month}
+              </div>
+            ))}
+          </div>
         </div>
-        <div className="flex">
-          {data.reduce<{ month: string; count: number }[]>((acc, d) => {
-            if (d.month) acc.push({ month: d.month, count: 1 });
-            else if (acc.length) acc[acc.length - 1].count++;
-            return acc;
-          }, []).map((g, i) => (
-            <div key={i} className="text-center" style={{ flex: g.count, fontSize: tickStyle.fontSize, color: "var(--text-muted)", fontWeight: 700 }}>
-              {g.month}
-            </div>
-          ))}
-        </div>
-      </div>
+      )}
 
       {expanded && (
         <div className="shrink-0 flex" style={{ borderTop: "1px solid var(--border-subtle)", background: "rgba(255,255,255,0.015)" }}>
@@ -2837,29 +2867,31 @@ function RocPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolean
         </ResponsiveContainer>
       </div>
 
-      {maxOffset > 0 && (
+      {expanded && maxOffset > 0 && (
         <input type="range" className="momentum-scroll" min={0} max={maxOffset} value={offset}
           onChange={e => setOffset(Number(e.target.value))} style={{ direction: "rtl" }} />
       )}
 
-      <div className="flex flex-col shrink-0 pb-1" style={{ paddingLeft: yAxisWidth, paddingRight: 6 }}>
-        <div className="flex justify-between">
-          {data.map((d, i) => (
-            <span key={i} style={{ fontSize: tickStyle.fontSize, color: "var(--text-muted)" }}>{d.date}</span>
-          ))}
+      {expanded && (
+        <div className="flex flex-col shrink-0 pb-1" style={{ paddingLeft: yAxisWidth, paddingRight: 6 }}>
+          <div className="flex justify-between">
+            {data.map((d, i) => (
+              <span key={i} style={{ fontSize: tickStyle.fontSize, color: "var(--text-muted)" }}>{d.date}</span>
+            ))}
+          </div>
+          <div className="flex">
+            {data.reduce<{ month: string; count: number }[]>((acc, d) => {
+              if (d.month) acc.push({ month: d.month, count: 1 });
+              else if (acc.length) acc[acc.length - 1].count++;
+              return acc;
+            }, []).map((g, i) => (
+              <div key={i} className="text-center" style={{ flex: g.count, fontSize: tickStyle.fontSize, color: "var(--text-muted)", fontWeight: 700 }}>
+                {g.month}
+              </div>
+            ))}
+          </div>
         </div>
-        <div className="flex">
-          {data.reduce<{ month: string; count: number }[]>((acc, d) => {
-            if (d.month) acc.push({ month: d.month, count: 1 });
-            else if (acc.length) acc[acc.length - 1].count++;
-            return acc;
-          }, []).map((g, i) => (
-            <div key={i} className="text-center" style={{ flex: g.count, fontSize: tickStyle.fontSize, color: "var(--text-muted)", fontWeight: 700 }}>
-              {g.month}
-            </div>
-          ))}
-        </div>
-      </div>
+      )}
 
       {expanded && (
         <div className="shrink-0 flex" style={{ borderTop: "1px solid var(--border-subtle)", background: "rgba(255,255,255,0.015)" }}>
@@ -3101,29 +3133,31 @@ function AtrPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolean
         </div>
       )}
 
-      {maxOffset > 0 && (
+      {expanded && maxOffset > 0 && (
         <input type="range" className="momentum-scroll" min={0} max={maxOffset} value={offset}
           onChange={e => setOffset(Number(e.target.value))} style={{ direction: "rtl" }} />
       )}
 
-      <div className="flex flex-col shrink-0 pb-1" style={{ paddingLeft: yAxisWidth, paddingRight: 6 }}>
-        <div className="flex justify-between">
-          {data.map((d, i) => (
-            <span key={i} style={{ fontSize: tickStyle.fontSize, color: "var(--text-muted)" }}>{d.date}</span>
-          ))}
+      {expanded && (
+        <div className="flex flex-col shrink-0 pb-1" style={{ paddingLeft: yAxisWidth, paddingRight: 6 }}>
+          <div className="flex justify-between">
+            {data.map((d, i) => (
+              <span key={i} style={{ fontSize: tickStyle.fontSize, color: "var(--text-muted)" }}>{d.date}</span>
+            ))}
+          </div>
+          <div className="flex">
+            {data.reduce<{ month: string; count: number }[]>((acc, d) => {
+              if (d.month) acc.push({ month: d.month, count: 1 });
+              else if (acc.length) acc[acc.length - 1].count++;
+              return acc;
+            }, []).map((g, i) => (
+              <div key={i} className="text-center" style={{ flex: g.count, fontSize: tickStyle.fontSize, color: "var(--text-muted)", fontWeight: 700 }}>
+                {g.month}
+              </div>
+            ))}
+          </div>
         </div>
-        <div className="flex">
-          {data.reduce<{ month: string; count: number }[]>((acc, d) => {
-            if (d.month) acc.push({ month: d.month, count: 1 });
-            else if (acc.length) acc[acc.length - 1].count++;
-            return acc;
-          }, []).map((g, i) => (
-            <div key={i} className="text-center" style={{ flex: g.count, fontSize: tickStyle.fontSize, color: "var(--text-muted)", fontWeight: 700 }}>
-              {g.month}
-            </div>
-          ))}
-        </div>
-      </div>
+      )}
 
       {expanded && (
         <div className="shrink-0 flex" style={{ borderTop: "1px solid var(--border-subtle)", background: "rgba(255,255,255,0.015)" }}>
@@ -3786,29 +3820,31 @@ function MarketStructurePanelBody({ rows, expanded }: { rows: SheetRow[]; expand
         })()}
       </div>
 
-      {maxOffset > 0 && (
+      {expanded && maxOffset > 0 && (
         <input type="range" className="momentum-scroll" min={0} max={maxOffset} value={offset}
           onChange={e => setOffset(Number(e.target.value))} style={{ direction: "rtl" }} />
       )}
 
-      <div className="flex flex-col shrink-0 pb-1" style={{ paddingLeft: yAxisWidth, paddingRight: 6 }}>
-        <div className="flex justify-between">
-          {data.map((d, i) => (
-            <span key={i} style={{ fontSize: tickStyle.fontSize, color: "var(--text-muted)" }}>{d.date}</span>
-          ))}
+      {expanded && (
+        <div className="flex flex-col shrink-0 pb-1" style={{ paddingLeft: yAxisWidth, paddingRight: 6 }}>
+          <div className="flex justify-between">
+            {data.map((d, i) => (
+              <span key={i} style={{ fontSize: tickStyle.fontSize, color: "var(--text-muted)" }}>{d.date}</span>
+            ))}
+          </div>
+          <div className="flex">
+            {data.reduce<{ month: string; count: number }[]>((acc, d) => {
+              if (d.month) acc.push({ month: d.month, count: 1 });
+              else if (acc.length) acc[acc.length - 1].count++;
+              return acc;
+            }, []).map((g, i) => (
+              <div key={i} className="text-center" style={{ flex: g.count, fontSize: tickStyle.fontSize, color: "var(--text-muted)", fontWeight: 700 }}>
+                {g.month}
+              </div>
+            ))}
+          </div>
         </div>
-        <div className="flex">
-          {data.reduce<{ month: string; count: number }[]>((acc, d) => {
-            if (d.month) acc.push({ month: d.month, count: 1 });
-            else if (acc.length) acc[acc.length - 1].count++;
-            return acc;
-          }, []).map((g, i) => (
-            <div key={i} className="text-center" style={{ flex: g.count, fontSize: tickStyle.fontSize, color: "var(--text-muted)", fontWeight: 700 }}>
-              {g.month}
-            </div>
-          ))}
-        </div>
-      </div>
+      )}
 
       {expanded && (
         <div className="shrink-0 flex" style={{ borderTop: "1px solid var(--border-subtle)", background: "rgba(255,255,255,0.015)" }}>
@@ -4040,29 +4076,31 @@ function VolatilityPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: 
         </div>
       )}
 
-      {maxOffset > 0 && (
+      {expanded && maxOffset > 0 && (
         <input type="range" className="momentum-scroll" min={0} max={maxOffset} value={offset}
           onChange={e => setOffset(Number(e.target.value))} style={{ direction: "rtl" }} />
       )}
 
-      <div className="flex flex-col shrink-0 pb-1" style={{ paddingLeft: yAxisWidth, paddingRight: 6 }}>
-        <div className="flex justify-between">
-          {data.map((d, i) => (
-            <span key={i} style={{ fontSize: tickStyle.fontSize, color: "var(--text-muted)" }}>{d.date}</span>
-          ))}
+      {expanded && (
+        <div className="flex flex-col shrink-0 pb-1" style={{ paddingLeft: yAxisWidth, paddingRight: 6 }}>
+          <div className="flex justify-between">
+            {data.map((d, i) => (
+              <span key={i} style={{ fontSize: tickStyle.fontSize, color: "var(--text-muted)" }}>{d.date}</span>
+            ))}
+          </div>
+          <div className="flex">
+            {data.reduce<{ month: string; count: number }[]>((acc, d) => {
+              if (d.month) acc.push({ month: d.month, count: 1 });
+              else if (acc.length) acc[acc.length - 1].count++;
+              return acc;
+            }, []).map((g, i) => (
+              <div key={i} className="text-center" style={{ flex: g.count, fontSize: tickStyle.fontSize, color: "var(--text-muted)", fontWeight: 700 }}>
+                {g.month}
+              </div>
+            ))}
+          </div>
         </div>
-        <div className="flex">
-          {data.reduce<{ month: string; count: number }[]>((acc, d) => {
-            if (d.month) acc.push({ month: d.month, count: 1 });
-            else if (acc.length) acc[acc.length - 1].count++;
-            return acc;
-          }, []).map((g, i) => (
-            <div key={i} className="text-center" style={{ flex: g.count, fontSize: tickStyle.fontSize, color: "var(--text-muted)", fontWeight: 700 }}>
-              {g.month}
-            </div>
-          ))}
-        </div>
-      </div>
+      )}
 
       {expanded && (
         <div className="shrink-0 flex" style={{ borderTop: "1px solid var(--border-subtle)", background: "rgba(255,255,255,0.015)" }}>
@@ -4215,29 +4253,31 @@ function CciPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolean
         </ResponsiveContainer>
       </div>
 
-      {maxOffset > 0 && (
+      {expanded && maxOffset > 0 && (
         <input type="range" className="momentum-scroll" min={0} max={maxOffset} value={offset}
           onChange={e => setOffset(Number(e.target.value))} style={{ direction: "rtl" }} />
       )}
 
-      <div className="flex flex-col shrink-0 pb-1" style={{ paddingLeft: yAxisWidth, paddingRight: 6 }}>
-        <div className="flex justify-between">
-          {data.map((d, i) => (
-            <span key={i} style={{ fontSize: tickStyle.fontSize, color: "var(--text-muted)" }}>{d.date}</span>
-          ))}
+      {expanded && (
+        <div className="flex flex-col shrink-0 pb-1" style={{ paddingLeft: yAxisWidth, paddingRight: 6 }}>
+          <div className="flex justify-between">
+            {data.map((d, i) => (
+              <span key={i} style={{ fontSize: tickStyle.fontSize, color: "var(--text-muted)" }}>{d.date}</span>
+            ))}
+          </div>
+          <div className="flex">
+            {data.reduce<{ month: string; count: number }[]>((acc, d) => {
+              if (d.month) acc.push({ month: d.month, count: 1 });
+              else if (acc.length) acc[acc.length - 1].count++;
+              return acc;
+            }, []).map((g, i) => (
+              <div key={i} className="text-center" style={{ flex: g.count, fontSize: tickStyle.fontSize, color: "var(--text-muted)", fontWeight: 700 }}>
+                {g.month}
+              </div>
+            ))}
+          </div>
         </div>
-        <div className="flex">
-          {data.reduce<{ month: string; count: number }[]>((acc, d) => {
-            if (d.month) acc.push({ month: d.month, count: 1 });
-            else if (acc.length) acc[acc.length - 1].count++;
-            return acc;
-          }, []).map((g, i) => (
-            <div key={i} className="text-center" style={{ flex: g.count, fontSize: tickStyle.fontSize, color: "var(--text-muted)", fontWeight: 700 }}>
-              {g.month}
-            </div>
-          ))}
-        </div>
-      </div>
+      )}
 
       {expanded && (
         <div className="shrink-0 flex" style={{ borderTop: "1px solid var(--border-subtle)", background: "rgba(255,255,255,0.015)" }}>
@@ -4319,29 +4359,31 @@ function WrPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolean 
         </ResponsiveContainer>
       </div>
 
-      {maxOffset > 0 && (
+      {expanded && maxOffset > 0 && (
         <input type="range" className="momentum-scroll" min={0} max={maxOffset} value={offset}
           onChange={e => setOffset(Number(e.target.value))} style={{ direction: "rtl" }} />
       )}
 
-      <div className="flex flex-col shrink-0 pb-1" style={{ paddingLeft: yAxisWidth, paddingRight: 6 }}>
-        <div className="flex justify-between">
-          {data.map((d, i) => (
-            <span key={i} style={{ fontSize: tickStyle.fontSize, color: "var(--text-muted)" }}>{d.date}</span>
-          ))}
+      {expanded && (
+        <div className="flex flex-col shrink-0 pb-1" style={{ paddingLeft: yAxisWidth, paddingRight: 6 }}>
+          <div className="flex justify-between">
+            {data.map((d, i) => (
+              <span key={i} style={{ fontSize: tickStyle.fontSize, color: "var(--text-muted)" }}>{d.date}</span>
+            ))}
+          </div>
+          <div className="flex">
+            {data.reduce<{ month: string; count: number }[]>((acc, d) => {
+              if (d.month) acc.push({ month: d.month, count: 1 });
+              else if (acc.length) acc[acc.length - 1].count++;
+              return acc;
+            }, []).map((g, i) => (
+              <div key={i} className="text-center" style={{ flex: g.count, fontSize: tickStyle.fontSize, color: "var(--text-muted)", fontWeight: 700 }}>
+                {g.month}
+              </div>
+            ))}
+          </div>
         </div>
-        <div className="flex">
-          {data.reduce<{ month: string; count: number }[]>((acc, d) => {
-            if (d.month) acc.push({ month: d.month, count: 1 });
-            else if (acc.length) acc[acc.length - 1].count++;
-            return acc;
-          }, []).map((g, i) => (
-            <div key={i} className="text-center" style={{ flex: g.count, fontSize: tickStyle.fontSize, color: "var(--text-muted)", fontWeight: 700 }}>
-              {g.month}
-            </div>
-          ))}
-        </div>
-      </div>
+      )}
 
       {expanded && (
         <div className="shrink-0 flex" style={{ borderTop: "1px solid var(--border-subtle)", background: "rgba(255,255,255,0.015)" }}>
@@ -4645,29 +4687,31 @@ function PivotPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boole
         })()}
       </div>
 
-      {maxOffset > 0 && (
+      {expanded && maxOffset > 0 && (
         <input type="range" className="momentum-scroll" min={0} max={maxOffset} value={offset}
           onChange={e => setOffset(Number(e.target.value))} style={{ direction: "rtl" }} />
       )}
 
-      <div className="flex flex-col shrink-0 pb-1" style={{ paddingLeft: yAxisWidth, paddingRight: 6 }}>
-        <div className="flex justify-between">
-          {data.map((d, i) => (
-            <span key={i} style={{ fontSize: tickStyle.fontSize, color: "var(--text-muted)" }}>{d.date}</span>
-          ))}
+      {expanded && (
+        <div className="flex flex-col shrink-0 pb-1" style={{ paddingLeft: yAxisWidth, paddingRight: 6 }}>
+          <div className="flex justify-between">
+            {data.map((d, i) => (
+              <span key={i} style={{ fontSize: tickStyle.fontSize, color: "var(--text-muted)" }}>{d.date}</span>
+            ))}
+          </div>
+          <div className="flex">
+            {data.reduce<{ month: string; count: number }[]>((acc, d) => {
+              if (d.month) acc.push({ month: d.month, count: 1 });
+              else if (acc.length) acc[acc.length - 1].count++;
+              return acc;
+            }, []).map((g, i) => (
+              <div key={i} className="text-center" style={{ flex: g.count, fontSize: tickStyle.fontSize, color: "var(--text-muted)", fontWeight: 700 }}>
+                {g.month}
+              </div>
+            ))}
+          </div>
         </div>
-        <div className="flex">
-          {data.reduce<{ month: string; count: number }[]>((acc, d) => {
-            if (d.month) acc.push({ month: d.month, count: 1 });
-            else if (acc.length) acc[acc.length - 1].count++;
-            return acc;
-          }, []).map((g, i) => (
-            <div key={i} className="text-center" style={{ flex: g.count, fontSize: tickStyle.fontSize, color: "var(--text-muted)", fontWeight: 700 }}>
-              {g.month}
-            </div>
-          ))}
-        </div>
-      </div>
+      )}
 
       {expanded && (
         <div className="shrink-0 flex" style={{ borderTop: "1px solid var(--border-subtle)", background: "rgba(255,255,255,0.015)" }}>
@@ -4838,29 +4882,31 @@ function VolumePanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: bool
         </ResponsiveContainer>
       </div>
 
-      {maxOffset > 0 && (
+      {expanded && maxOffset > 0 && (
         <input type="range" className="momentum-scroll" min={0} max={maxOffset} value={offset}
           onChange={e => setOffset(Number(e.target.value))} style={{ direction: "rtl" }} />
       )}
 
-      <div className="flex flex-col shrink-0 pb-1" style={{ paddingLeft: yAxisWidth, paddingRight: 6 }}>
-        <div className="flex justify-between">
-          {data.map((d, i) => (
-            <span key={i} style={{ fontSize: tickStyle.fontSize, color: "var(--text-muted)" }}>{d.date}</span>
-          ))}
+      {expanded && (
+        <div className="flex flex-col shrink-0 pb-1" style={{ paddingLeft: yAxisWidth, paddingRight: 6 }}>
+          <div className="flex justify-between">
+            {data.map((d, i) => (
+              <span key={i} style={{ fontSize: tickStyle.fontSize, color: "var(--text-muted)" }}>{d.date}</span>
+            ))}
+          </div>
+          <div className="flex">
+            {data.reduce<{ month: string; count: number }[]>((acc, d) => {
+              if (d.month) acc.push({ month: d.month, count: 1 });
+              else if (acc.length) acc[acc.length - 1].count++;
+              return acc;
+            }, []).map((g, i) => (
+              <div key={i} className="text-center" style={{ flex: g.count, fontSize: tickStyle.fontSize, color: "var(--text-muted)", fontWeight: 700 }}>
+                {g.month}
+              </div>
+            ))}
+          </div>
         </div>
-        <div className="flex">
-          {data.reduce<{ month: string; count: number }[]>((acc, d) => {
-            if (d.month) acc.push({ month: d.month, count: 1 });
-            else if (acc.length) acc[acc.length - 1].count++;
-            return acc;
-          }, []).map((g, i) => (
-            <div key={i} className="text-center" style={{ flex: g.count, fontSize: tickStyle.fontSize, color: "var(--text-muted)", fontWeight: 700 }}>
-              {g.month}
-            </div>
-          ))}
-        </div>
-      </div>
+      )}
 
       {expanded && (
         <div className="shrink-0 flex" style={{ borderTop: "1px solid var(--border-subtle)", background: "rgba(255,255,255,0.015)" }}>
@@ -5056,7 +5102,7 @@ function KeltPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolea
       </div>
 
       {/* Slider */}
-      {maxOffset > 0 && (
+      {expanded && maxOffset > 0 && (
         <input
           type="range"
           className="momentum-scroll"
@@ -5069,24 +5115,26 @@ function KeltPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolea
       )}
 
       {/* Date labels */}
-      <div className="flex flex-col shrink-0 pb-1" style={{ paddingLeft: yAxisWidth, paddingRight: 6 }}>
-        <div className="flex justify-between">
-          {data.map((d, i) => (
-            <span key={i} style={{ fontSize: tickStyle.fontSize, color: "var(--text-muted)" }}>{d.date}</span>
-          ))}
+      {expanded && (
+        <div className="flex flex-col shrink-0 pb-1" style={{ paddingLeft: yAxisWidth, paddingRight: 6 }}>
+          <div className="flex justify-between">
+            {data.map((d, i) => (
+              <span key={i} style={{ fontSize: tickStyle.fontSize, color: "var(--text-muted)" }}>{d.date}</span>
+            ))}
+          </div>
+          <div className="flex">
+            {data.reduce<{ month: string; count: number }[]>((acc, d) => {
+              if (d.month) acc.push({ month: d.month, count: 1 });
+              else if (acc.length) acc[acc.length - 1].count++;
+              return acc;
+            }, []).map((g, i) => (
+              <div key={i} className="text-center" style={{ flex: g.count, fontSize: tickStyle.fontSize, color: "var(--text-muted)", fontWeight: 700 }}>
+                {g.month}
+              </div>
+            ))}
+          </div>
         </div>
-        <div className="flex">
-          {data.reduce<{ month: string; count: number }[]>((acc, d) => {
-            if (d.month) acc.push({ month: d.month, count: 1 });
-            else if (acc.length) acc[acc.length - 1].count++;
-            return acc;
-          }, []).map((g, i) => (
-            <div key={i} className="text-center" style={{ flex: g.count, fontSize: tickStyle.fontSize, color: "var(--text-muted)", fontWeight: 700 }}>
-              {g.month}
-            </div>
-          ))}
-        </div>
-      </div>
+      )}
 
       {/* Indicator glossary — expanded only */}
       {expanded && (
@@ -5761,7 +5809,7 @@ function RegimePanelBody({ rows, expanded, showCandles, onToggleCandles }: { row
       </div>
 
       {/* ── Scroll ── */}
-      {maxOffset > 0 && (
+      {expanded && maxOffset > 0 && (
         <input
           type="range"
           className="momentum-scroll"
@@ -5774,24 +5822,26 @@ function RegimePanelBody({ rows, expanded, showCandles, onToggleCandles }: { row
       )}
 
       {/* ── Date labels ── */}
-      <div className="flex flex-col shrink-0 pb-1" style={{ paddingLeft: yAxisWidth, paddingRight: 6 }}>
-        <div className="flex justify-between">
-          {data.map((d, i) => (
-            <span key={i} style={{ fontSize: tickStyle.fontSize, color: "var(--text-muted)" }}>{d.date}</span>
-          ))}
+      {expanded && (
+        <div className="flex flex-col shrink-0 pb-1" style={{ paddingLeft: yAxisWidth, paddingRight: 6 }}>
+          <div className="flex justify-between">
+            {data.map((d, i) => (
+              <span key={i} style={{ fontSize: tickStyle.fontSize, color: "var(--text-muted)" }}>{d.date}</span>
+            ))}
+          </div>
+          <div className="flex">
+            {data.reduce<{ month: string; count: number }[]>((acc, d) => {
+              if (d.month) acc.push({ month: d.month, count: 1 });
+              else if (acc.length) acc[acc.length - 1].count++;
+              return acc;
+            }, []).map((g, i) => (
+              <div key={i} className="text-center" style={{ flex: g.count, fontSize: tickStyle.fontSize, color: "var(--text-muted)", fontWeight: 700 }}>
+                {g.month}
+              </div>
+            ))}
+          </div>
         </div>
-        <div className="flex">
-          {data.reduce<{ month: string; count: number }[]>((acc, d) => {
-            if (d.month) acc.push({ month: d.month, count: 1 });
-            else if (acc.length) acc[acc.length - 1].count++;
-            return acc;
-          }, []).map((g, i) => (
-            <div key={i} className="text-center" style={{ flex: g.count, fontSize: tickStyle.fontSize, color: "var(--text-muted)", fontWeight: 700 }}>
-              {g.month}
-            </div>
-          ))}
-        </div>
-      </div>
+      )}
 
       {/* ── Glossary (expanded only) ── */}
       {expanded && (
@@ -6417,22 +6467,46 @@ export function AnalyticsV3() {
   const adxBadgeExpanded = makeAdxBadge(true);
 
   const ichiHeadline = sheetRows.length > 0 ? buildIchiAnalysis(sheetRows).headline : "";
+  // Bias: primary rule — cloud position determines trend direction (above=bullish, below=bearish, inside=neutral)
   const ichiBias = !latestRow ? "neutral"
     : latestRow.close > Math.max(latestRow.senkouA, latestRow.senkouB) ? "bullish"
     : latestRow.close < Math.min(latestRow.senkouA, latestRow.senkouB) ? "bearish"
     : "neutral";
+  // Score: counts how many of the 4 Ichimoku confirmations align with the bias direction
+  // Confirmations: (1) price vs cloud, (2) cloud color, (3) Tenkan/Kijun alignment, (4) Chikou vs price 26 bars ago
   const ichiScore = useMemo(() => {
     if (!latestRow) return 0;
-    const cloudTop    = Math.max(latestRow.senkouA, latestRow.senkouB);
-    const cloudBottom = Math.min(latestRow.senkouA, latestRow.senkouB);
-    const cloudMid    = (cloudTop + cloudBottom) / 2;
-    const bandwidth   = cloudTop - cloudBottom;
+    const cloudTop     = Math.max(latestRow.senkouA, latestRow.senkouB);
+    const cloudBottom  = Math.min(latestRow.senkouA, latestRow.senkouB);
+    const aboveCloud   = latestRow.close > cloudTop;
+    const belowCloud   = latestRow.close < cloudBottom;
+    const bullishCloud = latestRow.senkouA > latestRow.senkouB;
+    const bearishCloud = latestRow.senkouB > latestRow.senkouA;
+    const tkBullish    = latestRow.tenkan > latestRow.kijun;
+    const chikouRef    = sheetRows.length > 26 ? sheetRows[sheetRows.length - 27] : null;
+    const chikouBull   = chikouRef ? latestRow.close > chikouRef.close : null;
+    if (aboveCloud) {
+      let c = 1;
+      if (bullishCloud)        c++;
+      if (tkBullish)           c++;
+      if (chikouBull === true) c++;
+      return Math.round((c / 4) * 100);
+    }
+    if (belowCloud) {
+      let c = 1;
+      if (bearishCloud)         c++;
+      if (!tkBullish)           c++;
+      if (chikouBull === false) c++;
+      return Math.round((c / 4) * 100);
+    }
+    // Inside cloud — score reflects penetration depth (higher = closer to a breakout edge)
+    const bandwidth = cloudTop - cloudBottom;
     if (bandwidth <= 0) return 0;
-    const dist = Math.abs(latestRow.close - cloudMid);
-    return Math.min(100, Math.round((dist / (bandwidth / 2)) * 100));
-  }, [latestRow]);
+    const cloudMid = (cloudTop + cloudBottom) / 2;
+    return Math.min(100, Math.round((Math.abs(latestRow.close - cloudMid) / (bandwidth / 2)) * 100));
+  }, [latestRow, sheetRows]);
   const makeIchiBadge = (large?: boolean) => (
-    <HoverTooltip tip={`Score ${ichiScore}/100 — distance of close from cloud midpoint as % of half cloud thickness. Higher = price further from the cloud (stronger conviction). ${latestRow ? `Price is ${latestRow.close > Math.max(latestRow.senkouA, latestRow.senkouB) ? "above cloud" : latestRow.close < Math.min(latestRow.senkouA, latestRow.senkouB) ? "below cloud" : "inside cloud"}.` : ""}`}>
+    <HoverTooltip tip={`Score ${ichiScore}/100 — ${latestRow && latestRow.close > Math.max(latestRow.senkouA, latestRow.senkouB) ? "bullish confirmations" : latestRow && latestRow.close < Math.min(latestRow.senkouA, latestRow.senkouB) ? "bearish confirmations" : "cloud penetration depth"}. Counts: (1) price vs cloud, (2) cloud color, (3) Tenkan/Kijun alignment, (4) Chikou vs price 26 bars ago. Higher = more confirmations aligned.`}>
       <span
         className={`${large ? "text-[11px]" : "text-[8px]"} font-black uppercase rounded-full`}
         style={{
@@ -7147,62 +7221,111 @@ export function AnalyticsV3() {
         {/* ── Divider ── */}
         <div style={{ height: 1, background: "var(--border-medium)", flexShrink: 0 }} />
 
-        {/* ── Scrollable bottom rows ── */}
-        <div className="flex-1 min-h-0" style={{ overflowY: "auto", paddingTop: "10px" }}>
-          <div style={{
-            display:             "grid",
-            gridTemplateColumns: "repeat(4, 1fr)",
-            gridTemplateAreas:   `
-              "sess vol  avgp price"
-              "vola macd pvt  kelt"
-              "ma   rsi9 rsi14 cci"
-              "adx  ichi atr  fsw"
-              "wr   roc  cctx mstr"
-              "rgme .    .    ."
-            `,
-            gridTemplateRows: "repeat(6, 200px)",
-            gap:              "10px",
-          }}>
-            {panelOrder.slice(PINNED_SLOT_COUNT).map((panelId, i) => {
-              const slotIdx  = i + PINNED_SLOT_COUNT;
-              const slotArea = SLOT_AREAS[slotIdx];
-              if (panelId === "__empty__") return <div key={`eb${i}`} ref={setPanelRef(slotIdx)} style={{ gridArea: slotArea }} />;
-              const p = PANELS.find(p => p.id === panelId)!;
-              return (
-                <BlankPanel key={p.id} area={slotArea} label={p.label} sub={p.sub}
-                  isDragging={draggingSlot === slotIdx}
-                  isDragOver={dragOverSlot === slotIdx}
-                  containerRef={setPanelRef(slotIdx)}
-                  onHeaderMouseDown={e => startPanelDrag(slotIdx, e)}
-                  badge={p.id === "price" ? priceBadge : p.id === "macd" ? macdBadge : p.id === "rsi9" ? rsiBadge : p.id === "rsi14" ? rsi14Badge : p.id === "moving-averages" ? maBadge : p.id === "keltner" ? keltBadge : p.id === "adx" ? adxBadge : p.id === "ichimoku" ? ichiBadge : p.id === "session" ? sessionBadge : p.id === "volume" ? volBadge : p.id === "pivots" ? pivotBadge : p.id === "cci" ? momBadge : p.id === "wr" ? wrBadge : p.id === "volatility" ? volaBadge : p.id === "avg-price" ? avgpBadge : p.id === "roc" ? rocBadge : p.id === "atr" ? atrBadge : p.id === "candle-context" ? cctxBadge : p.id === "failure-swing" ? fswBadge : p.id === "market-structure" ? msBadge : p.id === "regime" ? regimeBadge : undefined}
-                  subtitle={p.id === "price" ? priceHeadline : p.id === "macd" ? macdHeadline : p.id === "rsi9" ? rsiHeadline : p.id === "rsi14" ? rsi14Headline : p.id === "moving-averages" ? maHeadline : p.id === "keltner" ? keltHeadline : p.id === "adx" ? adxHeadline : p.id === "ichimoku" ? ichiHeadline : p.id === "session" ? sessionHeadline : p.id === "volume" ? volHeadline : p.id === "pivots" ? pivotHeadline : p.id === "cci" ? momHeadline : p.id === "wr" ? wrHeadline : p.id === "volatility" ? volaHeadline : p.id === "avg-price" ? avgpHeadline : p.id === "roc" ? rocHeadline : p.id === "atr" ? atrHeadline : p.id === "failure-swing" ? fswHeadline : p.id === "candle-context" ? cctxHeadline : p.id === "market-structure" ? msHeadline : p.id === "regime" ? regimeHeadline : undefined}
-                  subtitle2={p.id === "regime" ? regimeAlignmentInsight : undefined}
-                  onExpand={() => setExpanded({ id: p.id, label: p.label, sub: p.sub })}>
-                  {p.id === "price"           && <PricePanelBody        rows={sheetRows} />}
-                  {p.id === "macd"            && <MacdPanelBody         rows={ichiRows.length > 0 ? ichiRows : sheetRows} />}
-                  {p.id === "rsi9"            && <RsiPanelBody          rows={ichiRows.length > 0 ? ichiRows : sheetRows} />}
-                  {p.id === "rsi14"           && <Rsi14PanelBody        rows={ichiRows.length > 0 ? ichiRows : sheetRows} />}
-                  {p.id === "moving-averages" && <MaPanelBody           rows={ichiRows.length > 0 ? ichiRows : sheetRows} />}
-                  {p.id === "keltner"         && <KeltPanelBody         rows={ichiRows.length > 0 ? ichiRows : sheetRows} />}
-                  {p.id === "adx"             && <AdxPanelBody          rows={ichiRows.length > 0 ? ichiRows : sheetRows} />}
-                  {p.id === "ichimoku"        && <IchiPanelBody         rows={ichiRows.length > 0 ? ichiRows : sheetRows} />}
-                  {p.id === "session"         && <SessionPanelBody      rows={sheetRows} />}
-                  {p.id === "volume"          && <VolumePanelBody       rows={sheetRows} />}
-                  {p.id === "pivots"          && <PivotPanelBody        rows={ichiRows.length > 0 ? ichiRows : sheetRows} />}
-                  {p.id === "cci"             && <CciPanelBody          rows={ichiRows.length > 0 ? ichiRows : sheetRows} />}
-                  {p.id === "wr"              && <WrPanelBody           rows={ichiRows.length > 0 ? ichiRows : sheetRows} />}
-                  {p.id === "volatility"      && <VolatilityPanelBody   rows={ichiRows.length > 0 ? ichiRows : sheetRows} />}
-                  {p.id === "avg-price"       && <AvgPricePanelBody     rows={ichiRows.length > 0 ? ichiRows : sheetRows} />}
-                  {p.id === "roc"             && <RocPanelBody          rows={ichiRows.length > 0 ? ichiRows : sheetRows} />}
-                  {p.id === "atr"             && <AtrPanelBody          rows={ichiRows.length > 0 ? ichiRows : sheetRows} />}
-                  {p.id === "failure-swing"   && <FailureSwingPanelBody  rows={sheetRows} />}
-                  {p.id === "ai-chat"         && <AlertsPanel instrument={selectedPair.replace("/", "_")} alerts={alerts} onUpdate={updateAlert} onDelete={deleteAlert} />}
-                  {p.id === "candle-context"   && <CandleContextPanelBody    rows={sheetRows} />}
-                  {p.id === "market-structure" && <MarketStructurePanelBody  rows={ichiRows.length > 0 ? ichiRows : sheetRows} />}
-                  {p.id === "regime"           && <RegimePanelBody           rows={ichiRows.length > 0 ? ichiRows : sheetRows} showCandles={regimeShowCandles} onToggleCandles={() => setRegimeShowCandles(v => !v)} />}
-                </BlankPanel>
-              );
-            })}
+        {/* ── Scrollable bottom rows — category container panels ── */}
+        <div className="flex-1 min-h-0" style={{ overflowY: "auto", paddingTop: "10px", paddingRight: "10px" }}>
+          <div style={{ display: "flex", flexDirection: "row", flexWrap: "wrap", columnGap: 10, rowGap: 0, alignItems: "flex-start" }}>
+            {(() => {
+              let offset = 0;
+              let colsAccum = 0;
+              return CATEGORIES.flatMap((cat, catIdx) => {
+                const catStart = offset;
+                offset += cat.count;
+                const catSlots = panelOrder.slice(PINNED_SLOT_COUNT + catStart, PINNED_SLOT_COUNT + catStart + cat.count);
+
+                const cols = cat.visibleCols ?? Math.min(cat.count, 4);
+                colsAccum += cols;
+                const scrollable = cat.count > cols;
+                const el = (
+                  <div
+                    key={cat.label}
+                    style={{
+                      borderRadius: 14,
+                      border: "2px solid transparent",
+                      background: [
+                        "linear-gradient(var(--bg-panel-alt), var(--bg-panel-alt)) padding-box",
+                        "radial-gradient(ellipse 80% 80% at 0% 0%, rgba(255,255,255,0.18) 0%, rgba(255,255,255,0.06) 50%, rgba(255,255,255,0.03) 100%) border-box",
+                      ].join(", "),
+                      overflow: "hidden",
+                      flexShrink: 0,
+                      width: cols < 4 ? `calc(${cols} * 25% - ${(4 - cols) * 10 / 4}px${cat.label === "Regime & Structure" ? " - 8px" : ""})` : "100%",
+                      marginLeft: cat.label === "Regime & Structure" ? 8 : undefined,
+                      alignSelf: cat.label === "Regime & Structure" ? "stretch" : undefined,
+                    }}
+                  >
+                    {/* Category header */}
+                    <div style={{
+                      display: "flex", alignItems: "center",
+                      padding: "7px 14px",
+                      borderBottom: "1px solid var(--border-subtle)",
+                      background: "var(--bg-panel)",
+                    }}>
+                      <span style={{
+                        fontSize: 9, fontWeight: 800, color: "var(--text-primary)",
+                        textTransform: "uppercase", letterSpacing: "0.13em",
+                      }}>
+                        {cat.label}
+                      </span>
+                    </div>
+
+                    {/* Sub-panels grid (scrollable wrapper when panels exceed 4) */}
+                    <div style={{ overflowX: scrollable ? "auto" : "visible" }}>
+                    <div style={{
+                      display: "grid",
+                      gridTemplateColumns: `repeat(${cat.count}, 1fr)`,
+                      gridAutoRows: "200px",
+                      gap: "10px",
+                      padding: "10px",
+                      width: scrollable ? `${(cat.count / cols) * 100}%` : undefined,
+                    }}>
+                      {catSlots.map((panelId, j) => {
+                        const slotIdx = PINNED_SLOT_COUNT + catStart + j;
+                        if (panelId === "__empty__") return <div key={`eb${slotIdx}`} ref={setPanelRef(slotIdx)} />;
+                        const p = PANELS.find(p => p.id === panelId)!;
+                        return (
+                          <BlankPanel key={p.id} label={p.label} sub={p.sub}
+                            style={{ height: "100%" }}
+                            isDragging={draggingSlot === slotIdx}
+                            isDragOver={dragOverSlot === slotIdx}
+                            containerRef={setPanelRef(slotIdx)}
+                            onHeaderMouseDown={e => startPanelDrag(slotIdx, e)}
+                            badge={p.id === "price" ? priceBadge : p.id === "macd" ? macdBadge : p.id === "rsi9" ? rsiBadge : p.id === "rsi14" ? rsi14Badge : p.id === "moving-averages" ? maBadge : p.id === "keltner" ? keltBadge : p.id === "adx" ? adxBadge : p.id === "ichimoku" ? ichiBadge : p.id === "session" ? sessionBadge : p.id === "volume" ? volBadge : p.id === "pivots" ? pivotBadge : p.id === "cci" ? momBadge : p.id === "wr" ? wrBadge : p.id === "volatility" ? volaBadge : p.id === "avg-price" ? avgpBadge : p.id === "roc" ? rocBadge : p.id === "atr" ? atrBadge : p.id === "candle-context" ? cctxBadge : p.id === "failure-swing" ? fswBadge : p.id === "market-structure" ? msBadge : p.id === "regime" ? regimeBadge : undefined}
+                            subtitle={p.id === "price" ? priceHeadline : p.id === "macd" ? macdHeadline : p.id === "rsi9" ? rsiHeadline : p.id === "rsi14" ? rsi14Headline : p.id === "moving-averages" ? maHeadline : p.id === "keltner" ? keltHeadline : p.id === "adx" ? adxHeadline : p.id === "ichimoku" ? ichiHeadline : p.id === "session" ? sessionHeadline : p.id === "volume" ? volHeadline : p.id === "pivots" ? pivotHeadline : p.id === "cci" ? momHeadline : p.id === "wr" ? wrHeadline : p.id === "volatility" ? volaHeadline : p.id === "avg-price" ? avgpHeadline : p.id === "roc" ? rocHeadline : p.id === "atr" ? atrHeadline : p.id === "failure-swing" ? fswHeadline : p.id === "candle-context" ? cctxHeadline : p.id === "market-structure" ? msHeadline : p.id === "regime" ? regimeHeadline : undefined}
+                            subtitle2={p.id === "regime" ? regimeAlignmentInsight : undefined}
+                            onExpand={() => setExpanded({ id: p.id, label: p.label, sub: p.sub })}>
+                            {p.id === "price"           && <PricePanelBody        rows={sheetRows} />}
+                            {p.id === "macd"            && <MacdPanelBody         rows={ichiRows.length > 0 ? ichiRows : sheetRows} />}
+                            {p.id === "rsi9"            && <RsiPanelBody          rows={ichiRows.length > 0 ? ichiRows : sheetRows} />}
+                            {p.id === "rsi14"           && <Rsi14PanelBody        rows={ichiRows.length > 0 ? ichiRows : sheetRows} />}
+                            {p.id === "moving-averages" && <MaPanelBody           rows={ichiRows.length > 0 ? ichiRows : sheetRows} />}
+                            {p.id === "keltner"         && <KeltPanelBody         rows={ichiRows.length > 0 ? ichiRows : sheetRows} />}
+                            {p.id === "adx"             && <AdxPanelBody          rows={ichiRows.length > 0 ? ichiRows : sheetRows} />}
+                            {p.id === "ichimoku"        && <IchiPanelBody         rows={ichiRows.length > 0 ? ichiRows : sheetRows} />}
+                            {p.id === "session"         && <SessionPanelBody      rows={sheetRows} />}
+                            {p.id === "volume"          && <VolumePanelBody       rows={sheetRows} />}
+                            {p.id === "pivots"          && <PivotPanelBody        rows={ichiRows.length > 0 ? ichiRows : sheetRows} />}
+                            {p.id === "cci"             && <CciPanelBody          rows={ichiRows.length > 0 ? ichiRows : sheetRows} />}
+                            {p.id === "wr"              && <WrPanelBody           rows={ichiRows.length > 0 ? ichiRows : sheetRows} />}
+                            {p.id === "volatility"      && <VolatilityPanelBody   rows={ichiRows.length > 0 ? ichiRows : sheetRows} />}
+                            {p.id === "avg-price"       && <AvgPricePanelBody     rows={ichiRows.length > 0 ? ichiRows : sheetRows} />}
+                            {p.id === "roc"             && <RocPanelBody          rows={ichiRows.length > 0 ? ichiRows : sheetRows} />}
+                            {p.id === "atr"             && <AtrPanelBody          rows={ichiRows.length > 0 ? ichiRows : sheetRows} />}
+                            {p.id === "failure-swing"   && <FailureSwingPanelBody  rows={sheetRows} />}
+                            {p.id === "candle-context"  && <CandleContextPanelBody    rows={sheetRows} />}
+                            {p.id === "market-structure" && <MarketStructurePanelBody rows={ichiRows.length > 0 ? ichiRows : sheetRows} />}
+                            {p.id === "regime"          && <RegimePanelBody           rows={ichiRows.length > 0 ? ichiRows : sheetRows} showCandles={regimeShowCandles} onToggleCandles={() => setRegimeShowCandles(v => !v)} />}
+                          </BlankPanel>
+                        );
+                      })}
+                    </div>
+                    </div>
+                  </div>
+                );
+                const isRowEnd = colsAccum % 4 === 0;
+                return catIdx < CATEGORIES.length - 1 && isRowEnd
+                  ? [el, <div key={`sep-${catIdx}`} style={{ width: "100%", height: 26, display: "flex", alignItems: "center", pointerEvents: "none" }}><div style={{ flex: 1, height: 1, background: "rgba(255,255,255,0.07)" }} /></div>]
+                  : [el];
+              });
+            })()}
           </div>
         </div>
       </div>
