@@ -24,9 +24,11 @@ import type { AnalysisResult } from "../data/analyticsDataV3";
 import type { SheetRow }         from "../lib/googleSheets";
 import { analyze }               from "../lib/brain/analyzer";
 import { getAnalyticsPanelOrder, setAnalyticsPanelOrder } from "../lib/preferences";
-const ALERTS_JSON_PATH = "D:\\Dev\\TradeMirror_v2\\TradeMirror\\TradeMirror_Alert_Test\\alerts.json";
+import { playAlertSound } from "../lib/alertSound";
+import type { AlertSound } from "../lib/alertSound";
 import { AlertsPanel, type Alert } from "../components/panels/AlertsPanel";
 import { invoke }                from "@tauri-apps/api/core";
+const ALERTS_JSON_PATH = "D:\\Dev\\TradeMirror_v2\\TradeMirror\\TradeMirror_Alert_Test\\alerts.json";
 
 // ─── V3 backend candle type (Rust snake_case serialization) ──────────────────
 interface RawCandleV3 {
@@ -94,6 +96,16 @@ function mapToSnapshot(c: RawCandleV3) {
     priceAboveCloud: c.price_above_cloud, priceAboveKijun: c.price_above_kijun,
     insideBar: c.inside_bar, rsiDivergence: c.rsi_divergence,
   };
+}
+
+// ─── Alert toast ──────────────────────────────────────────────────────────────
+
+interface AlertToast {
+  toastId: string;
+  name: string;
+  instrument: string;
+  direction: string;
+  price: number;
 }
 
 function formatDataDate(dateStr: string): string {
@@ -6076,16 +6088,61 @@ export function AnalyticsV3() {
   const [error, setError]       = useState<string | null>(null);
   const [selectedPair, setSelectedPair] = useState("EUR/USD");
   const [alerts, setAlerts] = useState<Alert[]>([]);
+  const [toasts, setToasts] = useState<AlertToast[]>([]);
+  const seenStatuses = useRef<Record<string, string>>({});
 
   function saveAlerts(list: Alert[]) {
     invoke("write_text_file", { path: ALERTS_JSON_PATH, content: JSON.stringify(list, null, 2) })
       .catch(console.error);
   }
 
+  // Initial load — seed seenStatuses so we don't fire on startup
   useEffect(() => {
     invoke<string>("read_credentials_file", { path: ALERTS_JSON_PATH })
-      .then(content => setAlerts(JSON.parse(content) as Alert[]))
+      .then(content => {
+        const loaded = JSON.parse(content) as Alert[];
+        loaded.forEach(a => { seenStatuses.current[a.id] = a.status; });
+        setAlerts(loaded);
+      })
       .catch(() => setAlerts([]));
+  }, []);
+
+  // Poll alerts.json every 10 s for status changes → in-app notification + sound
+  useEffect(() => {
+    const poll = () => {
+      invoke<string>("read_credentials_file", { path: ALERTS_JSON_PATH })
+        .then(content => {
+          const loaded = JSON.parse(content) as Alert[];
+          const newToasts: AlertToast[] = [];
+
+          loaded.forEach(a => {
+            const prev = seenStatuses.current[a.id];
+            if (prev === "watching" && a.status === "triggered" && a.notifications.in_app) {
+              newToasts.push({
+                toastId: crypto.randomUUID(),
+                name: a.name,
+                instrument: a.instrument,
+                direction: a.direction,
+                price: a.price,
+              });
+            }
+            seenStatuses.current[a.id] = a.status;
+          });
+
+          if (newToasts.length > 0) {
+            // Play the sound of the first triggered alert (or chime as fallback)
+            const triggeredAlert = loaded.find(a => newToasts.some(t => t.name === a.name));
+            playAlertSound((triggeredAlert?.sound as AlertSound) ?? "chime");
+            setToasts(prev => [...prev, ...newToasts]);
+          }
+
+          setAlerts(loaded);
+        })
+        .catch(() => {});
+    };
+
+    const id = setInterval(poll, 10_000);
+    return () => clearInterval(id);
   }, []);
 
   function createAlert() {
@@ -6098,6 +6155,7 @@ export function AnalyticsV3() {
       active:          true,
       status:          "watching",
       notifications:   { in_app: true, telegram: true },
+      sound:           "chime",
       created_at_utc:  new Date().toISOString(),
       triggered_at_utc: null,
       last_hit_price:  null,
@@ -7188,6 +7246,65 @@ export function AnalyticsV3() {
         </PanelModal>
       )}
 
+      {/* ── Alert toasts ──────────────────────────────────────────────────── */}
+      {toasts.length > 0 && (
+        <div style={{
+          position: "fixed", top: 20, right: 20, zIndex: 9999,
+          display: "flex", flexDirection: "column", gap: 8, pointerEvents: "none",
+        }}>
+          {toasts.map(t => (
+            <AlertToastCard
+              key={t.toastId}
+              toast={t}
+              onDismiss={() => setToasts(prev => prev.filter(x => x.toastId !== t.toastId))}
+            />
+          ))}
+        </div>
+      )}
+
+    </div>
+  );
+}
+
+// ─── Toast card ───────────────────────────────────────────────────────────────
+
+function AlertToastCard({ toast, onDismiss }: { toast: AlertToast; onDismiss: () => void }) {
+  useEffect(() => {
+    const id = setTimeout(onDismiss, 6000);
+    return () => clearTimeout(id);
+  }, []);
+
+  return (
+    <div style={{
+      pointerEvents: "all",
+      background: "rgba(20,20,35,0.97)",
+      border: "1px solid rgba(167,139,250,0.35)",
+      borderRadius: 10,
+      padding: "10px 14px",
+      minWidth: 220,
+      boxShadow: "0 6px 24px rgba(0,0,0,0.6)",
+      display: "flex", flexDirection: "column", gap: 4,
+    }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+        <span style={{ fontSize: 10, fontWeight: 800, color: "#a78bfa", textTransform: "uppercase", letterSpacing: "0.06em" }}>
+          ⚡ Alert Triggered
+        </span>
+        <button
+          onClick={onDismiss}
+          style={{
+            background: "none", border: "none", color: "var(--text-muted)",
+            cursor: "pointer", fontSize: 14, lineHeight: 1, padding: 0,
+          }}
+        >
+          ×
+        </button>
+      </div>
+      <div style={{ fontSize: 12, fontWeight: 700, color: "var(--text-primary)" }}>
+        {toast.name}
+      </div>
+      <div style={{ fontSize: 11, color: "var(--text-secondary)" }}>
+        {toast.instrument.replace("_", "/")} · {toast.direction} {toast.price.toFixed(5)}
+      </div>
     </div>
   );
 }
