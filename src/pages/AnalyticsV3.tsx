@@ -24,6 +24,7 @@ import type { AnalysisResult } from "../data/analyticsDataV3";
 import type { SheetRow }         from "../lib/googleSheets";
 import { analyze }               from "../lib/brain/analyzer";
 import { getAnalyticsPanelOrder, setAnalyticsPanelOrder } from "../lib/preferences";
+import { AlertsPanel, MOCK_ALERTS, type Alert } from "../components/panels/AlertsPanel";
 import { invoke }                from "@tauri-apps/api/core";
 
 // ─── V3 backend candle type (Rust snake_case serialization) ──────────────────
@@ -171,7 +172,7 @@ const PANELS: { id: string; area: string; span?: number; label: string; sub: str
   { id: "adx",             area: "adx",   label: "ADX",                        sub: "Group 13 — +DI · −DI · DX · ADX" },
   { id: "ichimoku",        area: "ichi",  label: "Ichimoku",                   sub: "Group 14 — Tenkan · Kijun · Senkou · Chikou" },
   { id: "failure-swing",   area: "fsw",   label: "FAILURE\nSWING",             sub: "" },
-  { id: "ai-chat",         area: "aic",   label: "AI\nCHAT",                   sub: "Ask Claude about the current setup" },
+  { id: "ai-chat",         area: "aic",   label: "ALERTS",                      sub: "Active alerts · Triggered history" },
   { id: "candle-context",  area: "cctx",  label: "CANDLE\nCONTEXT",            sub: "Last 5 candles · Pattern recognition" },
   { id: "market-structure", area: "mstr", label: "MARKET\nSTRUCTURE",           sub: "" },
   { id: "regime",          area: "rgme",  label: "REGIME\nDETECTION",           sub: "Trending · Ranging · Compression" },
@@ -239,9 +240,9 @@ function HoverTooltip({ tip, children }: { tip: string; children: React.ReactNod
   );
 }
 
-const NO_SUB_IDS = new Set(["ai-synthesis", "price", "macd", "rsi9", "rsi14", "moving-averages", "keltner", "adx", "ichimoku", "session", "volume", "pivots", "cci", "wr", "volatility", "avg-price", "roc", "atr", "candle-context"]);
+const NO_SUB_IDS = new Set(["ai-synthesis", "price", "macd", "rsi9", "rsi14", "moving-averages", "keltner", "adx", "ichimoku", "session", "volume", "pivots", "cci", "wr", "volatility", "avg-price", "roc", "atr", "candle-context", "ai-chat"]);
 
-function PanelModal({ panel, onClose, badge, subtitle, subtitle2, children }: { panel: PanelMeta; onClose: () => void; badge?: React.ReactNode; subtitle?: string; subtitle2?: string; children?: React.ReactNode }) {
+function PanelModal({ panel, onClose, badge, subtitle, subtitle2, headerActions, children }: { panel: PanelMeta; onClose: () => void; badge?: React.ReactNode; subtitle?: string; subtitle2?: string; headerActions?: React.ReactNode; children?: React.ReactNode }) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
     window.addEventListener("keydown", onKey);
@@ -296,6 +297,7 @@ function PanelModal({ panel, onClose, badge, subtitle, subtitle2, children }: { 
           )}
           <div className="flex items-center gap-3 ml-auto">
             {badge}
+            {headerActions}
             <button
               onClick={onClose}
               className="flex items-center justify-center w-7 h-7 rounded-full"
@@ -3133,134 +3135,6 @@ function AtrPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolean
 // ─── AI Chat ─────────────────────────────────────────────────────────────────
 const CLAUDE_API_KEY_PATH = 'C:\\Users\\Geoff\\.trademirror\\claude-api-key.txt';
 
-interface ChatMsg { role: 'user' | 'assistant'; content: string; }
-
-function AiChatPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolean }) {
-  const { analysisResult: ar } = useAnalytics();
-  const [messages, setMessages] = useState<ChatMsg[]>([]);
-  const [input,    setInput]    = useState('');
-  const [loading,  setLoading]  = useState(false);
-  const [error,    setError]    = useState<string | null>(null);
-  const bottomRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages, loading]);
-
-  const latestRow = rows[rows.length - 1];
-
-  const systemPrompt = useMemo(() => {
-    if (!latestRow) return "You are a concise forex trading assistant for EUR/USD. Answer in 2-4 sentences unless asked for more detail.";
-    return `You are a concise forex trading assistant analyzing EUR/USD. Answer in 2-4 sentences unless asked for more detail. Current market data as of ${latestRow.date}: Close ${latestRow.close.toFixed(4)}, Open ${latestRow.open.toFixed(4)}, High ${latestRow.high.toFixed(4)}, Low ${latestRow.low.toFixed(4)}. ATR(14) ${Math.round(latestRow.atr14)} pips. RSI(14) ${latestRow.rsi14.toFixed(1)}, RSI(9) ${latestRow.rsi9.toFixed(1)}. MACD ${latestRow.macd.toFixed(5)}, Signal ${latestRow.macdSignal.toFixed(5)}, Histogram ${latestRow.macdHistogram.toFixed(5)}. ADX ${latestRow.adx.toFixed(1)}, +DI ${latestRow.diPlus.toFixed(1)}, −DI ${latestRow.diMinus.toFixed(1)}. BB Upper ${latestRow.bbUpper.toFixed(4)}, Mid ${latestRow.bbMiddle.toFixed(4)}, Lower ${latestRow.bbLower.toFixed(4)}. EMA9 ${latestRow.ema9.toFixed(4)}, EMA20 ${latestRow.ema20.toFixed(4)}, EMA50 ${latestRow.ema50.toFixed(4)}, EMA200 ${latestRow.ema200.toFixed(4)}. Pivots R1 ${latestRow.r1.toFixed(4)}, S1 ${latestRow.s1.toFixed(4)}. AI analysis: ${ar.direction} with ${ar.confidence}% confidence.`;
-  }, [latestRow, ar]);
-
-  async function send() {
-    const text = input.trim();
-    if (!text || loading) return;
-    setInput('');
-    setError(null);
-    const next: ChatMsg[] = [...messages, { role: 'user', content: text }];
-    setMessages(next);
-    setLoading(true);
-    try {
-      const apiKey = await invoke<string>('read_credentials_file', { path: CLAUDE_API_KEY_PATH })
-        .then(s => s.trim())
-        .catch(() => { throw new Error('No API key found. Create C:\\Users\\Geoff\\.trademirror\\claude-api-key.txt with your Anthropic API key.'); });
-
-      const res = await fetch('https://api.anthropic.com/v1/messages', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
-        body: JSON.stringify({
-          model:      'claude-haiku-4-5-20251001',
-          max_tokens: 512,
-          system:     systemPrompt,
-          messages:   next.map(m => ({ role: m.role, content: m.content })),
-        }),
-      });
-      if (!res.ok) { const e = await res.json(); throw new Error(JSON.stringify(e)); }
-      const data = await res.json() as { content: { type: string; text: string }[] };
-      const reply = data.content.find(c => c.type === 'text')?.text ?? '';
-      setMessages(prev => [...prev, { role: 'assistant', content: reply }]);
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  const fs = expanded ? 12 : 11;
-
-  return (
-    <div className="flex flex-col h-full">
-      <div className="flex-1 min-h-0 overflow-y-auto px-3 py-2 flex flex-col gap-2">
-        {messages.length === 0 && !loading && (
-          <div className="flex-1 flex items-center justify-center">
-            <span style={{ fontSize: 10, color: "var(--text-muted)" }}>Ask anything about the current EUR/USD setup</span>
-          </div>
-        )}
-        {messages.map((m, i) => (
-          <div key={i} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-            <div
-              style={{
-                fontSize:   fs,
-                lineHeight: 1.5,
-                maxWidth:   "85%",
-                padding:    "6px 10px",
-                borderRadius: 10,
-                background: m.role === 'user' ? "rgba(96,165,250,0.15)" : "rgba(255,255,255,0.05)",
-                border:     `1px solid ${m.role === 'user' ? "rgba(96,165,250,0.30)" : "var(--border-subtle)"}`,
-                color:      "var(--text-primary)",
-                whiteSpace: "pre-wrap",
-              }}
-            >
-              {m.content}
-            </div>
-          </div>
-        ))}
-        {loading && (
-          <div className="flex justify-start">
-            <div style={{ fontSize: fs, padding: "6px 10px", borderRadius: 10, background: "rgba(255,255,255,0.05)", border: "1px solid var(--border-subtle)", color: "var(--text-muted)" }}>
-              ···
-            </div>
-          </div>
-        )}
-        {error && (
-          <div style={{ fontSize: 10, padding: "4px 8px", borderRadius: 6, background: "rgba(167,139,250,0.10)", border: "1px solid rgba(167,139,250,0.25)", color: "#a78bfa" }}>
-            {error}
-          </div>
-        )}
-        <div ref={bottomRef} />
-      </div>
-
-      <div className="shrink-0 flex gap-2 px-3 py-2" style={{ borderTop: "1px solid var(--border-subtle)" }}>
-        <input
-          style={{
-            flex: 1, fontSize: fs, padding: "5px 10px", borderRadius: 8, outline: "none",
-            background: "rgba(255,255,255,0.06)", border: "1px solid var(--border-subtle)", color: "var(--text-primary)",
-          }}
-          placeholder="Ask about the current setup…"
-          value={input}
-          onChange={e => setInput(e.target.value)}
-          onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }}
-        />
-        <button
-          onClick={send}
-          disabled={!input.trim() || loading}
-          style={{
-            fontSize: fs, padding: "5px 12px", borderRadius: 8, fontWeight: 600, flexShrink: 0,
-            background: input.trim() && !loading ? "rgba(96,165,250,0.20)" : "rgba(255,255,255,0.04)",
-            border:     `1px solid ${input.trim() && !loading ? "rgba(96,165,250,0.40)" : "var(--border-subtle)"}`,
-            color:      input.trim() && !loading ? "#60a5fa" : "var(--text-muted)",
-            cursor:     input.trim() && !loading ? "pointer" : "not-allowed",
-            transition: "all 0.15s",
-          }}
-        >
-          Send
-        </button>
-      </div>
-    </div>
-  );
-}
 
 // ─── Failure Swing ────────────────────────────────────────────────────────────
 function computeFsWick(r: SheetRow): number | null {
@@ -6090,7 +5964,7 @@ function CandleContextPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded
 }
 
 function BlankPanel({ area, label, sub, style, onExpand, badge, subtitle, subtitle2, children,
-  isDragging, isDragOver, containerRef, onHeaderMouseDown, pinned,
+  isDragging, isDragOver, containerRef, onHeaderMouseDown, pinned, headerActions,
 }: {
   area?: string;
   label: string;
@@ -6106,6 +5980,7 @@ function BlankPanel({ area, label, sub, style, onExpand, badge, subtitle, subtit
   containerRef?: (el: HTMLDivElement | null) => void;
   onHeaderMouseDown?: (e: React.MouseEvent) => void;
   pinned?: boolean;
+  headerActions?: React.ReactNode;
 }) {
   return (
     <div
@@ -6170,6 +6045,7 @@ function BlankPanel({ area, label, sub, style, onExpand, badge, subtitle, subtit
           )}
         </div>
         {badge && <div className="shrink-0 flex items-center mr-1">{badge}</div>}
+        {headerActions && <div className="shrink-0 flex items-center mr-1">{headerActions}</div>}
         <button
           onClick={onExpand}
           className="flex items-center justify-center shrink-0 w-5 h-5 rounded-md ml-2"
@@ -6212,6 +6088,25 @@ function msUntilDailyRefresh(): number {
 export function AnalyticsV3() {
   const { analysisResult, eurusdSnapshot, sheetRows } = useAnalytics();
   const [error, setError]       = useState<string | null>(null);
+  const [selectedPair, setSelectedPair] = useState("EUR/USD");
+  const [alerts, setAlerts] = useState<Alert[]>(MOCK_ALERTS);
+
+  function createAlert() {
+    setAlerts(prev => [...prev, {
+      id:        crypto.randomUUID(),
+      instrument: selectedPair.replace("/", "_"),
+      name:      "New Alert",
+      price:     0,
+      direction: "above" as const,
+      status:    "watching" as const,
+    }]);
+  }
+  function updateAlert(id: string, patch: Partial<Alert>) {
+    setAlerts(prev => prev.map(a => a.id === id ? { ...a, ...patch } : a));
+  }
+  function deleteAlert(id: string) {
+    setAlerts(prev => prev.filter(a => a.id !== id));
+  }
   const [expanded, setExpanded] = useState<PanelMeta | null>(null);
   const [ichiRows, setIchiRows] = useState<SheetRow[]>([]);
   const [timeframe, setTimeframe] = useState("1D");
@@ -7077,7 +6972,7 @@ export function AnalyticsV3() {
 
       {/* ── Top bar: Pair Selector + Timeframe + Data date ─────────── */}
       <div className="flex items-center gap-3 shrink-0" style={{ height: "40px" }}>
-        <PairSelector />
+        <PairSelector onPairChange={(pair) => setSelectedPair(pair)} />
         <div className="relative h-full" style={{ zIndex: tfOpen ? 20 : "auto" }}>
           <div
             className="h-full flex items-center rounded-[14px] overflow-hidden"
@@ -7184,9 +7079,21 @@ export function AnalyticsV3() {
                 containerRef={setPanelRef(slotIdx)}
                 badge={p.id === "ai-synthesis" ? aisBadge : undefined}
                 subtitle={p.id === "ai-synthesis" ? aisHeadline : undefined}
+                headerActions={p.id === "ai-chat" ? (
+                  <button
+                    onClick={() => createAlert()}
+                    style={{
+                      fontSize: 9, padding: "2px 7px", borderRadius: 6, fontWeight: 600,
+                      background: "rgba(255,255,255,0.08)", border: "1px solid rgba(255,255,255,0.18)",
+                      color: "var(--text-secondary)", cursor: "pointer",
+                    }}
+                  >
+                    + Add Alert
+                  </button>
+                ) : undefined}
                 onExpand={() => setExpanded({ id: p.id, label: p.label, sub: p.sub })}>
                 {p.id === "ai-synthesis" && <AiSynthesisPanelBody result={analysisResult} />}
-                {p.id === "ai-chat"      && <AiChatPanelBody       rows={sheetRows} />}
+                {p.id === "ai-chat"      && <AlertsPanel instrument={selectedPair.replace("/", "_")} alerts={alerts} onUpdate={updateAlert} onDelete={deleteAlert} />}
               </BlankPanel>
             );
           })}
@@ -7244,7 +7151,7 @@ export function AnalyticsV3() {
                   {p.id === "roc"             && <RocPanelBody          rows={ichiRows.length > 0 ? ichiRows : sheetRows} />}
                   {p.id === "atr"             && <AtrPanelBody          rows={ichiRows.length > 0 ? ichiRows : sheetRows} />}
                   {p.id === "failure-swing"   && <FailureSwingPanelBody  rows={sheetRows} />}
-                  {p.id === "ai-chat"         && <AiChatPanelBody        rows={sheetRows} />}
+                  {p.id === "ai-chat"         && <AlertsPanel instrument={selectedPair.replace("/", "_")} alerts={alerts} onUpdate={updateAlert} onDelete={deleteAlert} />}
                   {p.id === "candle-context"   && <CandleContextPanelBody    rows={sheetRows} />}
                   {p.id === "market-structure" && <MarketStructurePanelBody  rows={ichiRows.length > 0 ? ichiRows : sheetRows} />}
                   {p.id === "regime"           && <RegimePanelBody           rows={ichiRows.length > 0 ? ichiRows : sheetRows} showCandles={regimeShowCandles} onToggleCandles={() => setRegimeShowCandles(v => !v)} />}
@@ -7256,7 +7163,18 @@ export function AnalyticsV3() {
       </div>
 
       {expanded && (
-        <PanelModal panel={expanded} onClose={close} badge={expanded.id === "ai-synthesis" ? aisBadgeExpanded : expanded.id === "macd" ? macdBadgeExpanded : expanded.id === "price" ? priceBadgeExpanded : expanded.id === "rsi9" ? rsiBadgeExpanded : expanded.id === "rsi14" ? rsi14BadgeExpanded : expanded.id === "moving-averages" ? maBadgeExpanded : expanded.id === "keltner" ? keltBadgeExpanded : expanded.id === "adx" ? adxBadgeExpanded : expanded.id === "ichimoku" ? ichiBadgeExpanded : expanded.id === "session" ? sessionBadgeExpanded : expanded.id === "volume" ? volBadgeExpanded : expanded.id === "pivots" ? pivotBadgeExpanded : expanded.id === "cci" ? momBadgeExpanded : expanded.id === "wr" ? wrBadgeExpanded : expanded.id === "volatility" ? volaBadgeExpanded : expanded.id === "avg-price" ? avgpBadgeExpanded : expanded.id === "roc" ? rocBadgeExpanded : expanded.id === "atr" ? atrBadgeExpanded : expanded.id === "candle-context" ? cctxBadgeExpanded : expanded.id === "market-structure" ? msBadgeExpanded : expanded.id === "regime" ? regimeBadgeExpanded : undefined} subtitle={expanded.id === "ai-synthesis" ? aisHeadline : expanded.id === "macd" ? macdHeadline : expanded.id === "price" ? priceHeadline : expanded.id === "rsi9" ? rsiHeadline : expanded.id === "rsi14" ? rsi14Headline : expanded.id === "moving-averages" ? maHeadline : expanded.id === "keltner" ? keltHeadline : expanded.id === "adx" ? adxHeadline : expanded.id === "ichimoku" ? ichiHeadline : expanded.id === "session" ? sessionHeadline : expanded.id === "volume" ? volHeadline : expanded.id === "pivots" ? pivotHeadline : expanded.id === "cci" ? momHeadline : expanded.id === "wr" ? wrHeadline : expanded.id === "volatility" ? volaHeadline : expanded.id === "avg-price" ? avgpHeadline : expanded.id === "roc" ? rocHeadline : expanded.id === "atr" ? atrHeadline : expanded.id === "failure-swing" ? fswHeadline : expanded.id === "candle-context" ? cctxHeadline : expanded.id === "market-structure" ? msHeadline : expanded.id === "regime" ? regimeHeadline : undefined} subtitle2={expanded.id === "regime" ? regimeAlignmentInsight : undefined}>
+        <PanelModal panel={expanded} onClose={close} headerActions={expanded.id === "ai-chat" ? (
+          <button
+            onClick={() => createAlert()}
+            style={{
+              fontSize: 10, padding: "3px 10px", borderRadius: 6, fontWeight: 600,
+              background: "rgba(255,255,255,0.08)", border: "1px solid rgba(255,255,255,0.18)",
+              color: "var(--text-secondary)", cursor: "pointer",
+            }}
+          >
+            + Add Alert
+          </button>
+        ) : undefined} badge={expanded.id === "ai-synthesis" ? aisBadgeExpanded : expanded.id === "macd" ? macdBadgeExpanded : expanded.id === "price" ? priceBadgeExpanded : expanded.id === "rsi9" ? rsiBadgeExpanded : expanded.id === "rsi14" ? rsi14BadgeExpanded : expanded.id === "moving-averages" ? maBadgeExpanded : expanded.id === "keltner" ? keltBadgeExpanded : expanded.id === "adx" ? adxBadgeExpanded : expanded.id === "ichimoku" ? ichiBadgeExpanded : expanded.id === "session" ? sessionBadgeExpanded : expanded.id === "volume" ? volBadgeExpanded : expanded.id === "pivots" ? pivotBadgeExpanded : expanded.id === "cci" ? momBadgeExpanded : expanded.id === "wr" ? wrBadgeExpanded : expanded.id === "volatility" ? volaBadgeExpanded : expanded.id === "avg-price" ? avgpBadgeExpanded : expanded.id === "roc" ? rocBadgeExpanded : expanded.id === "atr" ? atrBadgeExpanded : expanded.id === "candle-context" ? cctxBadgeExpanded : expanded.id === "market-structure" ? msBadgeExpanded : expanded.id === "regime" ? regimeBadgeExpanded : undefined} subtitle={expanded.id === "ai-synthesis" ? aisHeadline : expanded.id === "macd" ? macdHeadline : expanded.id === "price" ? priceHeadline : expanded.id === "rsi9" ? rsiHeadline : expanded.id === "rsi14" ? rsi14Headline : expanded.id === "moving-averages" ? maHeadline : expanded.id === "keltner" ? keltHeadline : expanded.id === "adx" ? adxHeadline : expanded.id === "ichimoku" ? ichiHeadline : expanded.id === "session" ? sessionHeadline : expanded.id === "volume" ? volHeadline : expanded.id === "pivots" ? pivotHeadline : expanded.id === "cci" ? momHeadline : expanded.id === "wr" ? wrHeadline : expanded.id === "volatility" ? volaHeadline : expanded.id === "avg-price" ? avgpHeadline : expanded.id === "roc" ? rocHeadline : expanded.id === "atr" ? atrHeadline : expanded.id === "failure-swing" ? fswHeadline : expanded.id === "candle-context" ? cctxHeadline : expanded.id === "market-structure" ? msHeadline : expanded.id === "regime" ? regimeHeadline : undefined} subtitle2={expanded.id === "regime" ? regimeAlignmentInsight : undefined}>
           {expanded.id === "ai-synthesis"    && <AiSynthesisPanelBody result={analysisResult} expanded />}
           {expanded.id === "price"           && <PricePanelBody      rows={sheetRows} expanded />}
           {expanded.id === "macd"            && <MacdPanelBody       rows={ichiRows.length > 0 ? ichiRows : sheetRows} expanded />}
@@ -7276,7 +7194,7 @@ export function AnalyticsV3() {
           {expanded.id === "roc"             && <RocPanelBody        rows={ichiRows.length > 0 ? ichiRows : sheetRows} expanded />}
           {expanded.id === "atr"             && <AtrPanelBody             rows={ichiRows.length > 0 ? ichiRows : sheetRows} expanded />}
           {expanded.id === "failure-swing"   && <FailureSwingPanelBody   rows={sheetRows} expanded />}
-          {expanded.id === "ai-chat"         && <AiChatPanelBody         rows={sheetRows} expanded />}
+          {expanded.id === "ai-chat"         && <AlertsPanel instrument={selectedPair.replace("/", "_")} alerts={alerts} onUpdate={updateAlert} onDelete={deleteAlert} />}
           {expanded.id === "candle-context"   && <CandleContextPanelBody    rows={sheetRows} expanded />}
           {expanded.id === "market-structure" && <MarketStructurePanelBody  rows={ichiRows.length > 0 ? ichiRows : sheetRows} expanded />}
           {expanded.id === "regime"           && <RegimePanelBody           rows={ichiRows.length > 0 ? ichiRows : sheetRows} expanded showCandles={regimeShowCandles} onToggleCandles={() => setRegimeShowCandles(v => !v)} />}
