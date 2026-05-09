@@ -48,34 +48,52 @@ fn read_credentials_file(path: String) -> Result<String, String> {
     std::fs::read_to_string(&path).map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+fn write_text_file(path: String, content: String) -> Result<(), String> {
+    std::fs::write(&path, content).map_err(|e| e.to_string())
+}
+
 // ─── Analytics V3 — sync OANDA → indicators → SQLite ─────────────────────────
 
 const OANDA_KEY_PATH: &str = "C:\\Users\\Geoff\\.trademirror\\oanda-api-key.txt";
 
-#[tauri::command]
-fn sync_oanda_candles_v3(app: tauri::AppHandle) -> Result<usize, String> {
+/// Core sync logic — usable from both the Tauri command and the background thread.
+fn background_sync(db_path: &str) -> Result<usize, String> {
     let contents = std::fs::read_to_string(OANDA_KEY_PATH)
         .map_err(|e| format!("Could not read OANDA key file: {}", e))?;
     let api_key = contents.lines().next().unwrap_or("").trim().to_string();
     if api_key.is_empty() {
         return Err("OANDA API key is empty".into());
     }
-
     let raw = oanda_client::fetch_raw_candles(&api_key, "EUR_USD", 500)?;
     let rows = indicators::compute(raw);
     let count = rows.len();
+    candle_store::upsert_candles(db_path, "EURUSD", "D", &rows)?;
+    Ok(count)
+}
 
+/// Seconds until next 22:10 UTC (≈ 18:10 ET). If already past today's window, schedules for tomorrow.
+fn secs_until_daily_sync() -> u64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let secs_in_day = now % 86400;
+    let target: u64 = 22 * 3600 + 10 * 60; // 22:10 UTC
+    if secs_in_day < target {
+        target - secs_in_day
+    } else {
+        86400 - secs_in_day + target
+    }
+}
+
+#[tauri::command]
+fn sync_oanda_candles_v3(app: tauri::AppHandle) -> Result<usize, String> {
     let db_path = app.path().app_data_dir()
         .map_err(|e: tauri::Error| e.to_string())?
         .join("trademirror.db");
-
-    candle_store::upsert_candles(
-        db_path.to_str().unwrap_or(""),
-        "EURUSD", "D",
-        &rows,
-    )?;
-
-    Ok(count)
+    background_sync(db_path.to_str().unwrap_or(""))
 }
 
 // ─── Analytics V3 ─────────────────────────────────────────────────────────────
@@ -141,6 +159,12 @@ pub fn run() {
             sql: include_str!("../migrations/0003_add_ema100.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 4,
+            description: "alerts",
+            sql: include_str!("../migrations/0004_alerts.sql"),
+            kind: MigrationKind::Up,
+        },
     ];
 
     tauri::Builder::default()
@@ -154,16 +178,32 @@ pub fn run() {
         .setup(|app| {
             let db_path = app.path().app_data_dir()?.join("trademirror.db");
             let path_str = db_path.to_str().unwrap_or("").to_string();
-            // Remove stale demo rows seeded during development.
+
+            // Clear all candles so they are re-synced with corrected dates.
+            // (Previous builds stored dates one day behind due to OANDA UTC offset bug.)
             if let Ok(conn) = rusqlite::Connection::open(&path_str) {
                 let _ = conn.execute(
-                    "DELETE FROM candles_v3 WHERE symbol='EURUSD' AND timeframe='D' AND date BETWEEN '2026-04-01' AND '2026-04-20'",
+                    "DELETE FROM candles_v3 WHERE symbol='EURUSD' AND timeframe='D'",
                     [],
                 );
             }
+
+            // Background sync thread — syncs on startup then again every day at 22:10 UTC.
+            let bg_path = path_str.clone();
+            std::thread::spawn(move || {
+                // Sync immediately on startup to catch any missed candles.
+                let _ = background_sync(&bg_path);
+
+                // Then loop: wait until next 22:10 UTC, sync, repeat.
+                loop {
+                    std::thread::sleep(std::time::Duration::from_secs(secs_until_daily_sync()));
+                    let _ = background_sync(&bg_path);
+                }
+            });
+
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![list_images, read_credentials_file, get_candles_v3, get_ichi_rows_v3, sync_oanda_candles_v3])
+        .invoke_handler(tauri::generate_handler![list_images, read_credentials_file, write_text_file, get_candles_v3, get_ichi_rows_v3, sync_oanda_candles_v3])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

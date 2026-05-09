@@ -29,6 +29,7 @@ export interface AnalysisResult {
 }
 
 export interface EurusdSnapshot {
+  date: string;
   timestamp: string;
   symbol: string;
   open: number; high: number; low: number; close: number;
@@ -54,6 +55,7 @@ export interface EurusdSnapshot {
 }
 
 export const eurusdSnapshot: EurusdSnapshot = {
+  date: "2026-04-20",
   timestamp: "2026-04-20T18:00:00Z",
   symbol: "EURUSD",
   open: 1.0832, high: 1.0889, low: 1.0808, close: 1.0871,

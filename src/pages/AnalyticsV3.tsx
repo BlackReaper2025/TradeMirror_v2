@@ -24,7 +24,8 @@ import type { AnalysisResult } from "../data/analyticsDataV3";
 import type { SheetRow }         from "../lib/googleSheets";
 import { analyze }               from "../lib/brain/analyzer";
 import { getAnalyticsPanelOrder, setAnalyticsPanelOrder } from "../lib/preferences";
-import { AlertsPanel, MOCK_ALERTS, type Alert } from "../components/panels/AlertsPanel";
+const ALERTS_JSON_PATH = "D:\\Dev\\TradeMirror_v2\\TradeMirror\\TradeMirror_Alert_Test\\alerts.json";
+import { AlertsPanel, type Alert } from "../components/panels/AlertsPanel";
 import { invoke }                from "@tauri-apps/api/core";
 
 // ─── V3 backend candle type (Rust snake_case serialization) ──────────────────
@@ -74,7 +75,7 @@ function mapToSheetRow(c: RawCandleV3) {
 
 function mapToSnapshot(c: RawCandleV3) {
   return {
-    timestamp: c.timestamp, symbol: c.symbol,
+    date: c.date, timestamp: c.timestamp, symbol: c.symbol,
     open: c.open, high: c.high, low: c.low, close: c.close,
     volume: c.volume, volumeSma20: c.volume_sma20,
     ema9: c.ema9, ema20: c.ema20, ema50: c.ema50, sma200: c.sma200,
@@ -95,14 +96,14 @@ function mapToSnapshot(c: RawCandleV3) {
   };
 }
 
-function formatDataDate(iso: string): string {
-  const d = new Date(iso);
-  return d.toLocaleDateString("en-US", {
+function formatDataDate(dateStr: string): string {
+  // dateStr is "YYYY-MM-DD" — parse as local date to avoid any timezone shift
+  const [y, m, d] = dateStr.split("-").map(Number);
+  return new Date(y, m - 1, d).toLocaleDateString("en-US", {
     weekday: "long",
     year:    "numeric",
     month:   "long",
     day:     "numeric",
-    timeZone: "America/New_York",
   });
 }
 
@@ -6069,43 +6070,57 @@ function BlankPanel({ area, label, sub, style, onExpand, badge, subtitle, subtit
   );
 }
 
-// Returns ms until the next 18:05 America/New_York (handles DST automatically).
-function msUntilDailyRefresh(): number {
-  const now   = new Date();
-  const parts = new Intl.DateTimeFormat('en-US', {
-    timeZone: 'America/New_York',
-    hour: '2-digit', minute: '2-digit', second: '2-digit',
-    hour12: false,
-  }).formatToParts(now);
-  const get   = (t: string) => parseInt(parts.find(p => p.type === t)?.value ?? '0');
-  const etMin = get('hour') * 60 + get('minute');
-  const target = 18 * 60 + 5; // 18:05 ET
-  let ms = (target - etMin) * 60_000 - get('second') * 1000 - now.getMilliseconds();
-  if (ms <= 0) ms += 24 * 60 * 60_000; // already past today's window — schedule for tomorrow
-  return ms;
-}
 
 export function AnalyticsV3() {
   const { analysisResult, eurusdSnapshot, sheetRows } = useAnalytics();
   const [error, setError]       = useState<string | null>(null);
   const [selectedPair, setSelectedPair] = useState("EUR/USD");
-  const [alerts, setAlerts] = useState<Alert[]>(MOCK_ALERTS);
+  const [alerts, setAlerts] = useState<Alert[]>([]);
+
+  function saveAlerts(list: Alert[]) {
+    invoke("write_text_file", { path: ALERTS_JSON_PATH, content: JSON.stringify(list, null, 2) })
+      .catch(console.error);
+  }
+
+  useEffect(() => {
+    invoke<string>("read_credentials_file", { path: ALERTS_JSON_PATH })
+      .then(content => setAlerts(JSON.parse(content) as Alert[]))
+      .catch(() => setAlerts([]));
+  }, []);
 
   function createAlert() {
-    setAlerts(prev => [...prev, {
-      id:        crypto.randomUUID(),
-      instrument: selectedPair.replace("/", "_"),
-      name:      "New Alert",
-      price:     0,
-      direction: "above" as const,
-      status:    "watching" as const,
-    }]);
+    const next: Alert = {
+      id:              crypto.randomUUID(),
+      name:            "New Alert",
+      instrument:      selectedPair.replace("/", "_"),
+      direction:       "above",
+      price:           0,
+      active:          true,
+      status:          "watching",
+      notifications:   { in_app: true, telegram: true },
+      created_at_utc:  new Date().toISOString(),
+      triggered_at_utc: null,
+      last_hit_price:  null,
+    };
+    const updated = [...alerts, next];
+    setAlerts(updated);
+    saveAlerts(updated);
   }
+
   function updateAlert(id: string, patch: Partial<Alert>) {
-    setAlerts(prev => prev.map(a => a.id === id ? { ...a, ...patch } : a));
+    setAlerts(prev => {
+      const next = prev.map(a => a.id === id ? { ...a, ...patch } : a);
+      saveAlerts(next);
+      return next;
+    });
   }
+
   function deleteAlert(id: string) {
-    setAlerts(prev => prev.filter(a => a.id !== id));
+    setAlerts(prev => {
+      const next = prev.filter(a => a.id !== id);
+      saveAlerts(next);
+      return next;
+    });
   }
   const [expanded, setExpanded] = useState<PanelMeta | null>(null);
   const [ichiRows, setIchiRows] = useState<SheetRow[]>([]);
@@ -6197,41 +6212,13 @@ export function AnalyticsV3() {
         })
         .catch(err => setError(String(err)));
 
-    // Sync first — only call get_candles_v3 after sync resolves or fails.
+    // Always read from DB after sync resolves or fails — backend thread handles the sync.
     invoke<number>("sync_oanda_candles_v3")
       .then(() => loadCandles())
-      .catch(() => { if (!hasLiveAnalytics()) loadCandles(); });
+      .catch(() => loadCandles());
   }, []);
 
 
-  // Auto-refresh at 18:05 ET each day.
-  useEffect(() => {
-    let intervalId: ReturnType<typeof setInterval>;
-    function doRefresh() {
-      invoke<RawCandleV3[]>("get_candles_v3")
-        .then(candles => {
-          if (!candles.length) return;
-          const last = candles[candles.length - 1];
-          setLiveAnalytics({
-            eurusdSnapshot: mapToSnapshot(last),
-            analysisResult: defaultAnalysisResult,
-            signalTags, signalHistory, historicalAccuracy,
-            evidenceCards, emaStackData, macdChartData,
-            momentumChartData, volatilityChartData, directionalChartData,
-            sheetRows: candles.map(mapToSheetRow),
-          });
-          invoke<RawCandleV3[]>("get_ichi_rows_v3")
-            .then(c => { if (c.length) setIchiRows(c.map(mapToSheetRow)); })
-            .catch(() => {});
-        })
-        .catch(err => setError(String(err)));
-    }
-    const timeoutId = setTimeout(() => {
-      doRefresh();
-      intervalId = setInterval(doRefresh, 24 * 60 * 60_000);
-    }, msUntilDailyRefresh());
-    return () => { clearTimeout(timeoutId); clearInterval(intervalId); };
-  }, []);
 
   const verdict =
     analysisResult.direction === "LONG"  ? "long"    :
@@ -7045,7 +7032,7 @@ export function AnalyticsV3() {
             Data for
           </span>
           <span className="text-[11px] font-semibold" style={{ color: "var(--text-primary)" }}>
-            {formatDataDate(eurusdSnapshot.timestamp)}
+            {formatDataDate(eurusdSnapshot.date)}
           </span>
         </div>
       </div>

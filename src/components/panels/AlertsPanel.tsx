@@ -1,26 +1,28 @@
 import React from "react";
+import { Trash2 } from "lucide-react";
 
 export interface Alert {
   id: string;
-  instrument: string;
   name: string;
-  price: number;
+  instrument: string;
   direction: "above" | "below";
-  status: "active" | "triggered" | "paused" | "watching";
+  price: number;
+  active: boolean;
+  status: "watching" | "triggered" | "paused" | "deleted";
+  notifications: {
+    in_app: boolean;
+    telegram: boolean;
+  };
+  created_at_utc: string;
+  triggered_at_utc: string | null;
+  last_hit_price: number | null;
 }
 
-export const MOCK_ALERTS: Alert[] = [
-  { id: "1", instrument: "EUR_USD", name: "Resistance break", price: 1.1200, direction: "above",  status: "active"    },
-  { id: "2", instrument: "EUR_USD", name: "Support test",     price: 1.1050, direction: "below",  status: "active"    },
-  { id: "3", instrument: "EUR_USD", name: "Daily high",       price: 1.1180, direction: "above",  status: "triggered" },
-  { id: "4", instrument: "GBP_USD", name: "Key level",        price: 1.2700, direction: "above",  status: "active"    },
-];
-
 const STATUS_COLORS: Record<Alert["status"], string> = {
-  active:    "#60a5fa",
+  watching:  "#fbbf24",
   triggered: "#a78bfa",
   paused:    "var(--text-muted)",
-  watching:  "#fbbf24",
+  deleted:   "#f87171",
 };
 
 const inputStyle: React.CSSProperties = {
@@ -37,7 +39,7 @@ interface AlertsPanelProps {
 }
 
 export function AlertsPanel({ instrument, alerts, onUpdate, onDelete }: AlertsPanelProps) {
-  const visible = alerts.filter(a => a.instrument === instrument);
+  const visible = alerts.filter(a => a.instrument === instrument && a.status !== "deleted");
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", padding: "8px", gap: 4 }}>
@@ -56,10 +58,12 @@ export function AlertsPanel({ instrument, alerts, onUpdate, onDelete }: AlertsPa
               background: "rgba(255,255,255,0.04)", border: "1px solid var(--border-subtle)",
             }}
           >
+            {/* Number */}
             <span style={{ fontSize: 10, fontWeight: 700, color: "var(--text-muted)", flexShrink: 0, minWidth: 14, textAlign: "right" }}>
               {i + 1}
             </span>
 
+            {/* Name */}
             <input
               type="text"
               value={alert.name}
@@ -67,6 +71,7 @@ export function AlertsPanel({ instrument, alerts, onUpdate, onDelete }: AlertsPa
               style={{ ...inputStyle, width: 120, minWidth: 0, fontWeight: 600 }}
             />
 
+            {/* Direction */}
             <select
               value={alert.direction}
               onChange={e => onUpdate(alert.id, { direction: e.target.value as Alert["direction"] })}
@@ -76,6 +81,7 @@ export function AlertsPanel({ instrument, alerts, onUpdate, onDelete }: AlertsPa
               <option value="below">below</option>
             </select>
 
+            {/* Price */}
             <input
               type="number"
               step="0.0001"
@@ -84,19 +90,52 @@ export function AlertsPanel({ instrument, alerts, onUpdate, onDelete }: AlertsPa
               style={{ ...inputStyle, width: 72 }}
             />
 
+            {/* Status */}
             <span style={{ fontSize: 10, fontWeight: 600, color: STATUS_COLORS[alert.status], flex: 1, textAlign: "center" }}>
               {alert.status}
             </span>
 
+            {/* In-app toggle */}
+            <button
+              onClick={() => onUpdate(alert.id, { notifications: { ...alert.notifications, in_app: !alert.notifications.in_app } })}
+              title="In-app notification"
+              style={{
+                fontSize: 9, padding: "2px 5px", borderRadius: 5, fontWeight: 700, flexShrink: 0,
+                background: alert.notifications.in_app ? "rgba(96,165,250,0.15)" : "rgba(255,255,255,0.04)",
+                border: `1px solid ${alert.notifications.in_app ? "rgba(96,165,250,0.35)" : "var(--border-subtle)"}`,
+                color: alert.notifications.in_app ? "#60a5fa" : "var(--text-muted)",
+                cursor: "pointer",
+              }}
+            >
+              A
+            </button>
+
+            {/* Telegram toggle */}
+            <button
+              onClick={() => onUpdate(alert.id, { notifications: { ...alert.notifications, telegram: !alert.notifications.telegram } })}
+              title="Telegram notification"
+              style={{
+                fontSize: 9, padding: "2px 5px", borderRadius: 5, fontWeight: 700, flexShrink: 0,
+                background: alert.notifications.telegram ? "rgba(52,211,153,0.15)" : "rgba(255,255,255,0.04)",
+                border: `1px solid ${alert.notifications.telegram ? "rgba(52,211,153,0.35)" : "var(--border-subtle)"}`,
+                color: alert.notifications.telegram ? "#34d399" : "var(--text-muted)",
+                cursor: "pointer",
+              }}
+            >
+              T
+            </button>
+
+            {/* Delete */}
             <button
               onClick={() => onDelete(alert.id)}
               style={{
-                fontSize: 11, padding: "2px 6px", borderRadius: 6, fontWeight: 700,
+                marginLeft: 10, padding: "3px 6px", borderRadius: 6,
                 background: "rgba(248,113,113,0.08)", border: "1px solid rgba(248,113,113,0.20)",
                 color: "#f87171", cursor: "pointer", flexShrink: 0,
+                display: "flex", alignItems: "center",
               }}
             >
-              ×
+              <Trash2 size={11} />
             </button>
           </div>
         ))}

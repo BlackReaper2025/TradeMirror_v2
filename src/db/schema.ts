@@ -104,6 +104,17 @@ export const fatigueSettings = sqliteTable("fatigue_settings", {
   bypassCount: integer("bypass_count").notNull().default(0),
 });
 
+// ─── alerts ───────────────────────────────────────────────────────────────────
+
+export const alerts = sqliteTable("alerts", {
+  id:         text("id").primaryKey(),
+  instrument: text("instrument").notNull(),
+  name:       text("name").notNull(),
+  price:      real("price").notNull().default(0),
+  direction:  text("direction", { enum: ["above", "below"] }).notNull().default("above"),
+  status:     text("status",    { enum: ["active", "triggered", "paused", "watching"] }).notNull().default("watching"),
+});
+
 // ─── app_settings ────────────────────────────────────────────────────────────
 
 export const appSettings = sqliteTable("app_settings", {

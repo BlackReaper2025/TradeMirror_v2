@@ -68,7 +68,18 @@ pub fn fetch_raw_candles(
     let candles = parsed.candles
         .into_iter()
         .map(|c| {
-            let date = c.time.get(..10).unwrap_or(&c.time).to_string();
+            // OANDA daily candles open at 17:00 ET = 21:00–22:00 UTC.
+            // The timestamp is therefore the *previous* calendar day in UTC.
+            // Advance by one day when hour >= 12 to get the correct forex business date.
+            let raw_date = c.time.get(..10).unwrap_or(&c.time);
+            let utc_hour: u32 = c.time.get(11..13)
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(0);
+            let date = if utc_hour >= 12 {
+                advance_date(raw_date)
+            } else {
+                raw_date.to_string()
+            };
             RawCandle {
                 date,
                 timestamp: c.time,
@@ -86,4 +97,27 @@ pub fn fetch_raw_candles(
 
 fn parse_f64(s: &str) -> f64 {
     s.parse().unwrap_or(0.0)
+}
+
+/// Advance a "YYYY-MM-DD" string by one calendar day.
+fn advance_date(date: &str) -> String {
+    let parts: Vec<&str> = date.splitn(3, '-').collect();
+    if parts.len() != 3 { return date.to_string(); }
+    let y: i32 = parts[0].parse().unwrap_or(0);
+    let m: i32 = parts[1].parse().unwrap_or(0);
+    let d: i32 = parts[2].parse().unwrap_or(0);
+    let days_in_month = match m {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 => if y % 4 == 0 && (y % 100 != 0 || y % 400 == 0) { 29 } else { 28 },
+        _ => 30,
+    };
+    let (ny, nm, nd) = if d < days_in_month {
+        (y, m, d + 1)
+    } else if m < 12 {
+        (y, m + 1, 1)
+    } else {
+        (y + 1, 1, 1)
+    };
+    format!("{:04}-{:02}-{:02}", ny, nm, nd)
 }
