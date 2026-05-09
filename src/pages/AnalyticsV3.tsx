@@ -6215,6 +6215,27 @@ export function AnalyticsV3() {
     saveAlerts(updated);
   }
 
+  function sendTestNotification() {
+    setToasts(prev => [...prev, {
+      toastId: crypto.randomUUID(),
+      name: "Test Notification",
+      instrument: selectedPair.replace("/", "_"),
+      direction: "test",
+      price: 0,
+    }]);
+    playAlertSound("chime");
+    invoke("send_test_notification")
+      .catch((e: unknown) => {
+        setToasts(prev => [...prev, {
+          toastId: crypto.randomUUID(),
+          name: "Telegram failed",
+          instrument: String(e).slice(0, 40),
+          direction: "✗",
+          price: 0,
+        }]);
+      });
+  }
+
   function updateAlert(id: string, patch: Partial<Alert>) {
     setAlerts(prev => {
       const next = prev.map(a => a.id === id ? { ...a, ...patch } : a);
@@ -7199,16 +7220,28 @@ export function AnalyticsV3() {
                 badge={p.id === "ai-synthesis" ? aisBadge : undefined}
                 subtitle={p.id === "ai-synthesis" ? aisHeadline : undefined}
                 headerActions={p.id === "ai-chat" ? (
-                  <button
-                    onClick={() => createAlert()}
-                    style={{
-                      fontSize: 9, padding: "2px 7px", borderRadius: 6, fontWeight: 600,
-                      background: "rgba(255,255,255,0.08)", border: "1px solid rgba(255,255,255,0.18)",
-                      color: "var(--text-secondary)", cursor: "pointer",
-                    }}
-                  >
-                    + Add Alert
-                  </button>
+                  <div style={{ display: "flex", gap: 4 }}>
+                    <button
+                      onClick={() => sendTestNotification()}
+                      style={{
+                        fontSize: 9, padding: "2px 7px", borderRadius: 6, fontWeight: 600,
+                        background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.14)",
+                        color: "var(--text-muted)", cursor: "pointer",
+                      }}
+                    >
+                      Test
+                    </button>
+                    <button
+                      onClick={() => createAlert()}
+                      style={{
+                        fontSize: 9, padding: "2px 7px", borderRadius: 6, fontWeight: 600,
+                        background: "rgba(255,255,255,0.08)", border: "1px solid rgba(255,255,255,0.18)",
+                        color: "var(--text-secondary)", cursor: "pointer",
+                      }}
+                    >
+                      + Add Alert
+                    </button>
+                  </div>
                 ) : undefined}
                 onExpand={() => setExpanded({ id: p.id, label: p.label, sub: p.sub })}>
                 {p.id === "ai-synthesis" && <AiSynthesisPanelBody result={analysisResult} />}
@@ -7332,16 +7365,28 @@ export function AnalyticsV3() {
 
       {expanded && (
         <PanelModal panel={expanded} onClose={close} headerActions={expanded.id === "ai-chat" ? (
-          <button
-            onClick={() => createAlert()}
-            style={{
-              fontSize: 10, padding: "3px 10px", borderRadius: 6, fontWeight: 600,
-              background: "rgba(255,255,255,0.08)", border: "1px solid rgba(255,255,255,0.18)",
-              color: "var(--text-secondary)", cursor: "pointer",
-            }}
-          >
-            + Add Alert
-          </button>
+          <div style={{ display: "flex", gap: 4 }}>
+            <button
+              onClick={() => sendTestNotification()}
+              style={{
+                fontSize: 10, padding: "3px 10px", borderRadius: 6, fontWeight: 600,
+                background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.14)",
+                color: "var(--text-muted)", cursor: "pointer",
+              }}
+            >
+              Test
+            </button>
+            <button
+              onClick={() => createAlert()}
+              style={{
+                fontSize: 10, padding: "3px 10px", borderRadius: 6, fontWeight: 600,
+                background: "rgba(255,255,255,0.08)", border: "1px solid rgba(255,255,255,0.18)",
+                color: "var(--text-secondary)", cursor: "pointer",
+              }}
+            >
+              + Add Alert
+            </button>
+          </div>
         ) : undefined} badge={expanded.id === "ai-synthesis" ? aisBadgeExpanded : expanded.id === "macd" ? macdBadgeExpanded : expanded.id === "price" ? priceBadgeExpanded : expanded.id === "rsi9" ? rsiBadgeExpanded : expanded.id === "rsi14" ? rsi14BadgeExpanded : expanded.id === "moving-averages" ? maBadgeExpanded : expanded.id === "keltner" ? keltBadgeExpanded : expanded.id === "adx" ? adxBadgeExpanded : expanded.id === "ichimoku" ? ichiBadgeExpanded : expanded.id === "session" ? sessionBadgeExpanded : expanded.id === "volume" ? volBadgeExpanded : expanded.id === "pivots" ? pivotBadgeExpanded : expanded.id === "cci" ? momBadgeExpanded : expanded.id === "wr" ? wrBadgeExpanded : expanded.id === "volatility" ? volaBadgeExpanded : expanded.id === "avg-price" ? avgpBadgeExpanded : expanded.id === "roc" ? rocBadgeExpanded : expanded.id === "atr" ? atrBadgeExpanded : expanded.id === "candle-context" ? cctxBadgeExpanded : expanded.id === "market-structure" ? msBadgeExpanded : expanded.id === "regime" ? regimeBadgeExpanded : undefined} subtitle={expanded.id === "ai-synthesis" ? aisHeadline : expanded.id === "macd" ? macdHeadline : expanded.id === "price" ? priceHeadline : expanded.id === "rsi9" ? rsiHeadline : expanded.id === "rsi14" ? rsi14Headline : expanded.id === "moving-averages" ? maHeadline : expanded.id === "keltner" ? keltHeadline : expanded.id === "adx" ? adxHeadline : expanded.id === "ichimoku" ? ichiHeadline : expanded.id === "session" ? sessionHeadline : expanded.id === "volume" ? volHeadline : expanded.id === "pivots" ? pivotHeadline : expanded.id === "cci" ? momHeadline : expanded.id === "wr" ? wrHeadline : expanded.id === "volatility" ? volaHeadline : expanded.id === "avg-price" ? avgpHeadline : expanded.id === "roc" ? rocHeadline : expanded.id === "atr" ? atrHeadline : expanded.id === "failure-swing" ? fswHeadline : expanded.id === "candle-context" ? cctxHeadline : expanded.id === "market-structure" ? msHeadline : expanded.id === "regime" ? regimeHeadline : undefined} subtitle2={expanded.id === "regime" ? regimeAlignmentInsight : undefined}>
           {expanded.id === "ai-synthesis"    && <AiSynthesisPanelBody result={analysisResult} expanded />}
           {expanded.id === "price"           && <PricePanelBody      rows={sheetRows} expanded />}
@@ -7372,7 +7417,7 @@ export function AnalyticsV3() {
       {/* ── Alert toasts ──────────────────────────────────────────────────── */}
       {toasts.length > 0 && (
         <div style={{
-          position: "fixed", top: 20, right: 20, zIndex: 9999,
+          position: "fixed", top: 20, left: "50%", transform: "translateX(-50%)", zIndex: 9999,
           display: "flex", flexDirection: "column", gap: 8, pointerEvents: "none",
         }}>
           {toasts.map(t => (
@@ -7392,11 +7437,6 @@ export function AnalyticsV3() {
 // ─── Toast card ───────────────────────────────────────────────────────────────
 
 function AlertToastCard({ toast, onDismiss }: { toast: AlertToast; onDismiss: () => void }) {
-  useEffect(() => {
-    const id = setTimeout(onDismiss, 6000);
-    return () => clearTimeout(id);
-  }, []);
-
   return (
     <div style={{
       pointerEvents: "all",
@@ -7404,7 +7444,7 @@ function AlertToastCard({ toast, onDismiss }: { toast: AlertToast; onDismiss: ()
       border: "1px solid rgba(167,139,250,0.35)",
       borderRadius: 10,
       padding: "10px 14px",
-      minWidth: 220,
+      minWidth: 360,
       boxShadow: "0 6px 24px rgba(0,0,0,0.6)",
       display: "flex", flexDirection: "column", gap: 4,
     }}>
@@ -7422,10 +7462,10 @@ function AlertToastCard({ toast, onDismiss }: { toast: AlertToast; onDismiss: ()
           ×
         </button>
       </div>
-      <div style={{ fontSize: 12, fontWeight: 700, color: "var(--text-primary)" }}>
+      <div style={{ fontSize: 12, fontWeight: 700, color: "var(--text-primary)", textAlign: "center" }}>
         {toast.name}
       </div>
-      <div style={{ fontSize: 11, color: "var(--text-secondary)" }}>
+      <div style={{ fontSize: 11, color: "var(--text-secondary)", textAlign: "center" }}>
         {toast.instrument.replace("_", "/")} · {toast.direction} {toast.price.toFixed(5)}
       </div>
     </div>
