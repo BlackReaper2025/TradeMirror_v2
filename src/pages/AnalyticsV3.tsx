@@ -268,7 +268,7 @@ function HoverTooltip({ tip, children }: { tip: string; children: React.ReactNod
   );
 }
 
-const NO_SUB_IDS = new Set(["ai-synthesis", "price", "macd", "rsi9", "rsi14", "moving-averages", "keltner", "adx", "ichimoku", "session", "volume", "pivots", "cci", "wr", "volatility", "avg-price", "roc", "atr", "candle-context", "ai-chat"]);
+const NO_SUB_IDS = new Set(["ai-synthesis", "price", "macd", "rsi9", "rsi14", "moving-averages", "keltner", "adx", "ichimoku", "session", "volume", "pivots", "cci", "wr", "volatility", "avg-price", "roc", "atr", "candle-context", "ai-chat", "regime"]);
 
 function PanelModal({ panel, onClose, badge, subtitle, subtitle2, headerActions, children }: { panel: PanelMeta; onClose: () => void; badge?: React.ReactNode; subtitle?: string; subtitle2?: string; headerActions?: React.ReactNode; children?: React.ReactNode }) {
   useEffect(() => {
@@ -525,7 +525,7 @@ function PricePanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boole
         const lw   = (Math.min(r.open, r.close) - r.low) * 10000;
         return (
           <PriceRow key={r.date + i} bg={i % 2 === 0 ? "transparent" : "rgba(255,255,255,0.03)"}>
-            <div className={cell} style={{ color: grey }}>{fmtDate(r.date)}</div>
+            <div className={cell} style={{ color: grey }}>{expanded ? (() => { const [y,m,d2] = r.date.split("-"); return `${parseInt(m)}/${parseInt(d2)}/${y}`; })() : fmtDate(r.date)}</div>
             <VLine />
             <div className={cell} style={{ color: grey }}>{r.open.toFixed(4)}</div>
             <div className={cell} style={{ color: grey }}>{r.high.toFixed(4)}</div>
@@ -647,6 +647,7 @@ function MacdPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolea
       const monthIdx = parseInt(parts[1]) - 1;
       const prevMonth = i > 0 ? parseInt(slice[i-1].date.split("-")[1]) - 1 : -1;
       return {
+        idx:       i,
         date:      parseInt(parts[2]).toString(),
         month:     monthIdx !== prevMonth ? MONTHS[monthIdx] : "",
         macd:      r.macd           * 10000,
@@ -692,7 +693,23 @@ function MacdPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolea
       <div className="flex-1 min-h-0">
         <ResponsiveContainer width="100%" height="100%">
           <ComposedChart data={data} margin={{ top: 4, right: 6, bottom: 0, left: 0 }} barCategoryGap={expanded ? 1 : 0}>
-            <XAxis dataKey="date" hide />
+            <XAxis
+              dataKey="idx"
+              tickLine={false}
+              axisLine={false}
+              height={expanded ? 34 : 0}
+              hide={!expanded}
+              tick={(props: any) => {
+                const d = data[props.index];
+                if (!d) return <g />;
+                return (
+                  <g transform={`translate(${props.x},${props.y})`}>
+                    <text x={0} y={0} dy={11} textAnchor="middle" fontSize={tickStyle.fontSize} fill="var(--text-muted)">{d.date}</text>
+                    {d.month && <text x={0} y={0} dy={23} textAnchor="middle" fontSize={tickStyle.fontSize} fill="var(--text-muted)" fontWeight={700}>{d.month}</text>}
+                  </g>
+                );
+              }}
+            />
             <YAxis
               tick={tickStyle}
               tickLine={false}
@@ -701,7 +718,7 @@ function MacdPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolea
               tickFormatter={v => v.toFixed(1)}
             />
             <ReferenceLine y={0} stroke="rgba(255,255,255,0.12)" strokeWidth={1} />
-            <Tooltip content={<MacdTooltip />} cursor={{ fill: "rgba(255,255,255,0.04)" }} position={{ x: 10, y: 10 }} />
+            <Tooltip content={<MacdTooltip />} cursor={{ stroke: "rgba(255,255,255,0.35)", strokeWidth: 1 }} position={{ x: 60, y: 10 }} />
             {showHist && (
               <Bar dataKey="histogram" name="Histogram" isAnimationActive={false}>
                 {data.map((d, i) => (
@@ -728,28 +745,6 @@ function MacdPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolea
         />
       )}
 
-      {/* Date labels rows — days on top, month name below at first day of each month */}
-      {expanded && (
-        <div className="flex flex-col shrink-0 pb-1" style={{ paddingLeft: yAxisWidth, paddingRight: 6 }}>
-          <div className="flex justify-between">
-            {data.map((d, i) => (
-              <span key={i} style={{ fontSize: tickStyle.fontSize, color: "var(--text-muted)" }}>{d.date}</span>
-            ))}
-          </div>
-          {/* Month labels: group by month, flex proportional to count so label centers over its dates */}
-          <div className="flex">
-            {data.reduce<{ month: string; count: number }[]>((acc, d) => {
-              if (d.month) acc.push({ month: d.month, count: 1 });
-              else if (acc.length) acc[acc.length - 1].count++;
-              return acc;
-            }, []).map((g, i) => (
-              <div key={i} className="text-center" style={{ flex: g.count, fontSize: tickStyle.fontSize, color: "var(--text-muted)", fontWeight: 700 }}>
-                {g.month}
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
 
       {/* Indicator glossary — expanded only */}
       {expanded && (
@@ -896,6 +891,7 @@ function RsiPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolean
       const monthIdx = parseInt(parts[1]) - 1;
       const prevMonth = i > 0 ? parseInt(slice[i-1].date.split("-")[1]) - 1 : -1;
       return {
+        idx:   i,
         date:  parseInt(parts[2]).toString(),
         month: monthIdx !== prevMonth ? MONTHS[monthIdx] : "",
         rsi9:  r.rsi9,
@@ -930,7 +926,7 @@ function RsiPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolean
       <div className="flex-1 min-h-0">
         <ResponsiveContainer width="100%" height="100%">
           <ComposedChart data={data} margin={{ top: 4, right: 6, bottom: 0, left: 0 }}>
-            <XAxis dataKey="date" hide />
+            <XAxis dataKey="idx" hide />
             <YAxis
               tick={tickStyle}
               tickLine={false}
@@ -946,7 +942,7 @@ function RsiPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolean
             <ReferenceLine y={50} stroke="rgba(255,255,255,0.13)" strokeWidth={1} strokeDasharray="3 3" />
             <ReferenceLine y={30} stroke="rgba(255,255,255,0.20)" strokeWidth={1} />
             <ReferenceLine y={20} stroke="rgba(255,255,255,0.12)" strokeWidth={1} strokeDasharray="2 4" />
-            <Tooltip content={<RsiTooltip />} cursor={{ fill: "rgba(255,255,255,0.04)" }} position={{ x: 10, y: 10 }} />
+            <Tooltip content={<RsiTooltip />} cursor={{ stroke: "rgba(255,255,255,0.35)", strokeWidth: 1 }} position={{ x: 60, y: 10 }} />
             {showRsi && <Line dataKey="rsi9" name="RSI(9)"      type="monotone" dot={false} strokeWidth={expanded ? 2 : 1.5} stroke="#60a5fa" isAnimationActive={false} />}
             {showK   && <Line dataKey="k"    name="StochRSI %K" type="monotone" dot={false} strokeWidth={expanded ? 1.5 : 1} stroke="#f59e0b" isAnimationActive={false} />}
             {showD   && <Line dataKey="d"    name="StochRSI %D" type="monotone" dot={false} strokeWidth={expanded ? 1.5 : 1} stroke="#c084fc" strokeDasharray="3 3" isAnimationActive={false} />}
@@ -1124,6 +1120,7 @@ function Rsi14PanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boole
       const smaStart  = Math.max(0, i - 4);
       const trend     = arr.slice(smaStart, i + 1).reduce((s, x) => s + x.rsi14, 0) / (i - smaStart + 1);
       return {
+        idx:   i,
         date:  parseInt(parts[2]).toString(),
         month: monthIdx !== prevMonth ? MONTHS[monthIdx] : "",
         rsi14: r.rsi14,
@@ -1172,7 +1169,7 @@ function Rsi14PanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boole
       <div className="flex-1 min-h-0">
         <ResponsiveContainer width="100%" height="100%">
           <ComposedChart data={data} margin={{ top: 4, right: 6, bottom: 0, left: 0 }}>
-            <XAxis dataKey="date" hide />
+            <XAxis dataKey="idx" hide />
             <YAxis
               tick={tickStyle}
               tickLine={false}
@@ -1186,7 +1183,7 @@ function Rsi14PanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boole
             <ReferenceLine y={70} stroke="rgba(255,255,255,0.20)" strokeWidth={1} />
             <ReferenceLine y={50} stroke="rgba(255,255,255,0.13)" strokeWidth={1} strokeDasharray="3 3" />
             <ReferenceLine y={30} stroke="rgba(255,255,255,0.20)" strokeWidth={1} />
-            <Tooltip content={<Rsi14Tooltip />} cursor={{ fill: "rgba(255,255,255,0.04)" }} position={{ x: 10, y: 10 }} />
+            <Tooltip content={<Rsi14Tooltip />} cursor={{ stroke: "rgba(255,255,255,0.35)", strokeWidth: 1 }} position={{ x: 60, y: 10 }} />
             {showRsi14 && <Line dataKey="rsi14" name="RSI(14)" type="monotone" dot={false} strokeWidth={expanded ? 2 : 1.5} stroke="#60a5fa" isAnimationActive={false} />}
             {showTrend && <Line dataKey="trend" name="Trend"   type="monotone" dot={false} strokeWidth={expanded ? 1.5 : 1} stroke="#f59e0b" strokeDasharray="4 2" isAnimationActive={false} />}
           </ComposedChart>
@@ -1644,7 +1641,7 @@ function MaPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolean 
   }, [rows, offset, windowSize]);
 
   const tickStyle  = { fill: "var(--text-muted)", fontSize: expanded ? 12 : 9 };
-  const yAxisWidth = expanded ? 60 : 44;
+  const yAxisWidth = expanded ? 48 : 44;
   const analysis   = useMemo(() => expanded ? buildMaAnalysis(rows) : null, [rows, expanded]);
 
   const TOGGLES = [
@@ -1748,10 +1745,27 @@ function MaPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolean 
       {/* Chart */}
       <div ref={chartRef} className="flex-1 min-h-0" style={{ position: "relative" }}>
         <ResponsiveContainer width="100%" height="100%">
-          <ComposedChart data={data} margin={{ top: 4, right: 6, bottom: 0, left: 0 }}>
-            <XAxis dataKey="idx" type="number" domain={[0, data.length - 1]} hide />
-            <YAxis tick={tickStyle} tickLine={false} axisLine={false} width={yAxisWidth} domain={yDomain} tickFormatter={v => v.toFixed(4)} />
-            <Tooltip content={<MaTooltip />} cursor={{ fill: "rgba(255,255,255,0.04)" }} position={{ x: 10, y: 10 }} />
+          <ComposedChart data={data} margin={{ top: 4, right: 24, bottom: 0, left: 16 }}>
+            <XAxis
+              dataKey="idx"
+              type="category"
+              tickLine={false}
+              axisLine={false}
+              height={expanded ? 34 : 0}
+              hide={!expanded}
+              tick={(props: any) => {
+                const d = data[props.index];
+                if (!d) return <g />;
+                return (
+                  <g transform={`translate(${props.x},${props.y})`}>
+                    <text x={0} y={0} dy={11} textAnchor="middle" fontSize={tickStyle.fontSize} fill="var(--text-muted)">{d.date}</text>
+                    {d.month && <text x={0} y={0} dy={23} textAnchor="middle" fontSize={tickStyle.fontSize} fill="var(--text-muted)" fontWeight={700}>{d.month}</text>}
+                  </g>
+                );
+              }}
+            />
+            <YAxis tick={tickStyle} tickLine={false} axisLine={false} width={yAxisWidth} domain={yDomain} tickFormatter={v => v.toFixed(4)} tickMargin={16} />
+            <Tooltip content={<MaTooltip />} cursor={{ stroke: "rgba(255,255,255,0.35)", strokeWidth: 1 }} position={{ x: 60, y: 10 }} />
             {showClose && !showCandles && <Line dataKey="close"  name="Close"  type="monotone" dot={false} strokeWidth={expanded ? 1.5 : 1} stroke="rgba(255,255,255,0.55)" isAnimationActive={false} />}
             {showEma9   && <Line dataKey="ema9"   name="EMA9"   type="monotone" dot={false} strokeWidth={expanded ? 1.5 : 1} stroke="#c4b5fd" isAnimationActive={false} />}
             {showEma20  && <Line dataKey="ema20"  name="EMA20"  type="monotone" dot={false} strokeWidth={expanded ? 1.5 : 1} stroke="#a78bfa" isAnimationActive={false} />}
@@ -1763,9 +1777,9 @@ function MaPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolean 
 
         {/* Candle overlay — absolutely positioned SVG */}
         {showClose && showCandles && chartSize && (() => {
-          const plotLeft   = yAxisWidth;
+          const plotLeft   = yAxisWidth + 16;
           const plotTop    = 4;
-          const plotWidth  = chartSize.w - yAxisWidth - 6;
+          const plotWidth  = chartSize.w - plotLeft - 24;
           const plotHeight = chartSize.h - plotTop;
           const [yMin, yMax] = yDomain as [number, number];
           if (typeof yMin !== "number" || typeof yMax !== "number" || yMax === yMin) return null;
@@ -1808,28 +1822,6 @@ function MaPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolean 
           onChange={e => setOffset(Number(e.target.value))}
           style={{ direction: "rtl" }}
         />
-      )}
-
-      {/* Date labels */}
-      {expanded && (
-        <div className="flex flex-col shrink-0 pb-1" style={{ paddingLeft: yAxisWidth, paddingRight: 6 }}>
-          <div className="flex justify-between">
-            {data.map((d, i) => (
-              <span key={i} style={{ fontSize: tickStyle.fontSize, color: "var(--text-muted)" }}>{d.date}</span>
-            ))}
-          </div>
-          <div className="flex">
-            {data.reduce<{ month: string; count: number }[]>((acc, d) => {
-              if (d.month) acc.push({ month: d.month, count: 1 });
-              else if (acc.length) acc[acc.length - 1].count++;
-              return acc;
-            }, []).map((g, i) => (
-              <div key={i} className="text-center" style={{ flex: g.count, fontSize: tickStyle.fontSize, color: "var(--text-muted)", fontWeight: 700 }}>
-                {g.month}
-              </div>
-            ))}
-          </div>
-        </div>
       )}
 
       {/* Indicator glossary — expanded only */}
@@ -1928,9 +1920,28 @@ function AdxPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolean
       <div className="flex-1 min-h-0">
         <ResponsiveContainer width="100%" height="100%">
           <ComposedChart data={data} margin={{ top: 4, right: 6, bottom: 0, left: 0 }}>
-            <XAxis dataKey="idx" type="number" domain={[0, data.length - 1]} hide />
-            <YAxis tick={tickStyle} tickLine={false} axisLine={false} width={yAxisWidth} domain={expanded ? [0, Math.max(yDomain[1] as number, 45)] : yDomain} ticks={[20, 25, 40]} tickFormatter={v => String(v)} />
-            <Tooltip content={<MaTooltip />} cursor={{ fill: "rgba(255,255,255,0.04)" }} position={{ x: 10, y: 10 }} />
+            <XAxis
+              dataKey="idx"
+              type="category"
+              tickLine={false}
+              axisLine={false}
+              height={expanded ? 34 : 0}
+              hide={!expanded}
+              tick={(props: any) => {
+                const d = data[props.index];
+                if (!d) return <g />;
+                return (
+                  <g transform={`translate(${props.x},${props.y})`}>
+                    <text x={0} y={0} dy={11} textAnchor="middle" fontSize={tickStyle.fontSize} fill="var(--text-muted)">{d.date}</text>
+                    {d.month && <text x={0} y={0} dy={23} textAnchor="middle" fontSize={tickStyle.fontSize} fill="var(--text-muted)" fontWeight={700}>{d.month}</text>}
+                  </g>
+                );
+              }}
+            />
+            <YAxis tick={tickStyle} tickLine={false} axisLine={false} width={yAxisWidth} domain={expanded ? [0, Math.max(yDomain[1] as number, 45)] : yDomain} ticks={[25, 40]} tickFormatter={v => String(v)} />
+            <Tooltip content={<MaTooltip />} cursor={{ stroke: "rgba(255,255,255,0.35)", strokeWidth: 1 }} position={{ x: 60, y: 10 }} />
+            <ReferenceArea y1={0} y2={25} fill="rgba(167,139,250,0.22)" ifOverflow="hidden" />
+            <ReferenceArea y1={25} y2={200} fill="rgba(96,165,250,0.18)" ifOverflow="hidden" />
             <ReferenceLine y={25} stroke="rgba(255,255,255,0.15)" strokeWidth={1} strokeDasharray="3 3" />
             <ReferenceLine y={40} stroke="rgba(255,255,255,0.10)" strokeWidth={1} strokeDasharray="2 4" />
             {showDiPlus  && <Line dataKey="diPlus"  name="+DI" type="monotone" dot={false} strokeWidth={expanded ? 2 : 1.5} stroke="#60a5fa" isAnimationActive={false} />}
@@ -1951,28 +1962,6 @@ function AdxPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolean
           onChange={e => setOffset(Number(e.target.value))}
           style={{ direction: "rtl" }}
         />
-      )}
-
-      {/* Date labels */}
-      {expanded && (
-        <div className="flex flex-col shrink-0 pb-1" style={{ paddingLeft: yAxisWidth, paddingRight: 6 }}>
-          <div className="flex justify-between">
-            {data.map((d, i) => (
-              <span key={i} style={{ fontSize: tickStyle.fontSize, color: "var(--text-muted)" }}>{d.date}</span>
-            ))}
-          </div>
-          <div className="flex">
-            {data.reduce<{ month: string; count: number }[]>((acc, d) => {
-              if (d.month) acc.push({ month: d.month, count: 1 });
-              else if (acc.length) acc[acc.length - 1].count++;
-              return acc;
-            }, []).map((g, i) => (
-              <div key={i} className="text-center" style={{ flex: g.count, fontSize: tickStyle.fontSize, color: "var(--text-muted)", fontWeight: 700 }}>
-                {g.month}
-              </div>
-            ))}
-          </div>
-        </div>
       )}
 
       {/* Indicator glossary — expanded only */}
@@ -2161,11 +2150,28 @@ function IchiPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolea
       <div ref={chartRef} className="flex-1 min-h-0" style={{ position: "relative" }}>
         <ResponsiveContainer width="100%" height="100%">
           <ComposedChart data={data} margin={{ top: 4, right: 6, bottom: 0, left: 0 }}>
-            <XAxis dataKey="idx" type="number" domain={[0, totalPoints - 1]} hide />
+            <XAxis
+              dataKey="idx"
+              type="category"
+              tickLine={false}
+              axisLine={false}
+              height={expanded ? 34 : 0}
+              hide={!expanded}
+              tick={(props: any) => {
+                const d = data[props.index];
+                if (!d) return <g />;
+                return (
+                  <g transform={`translate(${props.x},${props.y})`}>
+                    <text x={0} y={0} dy={11} textAnchor="middle" fontSize={tickStyle.fontSize} fill="var(--text-muted)">{d.date}</text>
+                    {d.month && <text x={0} y={0} dy={23} textAnchor="middle" fontSize={tickStyle.fontSize} fill="var(--text-muted)" fontWeight={700}>{d.month}</text>}
+                  </g>
+                );
+              }}
+            />
             <YAxis tick={tickStyle} tickLine={false} axisLine={false} width={yAxisWidth} domain={yDomain} tickFormatter={v => v.toFixed(4)} />
             <Tooltip
-              cursor={{ fill: "rgba(255,255,255,0.04)" }}
-              position={{ x: 10, y: 10 }}
+              cursor={{ stroke: "rgba(255,255,255,0.35)", strokeWidth: 1 }}
+              position={{ x: 60, y: 10 }}
               wrapperStyle={{ background: "none", border: "none", boxShadow: "none", zIndex: 50 }}
               content={({ active, payload }) => {
                 if (!active || !payload?.length) return null;
@@ -2273,28 +2279,6 @@ function IchiPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolea
         />
       )}
 
-      {/* Date labels — only for price positions (0..windowSize-1); last 26 slots are the cloud projection zone */}
-      {expanded && (
-        <div className="flex flex-col shrink-0 pb-1" style={{ paddingLeft: yAxisWidth, paddingRight: 6 }}>
-          <div className="flex justify-between">
-            {data.map((d, i) => (
-              <span key={i} style={{ fontSize: tickStyle.fontSize, color: i < windowSize ? "var(--text-muted)" : "transparent" }}>{d.date || " "}</span>
-            ))}
-          </div>
-          <div className="flex">
-            {data.reduce<{ month: string; count: number }[]>((acc, d) => {
-              if (d.month) acc.push({ month: d.month, count: 1 });
-              else if (acc.length) acc[acc.length - 1].count++;
-              return acc;
-            }, []).map((g, i) => (
-              <div key={i} className="text-center" style={{ flex: g.count, fontSize: tickStyle.fontSize, color: "var(--text-muted)", fontWeight: 700 }}>
-                {g.month}
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
       {/* Indicator glossary — expanded only */}
       {expanded && (
         <div className="shrink-0 flex" style={{ borderTop: "1px solid var(--border-subtle)", background: "rgba(255,255,255,0.015)" }}>
@@ -2326,7 +2310,6 @@ function buildSessionAnalysis(rows: SheetRow[]): { headline: string; bullets: st
   const cur  = rows[rows.length - 1];
   const prev = rows[rows.length - 2];
   const pctChange = ((cur.close - prev.close) / prev.close) * 100;
-  const gap       = ((cur.open  - prev.close) / prev.close) * 100;
   const bodyPct   = cur.high !== cur.low ? Math.abs(cur.close - cur.open) / (cur.high - cur.low) * 100 : 0;
   const rangePips = Math.round((cur.high - cur.low) * 10000);
   const bullish   = cur.close >= cur.open;
@@ -2337,9 +2320,6 @@ function buildSessionAnalysis(rows: SheetRow[]): { headline: string; bullets: st
   const sign = pctChange >= 0 ? "+" : "";
   const bullets = [
     `${sign}${pctChange.toFixed(3)}% session change · prev close ${prev.close.toFixed(4)}`,
-    Math.abs(gap) > 0.003
-      ? `${gap > 0 ? "Gap up" : "Gap down"} ${Math.abs(gap).toFixed(3)}% from prior close`
-      : `Near-flat open — ${Math.abs(gap).toFixed(3)}% gap from prior close`,
     `${rangePips} pip range · ${bodyPct.toFixed(0)}% body fill`,
     cur.insideBar
       ? "Inside bar — contained within prior session's range"
@@ -2352,10 +2332,10 @@ function buildSessionAnalysis(rows: SheetRow[]): { headline: string; bullets: st
   } else if (Math.abs(pctChange) > 0.5) {
     if (bullish) {
       headline    = "Strong Bullish Session";
-      description = `A decisive ${pctChange.toFixed(3)}% advance with a ${bodyPct.toFixed(0)}% body fill reflects strong buying conviction. Buyers controlled the full ${rangePips}-pip range.${gap > 0.01 ? ` A ${gap.toFixed(3)}% gap up opened the session with immediate bullish intent.` : ""} The session open at ${cur.open.toFixed(4)} now acts as near-term support — pullbacks toward that level are likely to attract buyers.`;
+      description = `A decisive ${pctChange.toFixed(3)}% advance with a ${bodyPct.toFixed(0)}% body fill reflects strong buying conviction. Buyers controlled the full ${rangePips}-pip range. The session open at ${cur.open.toFixed(4)} now acts as near-term support — pullbacks toward that level are likely to attract buyers.`;
     } else {
       headline    = "Strong Bearish Session";
-      description = `A ${Math.abs(pctChange).toFixed(3)}% decline with a ${bodyPct.toFixed(0)}% body fill signals dominant selling pressure. Bears held control across the ${rangePips}-pip session range.${gap < -0.01 ? ` A ${Math.abs(gap).toFixed(3)}% gap down deepened the bearish tone.` : ""} The session open at ${cur.open.toFixed(4)} now acts as near-term resistance — intraday rallies toward that level are likely to find sellers.`;
+      description = `A ${Math.abs(pctChange).toFixed(3)}% decline with a ${bodyPct.toFixed(0)}% body fill signals dominant selling pressure. Bears held control across the ${rangePips}-pip session range. The session open at ${cur.open.toFixed(4)} now acts as near-term resistance — intraday rallies toward that level are likely to find sellers.`;
     }
   } else if (Math.abs(pctChange) > 0.10) {
     headline    = bullish ? "Moderate Bullish Session" : "Moderate Bearish Session";
@@ -2379,12 +2359,11 @@ function SessionPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boo
     return rows.slice(start, end).map((r, i) => {
       const prevClose = rows[start + i - 1].close;
       const pctChange = ((r.close - prevClose) / prevClose) * 100;
-      const gap       = ((r.open  - prevClose) / prevClose) * 100;
       const bodyPct   = r.high !== r.low ? Math.abs(r.close - r.open) / (r.high - r.low) * 100 : 0;
       const rangePips = Math.round((r.high - r.low) * 10000);
       const parts     = r.date.split("-");
       const monthIdx  = parseInt(parts[1]) - 1;
-      return { pctChange, gap, bodyPct, rangePips, insideBar: r.insideBar, bullish: r.close >= r.open, date: parseInt(parts[2]).toString(), monthIdx };
+      return { idx: i, pctChange, bodyPct, rangePips, insideBar: r.insideBar, bullish: r.close >= r.open, date: parseInt(parts[2]).toString(), monthIdx };
     }).map((d, i, arr) => ({
       ...d,
       month: d.monthIdx >= 0 && (i === 0 || d.monthIdx !== arr[i - 1].monthIdx) ? MONTHS[d.monthIdx] : "",
@@ -2425,12 +2404,29 @@ function SessionPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boo
 
       <div className="flex-1 min-h-0">
         <ResponsiveContainer width="100%" height="100%">
-          <ComposedChart data={data} margin={{ top: 4, right: 6, bottom: 0, left: 0 }}>
-            <XAxis dataKey="date" hide />
+          <ComposedChart data={data} margin={{ top: 4, right: 20, bottom: 0, left: 0 }}>
+            <XAxis
+              dataKey="idx"
+              type="category"
+              tickLine={false}
+              axisLine={false}
+              height={expanded ? 34 : 0}
+              hide={!expanded}
+              tick={(props: any) => {
+                const d = data[props.index];
+                if (!d) return <g />;
+                return (
+                  <g transform={`translate(${props.x},${props.y})`}>
+                    <text x={0} y={0} dy={11} textAnchor="middle" fontSize={tickStyle.fontSize} fill="var(--text-muted)">{d.date}</text>
+                    {d.month && <text x={0} y={0} dy={23} textAnchor="middle" fontSize={tickStyle.fontSize} fill="var(--text-muted)" fontWeight={700}>{d.month}</text>}
+                  </g>
+                );
+              }}
+            />
             <YAxis tick={tickStyle} tickLine={false} axisLine={false} width={yAxisWidth} domain={yDomain} tickFormatter={v => v.toFixed(2) + "%"} />
             <Tooltip
               cursor={{ fill: "rgba(255,255,255,0.04)" }}
-              position={{ x: 10, y: 10 }}
+              position={{ x: 60, y: 10 }}
               content={({ active, payload }) => {
                 if (!active || !payload?.length) return null;
                 const d = payload[0].payload as typeof data[0];
@@ -2439,9 +2435,8 @@ function SessionPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boo
                     <div className="font-bold mb-1" style={{ color: d.bullish ? "#60a5fa" : "#a78bfa" }}>
                       {d.pctChange >= 0 ? "+" : ""}{d.pctChange.toFixed(3)}%
                     </div>
-                    <div>Gap: {d.gap >= 0 ? "+" : ""}{d.gap.toFixed(3)}%</div>
                     <div>Range: {d.rangePips} pips</div>
-                    <div>Body: {d.bodyPct.toFixed(0)}%</div>
+                    <div>Body Fill: {d.bodyPct.toFixed(0)}%</div>
                     {d.insideBar && <div style={{ color: "#f59e0b" }}>Inside Bar</div>}
                   </div>
                 );
@@ -2461,54 +2456,15 @@ function SessionPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boo
         </ResponsiveContainer>
       </div>
 
-      {latest && expanded && (
-        <div className="shrink-0 flex items-center pb-0.5" style={{ paddingLeft: yAxisWidth, paddingRight: 6, gap: 2 }}>
-          {[
-            { label: "Change", value: `${latest.pctChange >= 0 ? "+" : ""}${latest.pctChange.toFixed(3)}%`, color: latest.bullish ? "#60a5fa" : "#a78bfa" },
-            { label: "Gap",    value: `${latest.gap >= 0 ? "+" : ""}${latest.gap.toFixed(3)}%`,             color: latest.gap > 0.003 ? "#60a5fa" : latest.gap < -0.003 ? "#a78bfa" : "var(--text-muted)" },
-            { label: "Range",  value: `${latest.rangePips}p`,                                               color: "var(--text-secondary)" },
-            { label: "Body",   value: `${latest.bodyPct.toFixed(0)}%`,                                      color: "var(--text-secondary)" },
-            ...(latest.insideBar ? [{ label: "IB", value: "●", color: "#f59e0b" }] : []),
-          ].map((m, i) => (
-            <div key={i} className="flex-1 flex flex-col items-center" style={{ minWidth: 0 }}>
-              <span style={{ fontSize: 9, color: "var(--text-muted)", textTransform: "uppercase" as const, letterSpacing: "0.05em" }}>{m.label}</span>
-              <span style={{ fontSize: 11, fontWeight: 700, color: m.color }}>{m.value}</span>
-            </div>
-          ))}
-        </div>
-      )}
-
       {expanded && maxOffset > 0 && (
         <input type="range" className="momentum-scroll" min={0} max={maxOffset} value={offset}
           onChange={e => setOffset(Number(e.target.value))} style={{ direction: "rtl" }} />
       )}
 
       {expanded && (
-        <div className="flex flex-col shrink-0 pb-1" style={{ paddingLeft: yAxisWidth, paddingRight: 6 }}>
-          <div className="flex justify-between">
-            {data.map((d, i) => (
-              <span key={i} style={{ fontSize: tickStyle.fontSize, color: "var(--text-muted)" }}>{d.date}</span>
-            ))}
-          </div>
-          <div className="flex">
-            {data.reduce<{ month: string; count: number }[]>((acc, d) => {
-              if (d.month) acc.push({ month: d.month, count: 1 });
-              else if (acc.length) acc[acc.length - 1].count++;
-              return acc;
-            }, []).map((g, i) => (
-              <div key={i} className="text-center" style={{ flex: g.count, fontSize: tickStyle.fontSize, color: "var(--text-muted)", fontWeight: 700 }}>
-                {g.month}
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {expanded && (
         <div className="shrink-0 flex" style={{ borderTop: "1px solid var(--border-subtle)", background: "rgba(255,255,255,0.015)" }}>
           {[
-            { color: "#60a5fa",               name: "% Change",    body: "Session return from prior close to current close. Captures both the overnight gap and the intraday move. Positive = bullish session; negative = bearish." },
-            { color: "#f59e0b",               name: "Gap %",       body: "Difference between today's open and yesterday's close, as a percentage. A positive gap signals overnight bullish sentiment; negative signals bearish. Gaps above 0.05% are meaningful for daily FX." },
+            { color: "#60a5fa",               name: "% Change",    body: "Session return from prior close to current close. Positive = bullish session; negative = bearish." },
             { color: "#60a5fa",               name: "Range (pips)",body: "(High − Low) × 10,000. Total session volatility in pips. A wide range vs recent average indicates a high-conviction session; a narrow range signals consolidation or indecision." },
             { color: "rgba(255,255,255,0.7)", name: "Body Fill %", body: "|Close − Open| ÷ (High − Low) × 100. What fraction of the total range was captured by the candle body. High fill = directional conviction; low fill = wick-dominated indecision." },
             { color: "#f59e0b",               name: "Inside Bar",  body: "Today's high is below yesterday's high AND today's low is above yesterday's low — the full session is 'inside' the prior bar. Signals volatility contraction. Breakouts above the high or below the low are common entry triggers. Highlighted in amber on the chart." },
@@ -2698,11 +2654,28 @@ function AvgPricePanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: bo
       <div className="flex-1 min-h-0">
         <ResponsiveContainer width="100%" height="100%">
           <ComposedChart data={data} margin={{ top: 4, right: 6, bottom: 0, left: 0 }}>
-            <XAxis dataKey="idx" type="number" domain={[0, data.length - 1]} hide />
+            <XAxis
+              dataKey="idx"
+              type="category"
+              tickLine={false}
+              axisLine={false}
+              height={expanded ? 34 : 0}
+              hide={!expanded}
+              tick={(props: any) => {
+                const d = data[props.index];
+                if (!d) return <g />;
+                return (
+                  <g transform={`translate(${props.x},${props.y})`}>
+                    <text x={0} y={0} dy={11} textAnchor="middle" fontSize={tickStyle.fontSize} fill="var(--text-muted)">{d.date}</text>
+                    {d.month && <text x={0} y={0} dy={23} textAnchor="middle" fontSize={tickStyle.fontSize} fill="var(--text-muted)" fontWeight={700}>{d.month}</text>}
+                  </g>
+                );
+              }}
+            />
             <YAxis yAxisId="price" tick={tickStyle} tickLine={false} axisLine={false} width={yAxisWidth} domain={priceDomain} tickFormatter={v => v.toFixed(4)} />
             <Tooltip
-              cursor={{ fill: "rgba(255,255,255,0.04)" }}
-              position={{ x: 10, y: 10 }}
+              cursor={{ stroke: "rgba(255,255,255,0.35)", strokeWidth: 1 }}
+              position={{ x: 60, y: 10 }}
               content={({ active, payload }) => {
                 if (!active || !payload?.length) return null;
                 const d = payload[0].payload as typeof data[0];
@@ -2723,44 +2696,9 @@ function AvgPricePanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: bo
         </ResponsiveContainer>
       </div>
 
-      {latest && expanded && (
-        <div className="shrink-0 flex items-center" style={{ paddingLeft: yAxisWidth + 6, paddingRight: 6, borderTop: "1px solid var(--border-subtle)", paddingTop: 3, paddingBottom: 3 }}>
-          {[
-            { label: "Avg Δ/day", value: (latest.avgDelta >= 0 ? "+" : "") + latest.avgDelta.toFixed(1) + " pips", color: latest.avgDelta >= 0 ? "#60a5fa" : "#a78bfa" },
-            { label: "vs Avg Price", value: (latest.close >= latest.avgPrice ? "+" : "") + Math.round((latest.close - latest.avgPrice) * 10000) + " pips", color: latest.close >= latest.avgPrice ? "#60a5fa" : "#a78bfa" },
-          ].map((m, i) => (
-            <div key={i} className="flex-1 flex flex-col items-center">
-              <span style={{ fontSize: 9, color: "var(--text-muted)", textTransform: "uppercase" as const, letterSpacing: "0.05em" }}>{m.label}</span>
-              <span style={{ fontSize: 11, fontWeight: 700, color: m.color }}>{m.value}</span>
-            </div>
-          ))}
-        </div>
-      )}
-
       {expanded && maxOffset > 0 && (
         <input type="range" className="momentum-scroll" min={0} max={maxOffset} value={offset}
           onChange={e => setOffset(Number(e.target.value))} style={{ direction: "rtl" }} />
-      )}
-
-      {expanded && (
-        <div className="flex flex-col shrink-0 pb-1" style={{ paddingLeft: yAxisWidth, paddingRight: 6 }}>
-          <div className="flex justify-between">
-            {data.map((d, i) => (
-              <span key={i} style={{ fontSize: tickStyle.fontSize, color: "var(--text-muted)" }}>{d.date}</span>
-            ))}
-          </div>
-          <div className="flex">
-            {data.reduce<{ month: string; count: number }[]>((acc, d) => {
-              if (d.month) acc.push({ month: d.month, count: 1 });
-              else if (acc.length) acc[acc.length - 1].count++;
-              return acc;
-            }, []).map((g, i) => (
-              <div key={i} className="text-center" style={{ flex: g.count, fontSize: tickStyle.fontSize, color: "var(--text-muted)", fontWeight: 700 }}>
-                {g.month}
-              </div>
-            ))}
-          </div>
-        </div>
       )}
 
       {expanded && (
@@ -2844,17 +2782,34 @@ function RocPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolean
       <div className="flex-1 min-h-0">
         <ResponsiveContainer width="100%" height="100%">
           <ComposedChart data={data} margin={{ top: 4, right: 6, bottom: 0, left: 0 }}>
-            <XAxis dataKey="idx" type="number" domain={[0, data.length - 1]} hide />
+            <XAxis
+              dataKey="idx"
+              type="category"
+              tickLine={false}
+              axisLine={false}
+              height={expanded ? 34 : 0}
+              hide={!expanded}
+              tick={(props: any) => {
+                const d = data[props.index];
+                if (!d) return <g />;
+                return (
+                  <g transform={`translate(${props.x},${props.y})`}>
+                    <text x={0} y={0} dy={11} textAnchor="middle" fontSize={tickStyle.fontSize} fill="var(--text-muted)">{d.date}</text>
+                    {d.month && <text x={0} y={0} dy={23} textAnchor="middle" fontSize={tickStyle.fontSize} fill="var(--text-muted)" fontWeight={700}>{d.month}</text>}
+                  </g>
+                );
+              }}
+            />
             <YAxis tick={tickStyle} tickLine={false} axisLine={false} width={yAxisWidth} domain={rocDomain} tickFormatter={v => v.toFixed(2) + "%"} />
             <Tooltip
-              cursor={{ fill: "rgba(255,255,255,0.04)" }}
-              position={{ x: 10, y: 10 }}
+              cursor={{ stroke: "rgba(255,255,255,0.35)", strokeWidth: 1 }}
+              position={{ x: 60, y: 10 }}
               content={({ active, payload }) => {
                 if (!active || !payload?.length) return null;
                 const d = payload[0].payload as typeof data[0];
                 return (
                   <div className="rounded-lg px-3 py-2 text-[10px]" style={{ background: "var(--bg-panel)", border: "1px solid var(--border-medium)", color: "var(--text-secondary)" }}>
-                    <div style={{ color: d.roc5 >= 0 ? "#60a5fa" : "#f87171" }}>
+                    <div style={{ color: d.roc5 >= 0 ? "#60a5fa" : "#a78bfa" }}>
                       ROC(5): {d.roc5 >= 0 ? "+" : ""}{d.roc5.toFixed(3)}%
                     </div>
                   </div>
@@ -2873,32 +2828,11 @@ function RocPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolean
       )}
 
       {expanded && (
-        <div className="flex flex-col shrink-0 pb-1" style={{ paddingLeft: yAxisWidth, paddingRight: 6 }}>
-          <div className="flex justify-between">
-            {data.map((d, i) => (
-              <span key={i} style={{ fontSize: tickStyle.fontSize, color: "var(--text-muted)" }}>{d.date}</span>
-            ))}
-          </div>
-          <div className="flex">
-            {data.reduce<{ month: string; count: number }[]>((acc, d) => {
-              if (d.month) acc.push({ month: d.month, count: 1 });
-              else if (acc.length) acc[acc.length - 1].count++;
-              return acc;
-            }, []).map((g, i) => (
-              <div key={i} className="text-center" style={{ flex: g.count, fontSize: tickStyle.fontSize, color: "var(--text-muted)", fontWeight: 700 }}>
-                {g.month}
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {expanded && (
         <div className="shrink-0 flex" style={{ borderTop: "1px solid var(--border-subtle)", background: "rgba(255,255,255,0.015)" }}>
           {[
             { color: "#a78bfa", name: "ROC(5)",           body: "Rate of Change over 5 sessions: (Close − Close[5]) ÷ Close[5] × 100. Measures the net percentage gain or loss over exactly one trading week. Positive = net bullish week; negative = net bearish. Accelerating ROC in the direction of the trend confirms momentum; decelerating ROC warns of fatigue. Extreme readings signal overextension." },
             { color: "#60a5fa", name: "Above Zero",        body: "ROC above zero means this week's close is higher than the close five sessions ago — net buying pressure over the look-back window. The magnitude matters: readings above +0.5% indicate meaningful upside momentum. Readings approaching the 20-session peak rate suggest the move is maturing." },
-            { color: "#f87171", name: "Below Zero",        body: "ROC below zero means this week's close is lower than the close five sessions ago — net selling pressure. Readings below −0.5% indicate meaningful downside momentum. Watch for ROC divergence: if price makes a new low but ROC fails to confirm, bearish momentum may be fading." },
+            { color: "#a78bfa", name: "Below Zero",        body: "ROC below zero means this week's close is lower than the close five sessions ago — net selling pressure. Readings below −0.5% indicate meaningful downside momentum. Watch for ROC divergence: if price makes a new low but ROC fails to confirm, bearish momentum may be fading." },
           ].map((item, i, arr) => (
             <div key={item.name} className="flex-1 flex flex-col gap-1 px-3 py-2.5" style={{ borderRight: i < arr.length - 1 ? "1px solid var(--border-subtle)" : undefined }}>
               <div className="flex items-center gap-1.5">
@@ -3093,11 +3027,28 @@ function AtrPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolean
       <div className="flex-1 min-h-0">
         <ResponsiveContainer width="100%" height="100%">
           <ComposedChart data={data} margin={{ top: 4, right: 6, bottom: 0, left: 0 }}>
-            <XAxis dataKey="idx" type="number" domain={[0, data.length - 1]} hide />
+            <XAxis
+              dataKey="idx"
+              type="category"
+              tickLine={false}
+              axisLine={false}
+              height={expanded ? 34 : 0}
+              hide={!expanded}
+              tick={(props: any) => {
+                const d = data[props.index];
+                if (!d) return <g />;
+                return (
+                  <g transform={`translate(${props.x},${props.y})`}>
+                    <text x={0} y={0} dy={11} textAnchor="middle" fontSize={tickStyle.fontSize} fill="var(--text-muted)">{d.date}</text>
+                    {d.month && <text x={0} y={0} dy={23} textAnchor="middle" fontSize={tickStyle.fontSize} fill="var(--text-muted)" fontWeight={700}>{d.month}</text>}
+                  </g>
+                );
+              }}
+            />
             <YAxis tick={tickStyle} tickLine={false} axisLine={false} width={yAxisWidth} domain={yDomain} tickFormatter={v => v.toFixed(0)} />
             <Tooltip
-              cursor={{ fill: "rgba(255,255,255,0.04)" }}
-              position={{ x: 10, y: 10 }}
+              cursor={{ stroke: "rgba(255,255,255,0.35)", strokeWidth: 1 }}
+              position={{ x: 60, y: 10 }}
               content={({ active, payload }) => {
                 if (!active || !payload?.length) return null;
                 const d = payload[0].payload as typeof data[0];
@@ -3118,45 +3069,9 @@ function AtrPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolean
         </ResponsiveContainer>
       </div>
 
-      {latest && expanded && (
-        <div className="shrink-0 flex items-center" style={{ paddingLeft: yAxisWidth + 6, paddingRight: 6, borderTop: "1px solid var(--border-subtle)", paddingTop: 3, paddingBottom: 3 }}>
-          {[
-            { label: "ATR pips",  value: String(latest.atr),                                                                          color: "#a78bfa" },
-            { label: "vs SMA20",  value: `${latest.atr >= latest.atrSma ? "+" : ""}${latest.atr - latest.atrSma} pips`,               color: latest.atr >= latest.atrSma ? "#60a5fa" : "#a78bfa" },
-            { label: "SMA20",     value: `${latest.atrSma} pips`,                                                                     color: "var(--text-secondary)" },
-          ].map((m, i) => (
-            <div key={i} className="flex-1 flex flex-col items-center">
-              <span style={{ fontSize: 9, color: "var(--text-muted)", textTransform: "uppercase" as const, letterSpacing: "0.05em" }}>{m.label}</span>
-              <span style={{ fontSize: 11, fontWeight: 700, color: m.color }}>{m.value}</span>
-            </div>
-          ))}
-        </div>
-      )}
-
       {expanded && maxOffset > 0 && (
         <input type="range" className="momentum-scroll" min={0} max={maxOffset} value={offset}
           onChange={e => setOffset(Number(e.target.value))} style={{ direction: "rtl" }} />
-      )}
-
-      {expanded && (
-        <div className="flex flex-col shrink-0 pb-1" style={{ paddingLeft: yAxisWidth, paddingRight: 6 }}>
-          <div className="flex justify-between">
-            {data.map((d, i) => (
-              <span key={i} style={{ fontSize: tickStyle.fontSize, color: "var(--text-muted)" }}>{d.date}</span>
-            ))}
-          </div>
-          <div className="flex">
-            {data.reduce<{ month: string; count: number }[]>((acc, d) => {
-              if (d.month) acc.push({ month: d.month, count: 1 });
-              else if (acc.length) acc[acc.length - 1].count++;
-              return acc;
-            }, []).map((g, i) => (
-              <div key={i} className="text-center" style={{ flex: g.count, fontSize: tickStyle.fontSize, color: "var(--text-muted)", fontWeight: 700 }}>
-                {g.month}
-              </div>
-            ))}
-          </div>
-        </div>
       )}
 
       {expanded && (
@@ -3355,23 +3270,6 @@ function FailureSwingPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?
           </ComposedChart>
         </ResponsiveContainer>
       </div>
-
-      {expanded && (
-        <div className="shrink-0 flex items-center" style={{ paddingLeft: yAxisWidth + 6, paddingRight: 6, borderTop: "1px solid var(--border-subtle)", paddingTop: 3, paddingBottom: 3 }}>
-          {[
-            { label: "n days", value: String(n),     color: "var(--text-secondary)" },
-            { label: "p50",    value: `${p50} pips`, color: "#94a3b8" },
-            { label: "p75",    value: `${p75} pips`, color: "#60a5fa" },
-            { label: "p90",    value: `${p90} pips`, color: "#a78bfa" },
-            ...(todayFs !== null ? [{ label: "Today", value: `${todayFs}p · ${todayRank}th`, color: "#f59e0b" }] : []),
-          ].map((m, i) => (
-            <div key={i} className="flex-1 flex flex-col items-center">
-              <span style={{ fontSize: 8, color: "var(--text-muted)", textTransform: "uppercase" as const, letterSpacing: "0.05em" }}>{m.label}</span>
-              <span style={{ fontSize: 12, fontWeight: 700, color: m.color }}>{m.value}</span>
-            </div>
-          ))}
-        </div>
-      )}
 
       {expanded && (
         <div className="shrink-0 flex" style={{ borderTop: "1px solid var(--border-subtle)", background: "rgba(255,255,255,0.015)" }}>
@@ -3575,20 +3473,6 @@ function MarketStructurePanelBody({ rows, expanded }: { rows: SheetRow[]; expand
         </div>
       )}
 
-      {expanded && (
-        <div className="shrink-0 flex items-center justify-center gap-4 px-3 py-1" style={{ borderBottom: "1px solid var(--border-subtle)" }}>
-          <span style={{ fontSize: 9, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.05em", flexShrink: 0 }}>Last BOS</span>
-          {lastBos
-            ? <span style={{ fontSize: 9, fontWeight: 700, color: lastBos.direction === "Bullish" ? "#60a5fa" : "#a78bfa" }}>{lastBos.direction} · {lastBos.barsAgo} bars ago</span>
-            : <span style={{ fontSize: 9, color: "var(--text-muted)" }}>—</span>}
-          <div style={{ width: 1, height: 10, background: "var(--border-subtle)", flexShrink: 0 }} />
-          <span style={{ fontSize: 9, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.05em", flexShrink: 0 }}>Last CHOCH</span>
-          {lastChoch
-            ? <span style={{ fontSize: 9, fontWeight: 700, color: lastChoch.direction === "Bullish" ? "#60a5fa" : "#a78bfa" }}>{lastChoch.direction} · {lastChoch.barsAgo} bars ago</span>
-            : <span style={{ fontSize: 9, color: "var(--text-muted)" }}>—</span>}
-        </div>
-      )}
-
       <div ref={chartRef} className="flex-1 min-h-0" style={{ position: "relative" }}
         onMouseMove={e => {
           const rect = chartRef.current?.getBoundingClientRect();
@@ -3609,11 +3493,28 @@ function MarketStructurePanelBody({ rows, expanded }: { rows: SheetRow[]; expand
         )}
         <ResponsiveContainer width="100%" height="100%">
           <ComposedChart data={data} margin={{ top: 4, right: 6, bottom: 0, left: 0 }}>
-            <XAxis dataKey="idx" type="number" domain={[0, data.length - 1]} hide />
+            <XAxis
+              dataKey="date"
+              type="category"
+              tickLine={false}
+              axisLine={false}
+              height={expanded ? 34 : 0}
+              hide={!expanded}
+              tick={(props: any) => {
+                const d = data[props.index];
+                if (!d) return <g />;
+                return (
+                  <g transform={`translate(${props.x},${props.y})`}>
+                    <text x={0} y={0} dy={11} textAnchor="middle" fontSize={tickStyle.fontSize} fill="var(--text-muted)">{d.date}</text>
+                    {d.month && <text x={0} y={0} dy={23} textAnchor="middle" fontSize={tickStyle.fontSize} fill="var(--text-muted)" fontWeight={700}>{d.month}</text>}
+                  </g>
+                );
+              }}
+            />
             <YAxis tick={tickStyle} tickLine={false} axisLine={false} width={yAxisWidth} domain={yDomain} tickFormatter={v => v.toFixed(4)} />
             <Tooltip
               cursor={{ fill: "rgba(255,255,255,0.04)" }}
-              position={{ x: 10, y: 10 }}
+              position={{ x: 60, y: 10 }}
               content={({ active, payload }) => {
                 if (!active || !payload?.length) return null;
                 const d = payload[0]?.payload as typeof data[0];
@@ -3826,27 +3727,6 @@ function MarketStructurePanelBody({ rows, expanded }: { rows: SheetRow[]; expand
       )}
 
       {expanded && (
-        <div className="flex flex-col shrink-0 pb-1" style={{ paddingLeft: yAxisWidth, paddingRight: 6 }}>
-          <div className="flex justify-between">
-            {data.map((d, i) => (
-              <span key={i} style={{ fontSize: tickStyle.fontSize, color: "var(--text-muted)" }}>{d.date}</span>
-            ))}
-          </div>
-          <div className="flex">
-            {data.reduce<{ month: string; count: number }[]>((acc, d) => {
-              if (d.month) acc.push({ month: d.month, count: 1 });
-              else if (acc.length) acc[acc.length - 1].count++;
-              return acc;
-            }, []).map((g, i) => (
-              <div key={i} className="text-center" style={{ flex: g.count, fontSize: tickStyle.fontSize, color: "var(--text-muted)", fontWeight: 700 }}>
-                {g.month}
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {expanded && (
         <div className="shrink-0 flex" style={{ borderTop: "1px solid var(--border-subtle)", background: "rgba(255,255,255,0.015)" }}>
           {[
             { color: "#f87171", name: "Swing High (SH)", body: "A local price peak confirmed by being the highest high within the surrounding N bars on each side. Marks potential resistance and defines the upper boundary of structure. Used to identify HH/LH sequences." },
@@ -3915,7 +3795,7 @@ function VolatilityPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: 
   }, [rows, offset, windowSize]);
 
   const tickStyle  = { fill: "var(--text-muted)", fontSize: expanded ? 12 : 9 };
-  const yAxisWidth = expanded ? 60 : 44;
+  const yAxisWidth = expanded ? 48 : 44;
   const analysis   = useMemo(() => expanded ? buildVolatilityAnalysis(rows) : null, [rows, expanded]);
 
   const priceDomain = useMemo(() => {
@@ -3965,70 +3845,39 @@ function VolatilityPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: 
         </div>
       )}
 
-      {expanded && <div className="shrink-0 flex items-center gap-1.5 px-2 pt-1" style={{ paddingLeft: yAxisWidth }}>
-        {(
-          <button
-            onClick={() => {
-              const next = !showCandles;
-              localStorage.setItem("tm_bb_show_candles", next ? "1" : "0");
-              setShowCandles(next);
-              window.dispatchEvent(new Event("tm:bb-candles-changed"));
-            }}
-            className="flex items-center gap-1 rounded-full cursor-pointer"
-            style={{
-              fontSize: 10,
-              fontWeight: 700,
-              letterSpacing: "0.06em",
-              padding: "2px 8px",
-              marginLeft: 6,
-              border: `1px solid ${showCandles ? "rgba(255,255,255,0.30)" : "rgba(255,255,255,0.10)"}`,
-              background: showCandles ? "rgba(255,255,255,0.08)" : "transparent",
-              color: showCandles ? "var(--text-primary)" : "var(--text-muted)",
-              transition: "all 0.15s",
-            }}
-          >
-            {showCandles ? "Candles" : "Line"}
-          </button>
-        )}
+      {expanded && <div className="shrink-0 flex items-center pt-1" style={{ position: "relative", paddingLeft: yAxisWidth, paddingRight: 8 }}>
+        <button
+          onClick={() => {
+            const next = !showCandles;
+            localStorage.setItem("tm_bb_show_candles", next ? "1" : "0");
+            setShowCandles(next);
+            window.dispatchEvent(new Event("tm:bb-candles-changed"));
+          }}
+          className="flex items-center gap-1 rounded-full cursor-pointer"
+          style={{
+            fontSize: 10,
+            fontWeight: 700,
+            letterSpacing: "0.06em",
+            padding: "2px 8px",
+            marginLeft: 6,
+            marginTop: 14,
+            flexShrink: 0,
+            border: `1px solid ${showCandles ? "rgba(255,255,255,0.30)" : "rgba(255,255,255,0.10)"}`,
+            background: showCandles ? "rgba(255,255,255,0.08)" : "transparent",
+            color: showCandles ? "var(--text-primary)" : "var(--text-muted)",
+            transition: "all 0.15s",
+          }}
+        >
+          {showCandles ? "Candles" : "Line"}
+        </button>
       </div>}
 
       <div ref={chartRef} className="flex-1 min-h-0" style={{ position: "relative" }}>
-        <ResponsiveContainer width="100%" height="100%">
-          <ComposedChart data={data} margin={{ top: 4, right: 6, bottom: 0, left: 0 }}>
-            <XAxis dataKey="idx" type="number" domain={[0, data.length - 1]} hide />
-            <YAxis yAxisId="price" tick={tickStyle} tickLine={false} axisLine={false} width={yAxisWidth} domain={priceDomain} tickFormatter={v => v.toFixed(4)} />
-            <Tooltip
-              cursor={{ fill: "rgba(255,255,255,0.04)" }}
-              position={{ x: 10, y: 10 }}
-              wrapperStyle={{ zIndex: 10 }}
-              content={({ active, payload }) => {
-                if (!active || !payload?.length) return null;
-                const d = payload[0].payload as typeof data[0];
-                const bw    = Math.round((d.upper - d.lower) * 10000);
-                const bbPct = d.upper > d.lower ? ((d.close - d.lower) / (d.upper - d.lower) * 100).toFixed(1) : "—";
-                return (
-                  <div style={{ background: "var(--bg-panel-alt)", border: "1px solid var(--border-medium)", borderRadius: 8, padding: "6px 10px", fontSize: 10 }}>
-                    <div style={{ fontWeight: 700, marginBottom: 2, color: d.close > d.upper ? "#a78bfa" : d.close < d.lower ? "#60a5fa" : "rgba(255,255,255,0.85)" }}>{d.close.toFixed(4)}</div>
-                    <div style={{ color: "#a78bfa" }}>Upper: {d.upper.toFixed(4)}</div>
-                    <div style={{ color: "#94a3b8" }}>Mid: {d.mid.toFixed(4)}</div>
-                    <div style={{ color: "#60a5fa" }}>Lower: {d.lower.toFixed(4)}</div>
-                    <div style={{ color: "var(--text-muted)" }}>BW: {bw} pips · %B: {bbPct}%</div>
-                  </div>
-                );
-              }}
-            />
-            {showUpper && <Line yAxisId="price" dataKey="upper" name="BB Upper" type="monotone" dot={false} strokeWidth={expanded ? 1.5 : 1} stroke="#a78bfa" strokeDasharray="3 2" isAnimationActive={false} />}
-            {showMid   && <Line yAxisId="price" dataKey="mid"   name="BB Mid"   type="monotone" dot={false} strokeWidth={expanded ? 1.5 : 1} stroke="#94a3b8" isAnimationActive={false} />}
-            {showLower && <Line yAxisId="price" dataKey="lower" name="BB Lower" type="monotone" dot={false} strokeWidth={expanded ? 1.5 : 1} stroke="#60a5fa" strokeDasharray="3 2" isAnimationActive={false} />}
-            {showClose && !showCandles && <Line yAxisId="price" dataKey="close" name="Close" type="monotone" dot={false} strokeWidth={expanded ? 2 : 1.5} stroke="rgba(255,255,255,0.75)" isAnimationActive={false} />}
-          </ComposedChart>
-        </ResponsiveContainer>
-
-        {/* Candle overlay — absolutely positioned SVG */}
+        {/* Candle overlay — rendered BEFORE Recharts so dots appear on top */}
         {showClose && showCandles && chartSize && (() => {
-          const plotLeft   = yAxisWidth;
+          const plotLeft   = yAxisWidth + 16;
           const plotTop    = 4;
-          const plotRight  = 6;
+          const plotRight  = 24;
           const plotWidth  = chartSize.w - plotLeft - plotRight;
           const plotHeight = chartSize.h - plotTop;
           const [yMin, yMax] = priceDomain as [number, number];
@@ -4059,47 +3908,59 @@ function VolatilityPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: 
             </svg>
           );
         })()}
-      </div>
+        <ResponsiveContainer width="100%" height="100%">
+          <ComposedChart data={data} margin={{ top: 4, right: 24, bottom: 0, left: 16 }}>
+            <XAxis
+              dataKey="idx"
+              type="category"
+              tickLine={false}
+              axisLine={false}
+              height={expanded ? 34 : 0}
+              hide={!expanded}
+              tick={(props: any) => {
+                const d = data[props.index];
+                if (!d) return <g />;
+                return (
+                  <g transform={`translate(${props.x},${props.y})`}>
+                    <text x={0} y={0} dy={11} textAnchor="middle" fontSize={tickStyle.fontSize} fill="var(--text-muted)">{d.date}</text>
+                    {d.month && <text x={0} y={0} dy={23} textAnchor="middle" fontSize={tickStyle.fontSize} fill="var(--text-muted)" fontWeight={700}>{d.month}</text>}
+                  </g>
+                );
+              }}
+            />
+            <YAxis yAxisId="price" tick={tickStyle} tickLine={false} axisLine={false} width={yAxisWidth} domain={priceDomain} tickFormatter={v => v.toFixed(4)} tickMargin={16} />
+            <Tooltip
+              cursor={{ stroke: "rgba(255,255,255,0.35)", strokeWidth: 1 }}
+              position={{ x: 60, y: 10 }}
+              wrapperStyle={{ zIndex: 10 }}
+              content={({ active, payload }) => {
+                if (!active || !payload?.length) return null;
+                const d = payload[0].payload as typeof data[0];
+                const bw    = Math.round((d.upper - d.lower) * 10000);
+                const bbPct = d.upper > d.lower ? ((d.close - d.lower) / (d.upper - d.lower) * 100).toFixed(1) : "—";
+                return (
+                  <div style={{ background: "var(--bg-panel-alt)", border: "1px solid var(--border-medium)", borderRadius: 8, padding: "6px 10px", fontSize: 10 }}>
+                    <div style={{ fontWeight: 700, marginBottom: 2, color: d.close > d.upper ? "#a78bfa" : d.close < d.lower ? "#60a5fa" : "rgba(255,255,255,0.85)" }}>{d.close.toFixed(4)}</div>
+                    <div style={{ color: "#a78bfa" }}>Upper: {d.upper.toFixed(4)}</div>
+                    <div style={{ color: "#94a3b8" }}>Mid: {d.mid.toFixed(4)}</div>
+                    <div style={{ color: "#60a5fa" }}>Lower: {d.lower.toFixed(4)}</div>
+                    <div style={{ color: "var(--text-muted)" }}>BW: {bw} pips · %B: {bbPct}%</div>
+                  </div>
+                );
+              }}
+            />
+            {showUpper && <Line yAxisId="price" dataKey="upper" name="BB Upper" type="monotone" dot={false} strokeWidth={expanded ? 1.5 : 1} stroke="#a78bfa" strokeDasharray="3 2" isAnimationActive={false} />}
+            {showMid   && <Line yAxisId="price" dataKey="mid"   name="BB Mid"   type="monotone" dot={false} strokeWidth={expanded ? 1.5 : 1} stroke="#94a3b8" isAnimationActive={false} />}
+            {showLower && <Line yAxisId="price" dataKey="lower" name="BB Lower" type="monotone" dot={false} strokeWidth={expanded ? 1.5 : 1} stroke="#60a5fa" strokeDasharray="3 2" isAnimationActive={false} />}
+            {showClose && !showCandles && <Line yAxisId="price" dataKey="close" name="Close" type="monotone" dot={false} strokeWidth={expanded ? 2 : 1.5} stroke="rgba(255,255,255,0.75)" isAnimationActive={false} />}
+          </ComposedChart>
+        </ResponsiveContainer>
 
-      {latest && expanded && (
-        <div className="shrink-0 flex items-center" style={{ paddingLeft: yAxisWidth + 6, paddingRight: 6, borderTop: "1px solid var(--border-subtle)", paddingTop: 3, paddingBottom: 3 }}>
-          {[
-            { label: "Hist Vol", value: latest.histVol.toFixed(2) + "%", color: "#94a3b8" },
-            { label: "BB %B",    value: (latest.upper > latest.lower ? ((latest.close - latest.lower) / (latest.upper - latest.lower) * 100).toFixed(1) : "—") + "%", color: latest.close > latest.upper ? "#a78bfa" : latest.close < latest.lower ? "#60a5fa" : "var(--text-secondary)" },
-            { label: "BW pips",  value: String(Math.round((latest.upper - latest.lower) * 10000)), color: "var(--text-secondary)" },
-          ].map((m, i) => (
-            <div key={i} className="flex-1 flex flex-col items-center">
-              <span style={{ fontSize: 9, color: "var(--text-muted)", textTransform: "uppercase" as const, letterSpacing: "0.05em" }}>{m.label}</span>
-              <span style={{ fontSize: 11, fontWeight: 700, color: m.color }}>{m.value}</span>
-            </div>
-          ))}
-        </div>
-      )}
+      </div>
 
       {expanded && maxOffset > 0 && (
         <input type="range" className="momentum-scroll" min={0} max={maxOffset} value={offset}
           onChange={e => setOffset(Number(e.target.value))} style={{ direction: "rtl" }} />
-      )}
-
-      {expanded && (
-        <div className="flex flex-col shrink-0 pb-1" style={{ paddingLeft: yAxisWidth, paddingRight: 6 }}>
-          <div className="flex justify-between">
-            {data.map((d, i) => (
-              <span key={i} style={{ fontSize: tickStyle.fontSize, color: "var(--text-muted)" }}>{d.date}</span>
-            ))}
-          </div>
-          <div className="flex">
-            {data.reduce<{ month: string; count: number }[]>((acc, d) => {
-              if (d.month) acc.push({ month: d.month, count: 1 });
-              else if (acc.length) acc[acc.length - 1].count++;
-              return acc;
-            }, []).map((g, i) => (
-              <div key={i} className="text-center" style={{ flex: g.count, fontSize: tickStyle.fontSize, color: "var(--text-muted)", fontWeight: 700 }}>
-                {g.month}
-              </div>
-            ))}
-          </div>
-        </div>
       )}
 
       {expanded && (
@@ -4225,11 +4086,28 @@ function CciPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolean
       <div className="flex-1 min-h-0" style={{ position: "relative" }}>
         <ResponsiveContainer width="100%" height="100%">
           <ComposedChart data={data} margin={{ top: 4, right: 6, bottom: 0, left: 0 }}>
-            <XAxis dataKey="idx" type="number" domain={[0, data.length - 1]} hide />
+            <XAxis
+              dataKey="idx"
+              type="category"
+              tickLine={false}
+              axisLine={false}
+              height={expanded ? 34 : 0}
+              hide={!expanded}
+              tick={(props: any) => {
+                const d = data[props.index];
+                if (!d) return <g />;
+                return (
+                  <g transform={`translate(${props.x},${props.y})`}>
+                    <text x={0} y={0} dy={11} textAnchor="middle" fontSize={tickStyle.fontSize} fill="var(--text-muted)">{d.date}</text>
+                    {d.month && <text x={0} y={0} dy={23} textAnchor="middle" fontSize={tickStyle.fontSize} fill="var(--text-muted)" fontWeight={700}>{d.month}</text>}
+                  </g>
+                );
+              }}
+            />
             <YAxis tick={tickStyle} tickLine={false} axisLine={false} width={yAxisWidth} domain={yDomain} ticks={[-100, 0, 100]} tickFormatter={v => v.toFixed(0)} />
             <Tooltip
-              cursor={{ fill: "rgba(255,255,255,0.04)" }}
-              position={{ x: 10, y: 10 }}
+              cursor={{ stroke: "rgba(255,255,255,0.35)", strokeWidth: 1 }}
+              position={{ x: 60, y: 10 }}
               content={({ active, payload }) => {
                 if (!active || !payload?.length) return null;
                 const d = payload[0].payload as typeof data[0];
@@ -4259,27 +4137,6 @@ function CciPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolean
       )}
 
       {expanded && (
-        <div className="flex flex-col shrink-0 pb-1" style={{ paddingLeft: yAxisWidth, paddingRight: 6 }}>
-          <div className="flex justify-between">
-            {data.map((d, i) => (
-              <span key={i} style={{ fontSize: tickStyle.fontSize, color: "var(--text-muted)" }}>{d.date}</span>
-            ))}
-          </div>
-          <div className="flex">
-            {data.reduce<{ month: string; count: number }[]>((acc, d) => {
-              if (d.month) acc.push({ month: d.month, count: 1 });
-              else if (acc.length) acc[acc.length - 1].count++;
-              return acc;
-            }, []).map((g, i) => (
-              <div key={i} className="text-center" style={{ flex: g.count, fontSize: tickStyle.fontSize, color: "var(--text-muted)", fontWeight: 700 }}>
-                {g.month}
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {expanded && (
         <div className="shrink-0 flex" style={{ borderTop: "1px solid var(--border-subtle)", background: "rgba(255,255,255,0.015)" }}>
           {[
             { color: "#60a5fa", name: "CCI",       body: "Commodity Channel Index — measures how far price has deviated from its statistical mean. A leading oscillator: it turns before price and excels at identifying momentum extremes and divergences." },
@@ -4298,6 +4155,36 @@ function CciPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolean
       )}
     </div>
   );
+}
+
+function buildWrAnalysis(rows: SheetRow[]): { headline: string; bullets: string[]; description: string } {
+  if (rows.length < 14) return { headline: "—", bullets: [], description: "—" };
+  const idx     = rows.length - 1;
+  const wr      = computeWR(rows, idx);
+  const prev5   = Array.from({ length: 5 }, (_, i) => computeWR(rows, Math.max(0, idx - i - 1)));
+  const trend   = wr > prev5[0] ? "rising" : wr < prev5[0] ? "falling" : "flat";
+  const wrR     = Math.round(wr * 10) / 10;
+  const overbought = wr > -20;
+  const oversold   = wr < -80;
+  const neutral    = !overbought && !oversold;
+  const zone    = overbought ? "Overbought (above −20)" : oversold ? "Oversold (below −80)" : wr <= -50 ? "Lower neutral range" : "Upper neutral range";
+  const sessionsInZone = prev5.filter(v => overbought ? v > -20 : oversold ? v < -80 : true).length + 1;
+  const bullets = [
+    `Williams %R: ${wrR} · ${zone}`,
+    `Trend: ${trend} over last 5 sessions`,
+    `Sessions in current zone: ${sessionsInZone}`,
+    `Previous session: ${Math.round(prev5[0] * 10) / 10}`,
+  ];
+  let description = "";
+  if (overbought) {
+    description = `Williams %R at ${wrR} places the close in the top ${Math.round((wr + 100) * 10) / 10}% of the 14-session range — overbought territory. ${trend === "rising" ? "Momentum is continuing to press higher; in a trending market this confirms bullish strength." : "The reading is starting to pull back from the extreme — watch for a cross back below −20 as a potential exit or reversal signal."} ${sessionsInZone > 2 ? `The indicator has held above −20 for ${sessionsInZone} consecutive sessions, which in strong trends can indicate sustained buying pressure rather than imminent reversal.` : "A single-session overbought touch alone is not a reversal signal — confirmation of the roll requires the cross."}`;
+  } else if (oversold) {
+    description = `Williams %R at ${wrR} places the close in the bottom ${Math.round(Math.abs(wr + 100) * 10) / 10}% of the 14-session range — oversold territory. ${trend === "falling" ? "Selling pressure is continuing; in a downtrend this confirms bearish strength — don't buy the first touch." : "The indicator is beginning to recover from the extreme — wait for a cross back above −80 before treating this as a bounce signal."} ${sessionsInZone > 2 ? `Holding below −80 for ${sessionsInZone} sessions suggests a sustained bear move rather than a simple oversold bounce.` : ""}`;
+  } else {
+    description = `Williams %R at ${wrR} is in the neutral zone between the overbought (−20) and oversold (−80) thresholds. ${wr > -50 ? "Price is holding in the upper half of the recent range, favouring bulls on short-term momentum." : "Price is in the lower half of the recent range, with bears holding the edge over the look-back window."} A move above −20 would signal overbought conditions; a drop below −80 would signal oversold. Current readings offer no extreme-based trade signal.`;
+  }
+  const headline = overbought ? "Overbought — Watch for Reversal" : oversold ? "Oversold — Watch for Bounce" : wr > -50 ? "Neutral — Upper Range" : "Neutral — Lower Range";
+  return { headline, bullets, description };
 }
 
 function WrPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolean }) {
@@ -4327,17 +4214,51 @@ function WrPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolean 
 
   const tickStyle  = { fill: "var(--text-muted)", fontSize: expanded ? 12 : 9 };
   const yAxisWidth = expanded ? 44 : 32;
+  const analysis   = useMemo(() => expanded ? buildWrAnalysis(rows) : null, [rows, expanded]);
 
   return (
     <div className="flex flex-col h-full">
+      {expanded && analysis && (
+        <div className="shrink-0 flex" style={{ borderBottom: "1px solid var(--border-subtle)", background: "rgba(255,255,255,0.02)" }}>
+          <div className="flex flex-col items-center justify-center px-5 py-2.5" style={{ flex: "0 0 50%", minWidth: 0, maxWidth: "50%" }}>
+            <ul className="flex flex-col gap-0.5 text-center">
+              {analysis.bullets.map((b, i) => (
+                <li key={i} className="text-[11px]" style={{ color: "var(--text-secondary)" }}>{b}</li>
+              ))}
+            </ul>
+          </div>
+          <div style={{ width: 1, background: "var(--border-medium)", alignSelf: "stretch", margin: "8px 0" }} />
+          <div className="flex-1 flex items-center justify-center px-5 py-2.5">
+            <p className="text-[11px] leading-relaxed text-center" style={{ color: "var(--text-secondary)" }}>{analysis.description}</p>
+          </div>
+        </div>
+      )}
+
       <div className="flex-1 min-h-0" style={{ position: "relative" }}>
         <ResponsiveContainer width="100%" height="100%">
           <ComposedChart data={data} margin={{ top: 4, right: 6, bottom: 0, left: 0 }}>
-            <XAxis dataKey="idx" type="number" domain={[0, data.length - 1]} hide />
+            <XAxis
+              dataKey="idx"
+              type="category"
+              tickLine={false}
+              axisLine={false}
+              height={expanded ? 34 : 0}
+              hide={!expanded}
+              tick={(props: any) => {
+                const d = data[props.index];
+                if (!d) return <g />;
+                return (
+                  <g transform={`translate(${props.x},${props.y})`}>
+                    <text x={0} y={0} dy={11} textAnchor="middle" fontSize={tickStyle.fontSize} fill="var(--text-muted)">{d.date}</text>
+                    {d.month && <text x={0} y={0} dy={23} textAnchor="middle" fontSize={tickStyle.fontSize} fill="var(--text-muted)" fontWeight={700}>{d.month}</text>}
+                  </g>
+                );
+              }}
+            />
             <YAxis tick={tickStyle} tickLine={false} axisLine={false} width={yAxisWidth} domain={[-105, 5]} ticks={[-80, -50, -20]} tickFormatter={v => v.toFixed(0)} />
             <Tooltip
-              cursor={{ fill: "rgba(255,255,255,0.04)" }}
-              position={{ x: 10, y: 10 }}
+              cursor={{ stroke: "rgba(255,255,255,0.35)", strokeWidth: 1 }}
+              position={{ x: 60, y: 10 }}
               content={({ active, payload }) => {
                 if (!active || !payload?.length) return null;
                 const d = payload[0].payload as typeof data[0];
@@ -4362,27 +4283,6 @@ function WrPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolean 
       {expanded && maxOffset > 0 && (
         <input type="range" className="momentum-scroll" min={0} max={maxOffset} value={offset}
           onChange={e => setOffset(Number(e.target.value))} style={{ direction: "rtl" }} />
-      )}
-
-      {expanded && (
-        <div className="flex flex-col shrink-0 pb-1" style={{ paddingLeft: yAxisWidth, paddingRight: 6 }}>
-          <div className="flex justify-between">
-            {data.map((d, i) => (
-              <span key={i} style={{ fontSize: tickStyle.fontSize, color: "var(--text-muted)" }}>{d.date}</span>
-            ))}
-          </div>
-          <div className="flex">
-            {data.reduce<{ month: string; count: number }[]>((acc, d) => {
-              if (d.month) acc.push({ month: d.month, count: 1 });
-              else if (acc.length) acc[acc.length - 1].count++;
-              return acc;
-            }, []).map((g, i) => (
-              <div key={i} className="text-center" style={{ flex: g.count, fontSize: tickStyle.fontSize, color: "var(--text-muted)", fontWeight: 700 }}>
-                {g.month}
-              </div>
-            ))}
-          </div>
-        </div>
       )}
 
       {expanded && (
@@ -4620,11 +4520,28 @@ function PivotPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boole
       <div ref={chartRef} className="flex-1 min-h-0" style={{ position: "relative" }}>
         <ResponsiveContainer width="100%" height="100%">
           <ComposedChart data={data} margin={{ top: 4, right: 6, bottom: 0, left: 0 }}>
-            <XAxis dataKey="idx" type="number" domain={[0, data.length - 1]} hide />
+            <XAxis
+              dataKey="date"
+              type="category"
+              tickLine={false}
+              axisLine={false}
+              height={expanded ? 34 : 0}
+              hide={!expanded}
+              tick={(props: any) => {
+                const d = data[props.index];
+                if (!d) return <g />;
+                return (
+                  <g transform={`translate(${props.x},${props.y})`}>
+                    <text x={0} y={0} dy={11} textAnchor="middle" fontSize={tickStyle.fontSize} fill="var(--text-muted)">{d.date}</text>
+                    {d.month && <text x={0} y={0} dy={23} textAnchor="middle" fontSize={tickStyle.fontSize} fill="var(--text-muted)" fontWeight={700}>{d.month}</text>}
+                  </g>
+                );
+              }}
+            />
             <YAxis tick={tickStyle} tickLine={false} axisLine={false} width={yAxisWidth} domain={yDomain} tickFormatter={v => v.toFixed(4)} />
             <Tooltip
               cursor={{ fill: "rgba(255,255,255,0.04)" }}
-              position={{ x: 10, y: 10 }}
+              position={{ x: 60, y: 10 }}
               content={({ active, payload }) => {
                 if (!active || !payload?.length) return null;
                 const d = payload[0].payload as typeof data[0];
@@ -4690,27 +4607,6 @@ function PivotPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boole
       {expanded && maxOffset > 0 && (
         <input type="range" className="momentum-scroll" min={0} max={maxOffset} value={offset}
           onChange={e => setOffset(Number(e.target.value))} style={{ direction: "rtl" }} />
-      )}
-
-      {expanded && (
-        <div className="flex flex-col shrink-0 pb-1" style={{ paddingLeft: yAxisWidth, paddingRight: 6 }}>
-          <div className="flex justify-between">
-            {data.map((d, i) => (
-              <span key={i} style={{ fontSize: tickStyle.fontSize, color: "var(--text-muted)" }}>{d.date}</span>
-            ))}
-          </div>
-          <div className="flex">
-            {data.reduce<{ month: string; count: number }[]>((acc, d) => {
-              if (d.month) acc.push({ month: d.month, count: 1 });
-              else if (acc.length) acc[acc.length - 1].count++;
-              return acc;
-            }, []).map((g, i) => (
-              <div key={i} className="text-center" style={{ flex: g.count, fontSize: tickStyle.fontSize, color: "var(--text-muted)", fontWeight: 700 }}>
-                {g.month}
-              </div>
-            ))}
-          </div>
-        </div>
       )}
 
       {expanded && (
@@ -4852,11 +4748,28 @@ function VolumePanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: bool
       <div className="flex-1 min-h-0">
         <ResponsiveContainer width="100%" height="100%">
           <ComposedChart data={data} margin={{ top: 4, right: 6, bottom: 0, left: 0 }}>
-            <XAxis dataKey="idx" type="number" domain={[0, data.length - 1]} hide />
+            <XAxis
+              dataKey="idx"
+              type="category"
+              tickLine={false}
+              axisLine={false}
+              height={expanded ? 34 : 0}
+              hide={!expanded}
+              tick={(props: any) => {
+                const d = data[props.index];
+                if (!d) return <g />;
+                return (
+                  <g transform={`translate(${props.x},${props.y})`}>
+                    <text x={0} y={0} dy={11} textAnchor="middle" fontSize={tickStyle.fontSize} fill="var(--text-muted)">{d.date}</text>
+                    {d.month && <text x={0} y={0} dy={23} textAnchor="middle" fontSize={tickStyle.fontSize} fill="var(--text-muted)" fontWeight={700}>{d.month}</text>}
+                  </g>
+                );
+              }}
+            />
             <YAxis tick={tickStyle} tickLine={false} axisLine={false} width={yAxisWidth} domain={yDomain} tickFormatter={v => fmt(v)} />
             <Tooltip
-              cursor={{ fill: "rgba(255,255,255,0.04)" }}
-              position={{ x: 10, y: 10 }}
+              cursor={{ stroke: "rgba(255,255,255,0.35)", strokeWidth: 1 }}
+              position={{ x: 60, y: 10 }}
               content={({ active, payload }) => {
                 if (!active || !payload?.length) return null;
                 const d = payload[0].payload as typeof data[0];
@@ -4885,27 +4798,6 @@ function VolumePanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: bool
       {expanded && maxOffset > 0 && (
         <input type="range" className="momentum-scroll" min={0} max={maxOffset} value={offset}
           onChange={e => setOffset(Number(e.target.value))} style={{ direction: "rtl" }} />
-      )}
-
-      {expanded && (
-        <div className="flex flex-col shrink-0 pb-1" style={{ paddingLeft: yAxisWidth, paddingRight: 6 }}>
-          <div className="flex justify-between">
-            {data.map((d, i) => (
-              <span key={i} style={{ fontSize: tickStyle.fontSize, color: "var(--text-muted)" }}>{d.date}</span>
-            ))}
-          </div>
-          <div className="flex">
-            {data.reduce<{ month: string; count: number }[]>((acc, d) => {
-              if (d.month) acc.push({ month: d.month, count: 1 });
-              else if (acc.length) acc[acc.length - 1].count++;
-              return acc;
-            }, []).map((g, i) => (
-              <div key={i} className="text-center" style={{ flex: g.count, fontSize: tickStyle.fontSize, color: "var(--text-muted)", fontWeight: 700 }}>
-                {g.month}
-              </div>
-            ))}
-          </div>
-        </div>
       )}
 
       {expanded && (
@@ -4975,7 +4867,7 @@ function KeltPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolea
   }, [rows, offset, windowSize]);
 
   const tickStyle  = { fill: "var(--text-muted)", fontSize: expanded ? 12 : 9 };
-  const yAxisWidth = expanded ? 60 : 44;
+  const yAxisWidth = expanded ? 48 : 44;
   const analysis   = useMemo(() => expanded ? buildKeltAnalysis(rows) : null, [rows, expanded]);
 
   const yDomain = useMemo(() => {
@@ -5024,52 +4916,40 @@ function KeltPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolea
         </div>
       )}
 
-      {expanded && <div className="shrink-0 flex items-center gap-1.5 px-2 pt-1" style={{ paddingLeft: yAxisWidth }}>
-        {(
-          <button
-            onClick={() => {
-              const next = !showCandles;
-              localStorage.setItem("tm_kelt_show_candles", next ? "1" : "0");
-              setShowCandles(next);
-              window.dispatchEvent(new Event("tm:kelt-candles-changed"));
-            }}
-            className="flex items-center gap-1 rounded-full cursor-pointer"
-            style={{
-              fontSize: 10,
-              fontWeight: 700,
-              letterSpacing: "0.06em",
-              padding: "2px 8px",
-              marginLeft: 6,
-              border: `1px solid ${showCandles ? "rgba(255,255,255,0.30)" : "rgba(255,255,255,0.10)"}`,
-              background: showCandles ? "rgba(255,255,255,0.08)" : "transparent",
-              color: showCandles ? "var(--text-primary)" : "var(--text-muted)",
-              transition: "all 0.15s",
-            }}
-          >
-            {showCandles ? "Candles" : "Line"}
-          </button>
-        )}
+      {expanded && <div className="shrink-0 flex items-center pt-1" style={{ position: "relative", paddingLeft: yAxisWidth, paddingRight: 8 }}>
+        <button
+          onClick={() => {
+            const next = !showCandles;
+            localStorage.setItem("tm_kelt_show_candles", next ? "1" : "0");
+            setShowCandles(next);
+            window.dispatchEvent(new Event("tm:kelt-candles-changed"));
+          }}
+          className="flex items-center gap-1 rounded-full cursor-pointer"
+          style={{
+            fontSize: 10,
+            fontWeight: 700,
+            letterSpacing: "0.06em",
+            padding: "2px 8px",
+            marginLeft: 6,
+            marginTop: 14,
+            flexShrink: 0,
+            border: `1px solid ${showCandles ? "rgba(255,255,255,0.30)" : "rgba(255,255,255,0.10)"}`,
+            background: showCandles ? "rgba(255,255,255,0.08)" : "transparent",
+            color: showCandles ? "var(--text-primary)" : "var(--text-muted)",
+            transition: "all 0.15s",
+          }}
+        >
+          {showCandles ? "Candles" : "Line"}
+        </button>
       </div>}
 
       {/* Chart */}
       <div ref={chartRef} className="flex-1 min-h-0" style={{ position: "relative" }}>
-        <ResponsiveContainer width="100%" height="100%">
-          <ComposedChart data={data} margin={{ top: 4, right: 6, bottom: 0, left: 0 }}>
-            <XAxis dataKey="idx" type="number" domain={[0, data.length - 1]} hide />
-            <YAxis tick={tickStyle} tickLine={false} axisLine={false} width={yAxisWidth} domain={yDomain} tickFormatter={v => v.toFixed(4)} />
-            <Tooltip content={<MaTooltip />} cursor={{ fill: "rgba(255,255,255,0.04)" }} position={{ x: 10, y: 10 }} wrapperStyle={{ zIndex: 10 }} />
-            {showUpper && <Line dataKey="upper" name="Upper" type="monotone" dot={false} strokeWidth={expanded ? 1.5 : 1} stroke="#a78bfa" strokeDasharray="3 2" isAnimationActive={false} />}
-            {showMid   && <Line dataKey="mid"   name="Mid"   type="monotone" dot={false} strokeWidth={expanded ? 1.5 : 1} stroke="#94a3b8" isAnimationActive={false} />}
-            {showLower && <Line dataKey="lower" name="Lower" type="monotone" dot={false} strokeWidth={expanded ? 1.5 : 1} stroke="#60a5fa" strokeDasharray="3 2" isAnimationActive={false} />}
-            {showClose && !showCandles && <Line dataKey="close" name="Close" type="monotone" dot={false} strokeWidth={expanded ? 2 : 1.5} stroke="rgba(255,255,255,0.75)" isAnimationActive={false} />}
-          </ComposedChart>
-        </ResponsiveContainer>
-
-        {/* Candle overlay — absolutely positioned SVG */}
+        {/* Candle overlay — rendered BEFORE Recharts so dots appear on top */}
         {showClose && showCandles && chartSize && (() => {
-          const plotLeft   = yAxisWidth;
+          const plotLeft   = yAxisWidth + 16;
           const plotTop    = 4;
-          const plotWidth  = chartSize.w - yAxisWidth - 6;
+          const plotWidth  = chartSize.w - plotLeft - 24;
           const plotHeight = chartSize.h - plotTop;
           const [yMin, yMax] = yDomain as [number, number];
           if (typeof yMin !== "number" || typeof yMax !== "number" || yMax === yMin) return null;
@@ -5099,6 +4979,34 @@ function KeltPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolea
             </svg>
           );
         })()}
+        <ResponsiveContainer width="100%" height="100%">
+          <ComposedChart data={data} margin={{ top: 4, right: 24, bottom: 0, left: 16 }}>
+            <XAxis
+              dataKey="idx"
+              type="category"
+              tickLine={false}
+              axisLine={false}
+              height={expanded ? 34 : 0}
+              hide={!expanded}
+              tick={(props: any) => {
+                const d = data[props.index];
+                if (!d) return <g />;
+                return (
+                  <g transform={`translate(${props.x},${props.y})`}>
+                    <text x={0} y={0} dy={11} textAnchor="middle" fontSize={tickStyle.fontSize} fill="var(--text-muted)">{d.date}</text>
+                    {d.month && <text x={0} y={0} dy={23} textAnchor="middle" fontSize={tickStyle.fontSize} fill="var(--text-muted)" fontWeight={700}>{d.month}</text>}
+                  </g>
+                );
+              }}
+            />
+            <YAxis tick={tickStyle} tickLine={false} axisLine={false} width={yAxisWidth} domain={yDomain} tickFormatter={v => v.toFixed(4)} tickMargin={16} />
+            <Tooltip content={<MaTooltip />} cursor={{ stroke: "rgba(255,255,255,0.35)", strokeWidth: 1 }} position={{ x: 60, y: 10 }} wrapperStyle={{ zIndex: 10 }} />
+            {showUpper && <Line dataKey="upper" name="Upper" type="monotone" dot={false} strokeWidth={expanded ? 1.5 : 1} stroke="#a78bfa" strokeDasharray="3 2" isAnimationActive={false} />}
+            {showMid   && <Line dataKey="mid"   name="Mid"   type="monotone" dot={false} strokeWidth={expanded ? 1.5 : 1} stroke="#94a3b8" isAnimationActive={false} />}
+            {showLower && <Line dataKey="lower" name="Lower" type="monotone" dot={false} strokeWidth={expanded ? 1.5 : 1} stroke="#60a5fa" strokeDasharray="3 2" isAnimationActive={false} />}
+            {showClose && !showCandles && <Line dataKey="close" name="Close" type="monotone" dot={false} strokeWidth={expanded ? 2 : 1.5} stroke="rgba(255,255,255,0.75)" isAnimationActive={false} />}
+          </ComposedChart>
+        </ResponsiveContainer>
       </div>
 
       {/* Slider */}
@@ -5112,28 +5020,6 @@ function KeltPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolea
           onChange={e => setOffset(Number(e.target.value))}
           style={{ direction: "rtl" }}
         />
-      )}
-
-      {/* Date labels */}
-      {expanded && (
-        <div className="flex flex-col shrink-0 pb-1" style={{ paddingLeft: yAxisWidth, paddingRight: 6 }}>
-          <div className="flex justify-between">
-            {data.map((d, i) => (
-              <span key={i} style={{ fontSize: tickStyle.fontSize, color: "var(--text-muted)" }}>{d.date}</span>
-            ))}
-          </div>
-          <div className="flex">
-            {data.reduce<{ month: string; count: number }[]>((acc, d) => {
-              if (d.month) acc.push({ month: d.month, count: 1 });
-              else if (acc.length) acc[acc.length - 1].count++;
-              return acc;
-            }, []).map((g, i) => (
-              <div key={i} className="text-center" style={{ flex: g.count, fontSize: tickStyle.fontSize, color: "var(--text-muted)", fontWeight: 700 }}>
-                {g.month}
-              </div>
-            ))}
-          </div>
-        </div>
       )}
 
       {/* Indicator glossary — expanded only */}
@@ -5612,6 +5498,45 @@ function computeRegimeVolatility(rows: SheetRow[], idx: number): VolatilityState
   return "Neutral";
 }
 
+function buildRegimeAnalysis(rows: SheetRow[]): { headline: string; bullets: string[]; description: string } {
+  if (rows.length < 5) return { headline: "—", bullets: [], description: "—" };
+  const cur      = rows[rows.length - 1];
+  const adx      = cur.adx      ?? 0;
+  const atr14    = cur.atr14    ?? 0;
+  const bbWidth  = ((cur.bbUpper ?? 0) - (cur.bbLower ?? 0)) * 10000;
+  const slice20  = rows.slice(-20);
+  const bbAvg    = slice20.reduce((s, r) => s + ((r.bbUpper ?? 0) - (r.bbLower ?? 0)) * 10000, 0) / slice20.length;
+  const atrSma   = slice20.reduce((s, r) => s + (r.atr14 ?? 0), 0) / slice20.length;
+  const regime: RegimeState = bbWidth > 0 && bbAvg > 0 && bbWidth < bbAvg * 0.75 ? "Compression" : adx > 25 ? "Trending" : "Ranging";
+  const volatility: VolatilityState = atrSma === 0 ? "Neutral" : atr14 > atrSma * 1.1 ? "Expanding" : atr14 < atrSma * 0.9 ? "Contracting" : "Neutral";
+  const adxR     = Math.round(adx * 10) / 10;
+  const bwPips   = Math.round(bbWidth);
+  const bwAvgP   = Math.round(bbAvg);
+  const atrPips  = Math.round(atr14 * 10000);
+  const atrSmaP  = Math.round(atrSma * 10000);
+  const adxLabel = adx >= 40 ? "Strong trend" : adx >= 25 ? "Trend confirmed" : adx >= 15 ? "Weak momentum" : "No trend";
+  const bullets = [
+    `Regime: ${regime} · Volatility: ${volatility}`,
+    `ADX: ${adxR} · ${adxLabel}`,
+    `BB Width: ${bwPips} pips · 20-bar avg: ${bwAvgP} pips`,
+    `ATR(14): ${atrPips} pips · Avg: ${atrSmaP} pips`,
+  ];
+  let description = "";
+  if (regime === "Compression") {
+    const pctBelow = Math.round((1 - bbWidth / bbAvg) * 100);
+    description = `Bollinger Band width has contracted to ${bwPips} pips — ${pctBelow}% below the 20-bar average. Compression signals low momentum and reduced edge for trend-following strategies. Watch for a volatility expansion as bands widen; the initial breakout direction often sets the short-term bias.`;
+  } else if (regime === "Trending") {
+    const dir = (cur.diPlus ?? 0) > (cur.diMinus ?? 0) ? "bullish" : "bearish";
+    const volNote = volatility === "Expanding" ? "Volatility is expanding — the trend may be accelerating." : volatility === "Contracting" ? "Volatility is contracting despite the trend — watch for momentum fatigue." : "Volatility is neutral — trend conditions remain stable.";
+    description = `ADX at ${adxR} confirms an active trend with directional pressure favouring ${dir} momentum. Trend-following strategies carry higher edge in this environment. ${volNote}`;
+  } else {
+    const volNote = volatility === "Expanding" ? " Expanding volatility may signal an emerging breakout." : volatility === "Contracting" ? " Contracting volatility suggests continued consolidation." : "";
+    description = `ADX at ${adxR} indicates a directionless, ranging market. Price is oscillating without sustained momentum and mean reversion strategies are favoured. Avoid trend entries until ADX rises above 25.${volNote}`;
+  }
+  const headline = regime === "Compression" ? "Compression — Breakout Watch" : regime === "Trending" ? (adx >= 40 ? "Strong Trend Active" : "Trend Confirmed") : "Ranging — Low Edge Environment";
+  return { headline, bullets, description };
+}
+
 function RegimePanelBody({ rows, expanded, showCandles, onToggleCandles }: { rows: SheetRow[]; expanded?: boolean; showCandles: boolean; onToggleCandles: () => void }) {
   const windowSize = expanded ? 40 : REGIME_WINDOW;
   const maxOffset  = Math.max(0, rows.length - windowSize);
@@ -5670,6 +5595,7 @@ function RegimePanelBody({ rows, expanded, showCandles, onToggleCandles }: { row
 
   const tickStyle  = { fill: "var(--text-muted)", fontSize: expanded ? 12 : 9 };
   const yAxisWidth = expanded ? 52 : 40;
+  const analysis   = useMemo(() => expanded ? buildRegimeAnalysis(rows) : null, [rows, expanded]);
 
   const allPrices = data.flatMap(d => [d.high, d.low]).filter(Boolean);
   const yMin    = allPrices.length ? Math.min(...allPrices) : 0;
@@ -5695,12 +5621,19 @@ function RegimePanelBody({ rows, expanded, showCandles, onToggleCandles }: { row
 
   return (
     <div className="flex flex-col h-full">
-      {/* ── Info strip (expanded only) ── */}
-      {expanded && (
-        <div className="shrink-0 flex items-center justify-center px-3 py-1 gap-4" style={{ borderBottom: "1px solid var(--border-subtle)" }}>
-          <span style={{ fontSize: 11, fontWeight: 700, color: regimeColor }}>{curRegime}</span>
-          <span style={{ fontSize: 9, color: "var(--text-muted)" }}>·</span>
-          <span style={{ fontSize: 11, fontWeight: 700, color: volColor }}>{curVol}</span>
+      {expanded && analysis && (
+        <div className="shrink-0 flex" style={{ borderBottom: "1px solid var(--border-subtle)", background: "rgba(255,255,255,0.02)" }}>
+          <div className="flex flex-col items-center justify-center px-5 py-2.5" style={{ flex: "0 0 50%", minWidth: 0, maxWidth: "50%" }}>
+            <ul className="flex flex-col gap-0.5 text-center">
+              {analysis.bullets.map((b, i) => (
+                <li key={i} className="text-[11px]" style={{ color: "var(--text-secondary)" }}>{b}</li>
+              ))}
+            </ul>
+          </div>
+          <div style={{ width: 1, background: "var(--border-medium)", alignSelf: "stretch", margin: "8px 0" }} />
+          <div className="flex-1 flex items-center justify-center px-5 py-2.5">
+            <p className="text-[11px] leading-relaxed text-center" style={{ color: "var(--text-secondary)" }}>{analysis.description}</p>
+          </div>
         </div>
       )}
 
@@ -5723,7 +5656,24 @@ function RegimePanelBody({ rows, expanded, showCandles, onToggleCandles }: { row
         )}
         <ResponsiveContainer width="100%" height="100%">
           <ComposedChart data={data} margin={{ top: 4, right: 6, bottom: 0, left: 0 }}>
-            <XAxis dataKey="idx" type="number" domain={[0, Math.max(data.length - 1, 1)]} hide />
+            <XAxis
+              dataKey="idx"
+              type="category"
+              tickLine={false}
+              axisLine={false}
+              height={expanded ? 34 : 0}
+              hide={!expanded}
+              tick={(props: any) => {
+                const d = data[props.index];
+                if (!d) return <g />;
+                return (
+                  <g transform={`translate(${props.x},${props.y})`}>
+                    <text x={0} y={0} dy={11} textAnchor="middle" fontSize={tickStyle.fontSize} fill="var(--text-muted)">{d.date}</text>
+                    {d.month && <text x={0} y={0} dy={23} textAnchor="middle" fontSize={tickStyle.fontSize} fill="var(--text-muted)" fontWeight={700}>{d.month}</text>}
+                  </g>
+                );
+              }}
+            />
             <YAxis
               tick={tickStyle}
               tickLine={false}
@@ -5747,7 +5697,7 @@ function RegimePanelBody({ rows, expanded, showCandles, onToggleCandles }: { row
               }}
               wrapperStyle={{ opacity: 1, zIndex: 20 }}
               cursor={{ fill: "rgba(255,255,255,0.04)" }}
-              position={{ x: 10, y: 10 }}
+              position={{ x: 60, y: 10 }}
             />
             {regimeSegments.map((seg, i) => (
               <ReferenceArea
@@ -5819,28 +5769,6 @@ function RegimePanelBody({ rows, expanded, showCandles, onToggleCandles }: { row
           onChange={e => setOffset(Number(e.target.value))}
           style={{ direction: "rtl" }}
         />
-      )}
-
-      {/* ── Date labels ── */}
-      {expanded && (
-        <div className="flex flex-col shrink-0 pb-1" style={{ paddingLeft: yAxisWidth, paddingRight: 6 }}>
-          <div className="flex justify-between">
-            {data.map((d, i) => (
-              <span key={i} style={{ fontSize: tickStyle.fontSize, color: "var(--text-muted)" }}>{d.date}</span>
-            ))}
-          </div>
-          <div className="flex">
-            {data.reduce<{ month: string; count: number }[]>((acc, d) => {
-              if (d.month) acc.push({ month: d.month, count: 1 });
-              else if (acc.length) acc[acc.length - 1].count++;
-              return acc;
-            }, []).map((g, i) => (
-              <div key={i} className="text-center" style={{ flex: g.count, fontSize: tickStyle.fontSize, color: "var(--text-muted)", fontWeight: 700 }}>
-                {g.month}
-              </div>
-            ))}
-          </div>
-        </div>
       )}
 
       {/* ── Glossary (expanded only) ── */}
@@ -5960,29 +5888,6 @@ function CandleContextPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded
             ))}
           </div>
           <div className="flex-1 min-h-0">{candleSvg}</div>
-          <div className="shrink-0" style={{ borderTop: "1px solid var(--border-subtle)", marginTop: 6 }}>
-            <button
-              onClick={() => setOhlcOpen(v => !v)}
-              className="flex items-center gap-1.5 w-full px-0 py-1"
-              style={{ fontSize: 9, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--text-muted)", background: "none", border: "none", cursor: "pointer" }}
-            >
-              <span style={{ fontSize: 8 }}>{ohlcOpen ? "▾" : "▸"}</span>
-              OHLC Data
-            </button>
-            {ohlcOpen && candles.map((c, i) => {
-              const isBullC = c.close >= c.open;
-              return (
-                <div key={i} className="flex items-center gap-3 py-0.5" style={{ fontSize: 10, color: "var(--text-muted)", borderTop: "1px solid var(--border-subtle)" }}>
-                  <span style={{ minWidth: 38 }}>{c.date.slice(5).replace("-", "/")}</span>
-                  <span>O {c.open.toFixed(4)}</span>
-                  <span>H {c.high.toFixed(4)}</span>
-                  <span>L {c.low.toFixed(4)}</span>
-                  <span style={{ color: isBullC ? BULL : BEAR }}>C {c.close.toFixed(4)}</span>
-                  <span style={{ color: isBullC ? BULL : BEAR }}>{isBullC ? "▲" : "▼"} {((c.close - c.open) / c.open * 100).toFixed(3)}%</span>
-                </div>
-              );
-            })}
-          </div>
         </div>
         {/* Pattern list */}
         <div className="flex-1 flex flex-col gap-3 px-5 py-4 overflow-y-auto">
