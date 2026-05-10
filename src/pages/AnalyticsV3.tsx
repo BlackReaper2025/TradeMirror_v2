@@ -174,6 +174,7 @@ const PANELS: { id: string; area: string; span?: number; label: string; sub: str
   { id: "roc",             area: "roc",   label: "ROC (5)",                      sub: "Group 5b — Rate of Change · 5-Session Momentum" },
   { id: "volatility",      area: "vola",  label: "Bollinger",                         sub: "Group 4 — Hist Vol · Bollinger Bands · BB %B" },
   { id: "atr",             area: "atr",   label: "ATR",                        sub: "Group 15 — ATR(14) · ATR SMA(20)" },
+  { id: "squeeze",         area: "sqz",   label: "Squeeze",                    sub: "Volatility Squeeze · BB inside KC · Momentum" },
   { id: "macd",            area: "macd",  label: "MACD",                       sub: "Group 7 — MACD · Signal · Histogram" },
   { id: "moving-averages", area: "ma",    label: "EMAs",           sub: "Group 6 — SMA(20/50/200) · EMA(9/12/20/26/50/200)" },
   { id: "pivots",          area: "pvt",   label: "Pivots",               sub: "Group 8 — R3/R2/R1 · S1/S2/S3" },
@@ -211,7 +212,7 @@ const SLOT_AREAS = [
   // ── Momentum & Oscillators ────────────────────────────────────────────────
   "rsi9", "rsi14", "cci", "wr", "roc",
   // ── Volatility & Bands ────────────────────────────────────────────────────
-  "vola", "kelt", "atr",
+  "vola", "kelt", "atr", "sqz",
 ] as const;
 
 const CATEGORIES: { label: string; count: number; visibleCols?: number }[] = [
@@ -220,7 +221,7 @@ const CATEGORIES: { label: string; count: number; visibleCols?: number }[] = [
   { label: "Context & Patterns",     count: 4 },
   { label: "Trend & Direction",      count: 4 },
   { label: "Momentum & Oscillators", count: 5 },
-  { label: "Volatility & Bands",     count: 3 },
+  { label: "Volatility & Bands",     count: 4 },
 ];
 
 const INITIAL_PANEL_ORDER: string[] = SLOT_AREAS.map(area =>
@@ -268,7 +269,7 @@ function HoverTooltip({ tip, children }: { tip: string; children: React.ReactNod
   );
 }
 
-const NO_SUB_IDS = new Set(["ai-synthesis", "price", "macd", "rsi9", "rsi14", "moving-averages", "keltner", "adx", "ichimoku", "session", "volume", "pivots", "cci", "wr", "volatility", "avg-price", "roc", "atr", "candle-context", "ai-chat", "regime"]);
+const NO_SUB_IDS = new Set(["ai-synthesis", "price", "macd", "rsi9", "rsi14", "moving-averages", "keltner", "adx", "ichimoku", "session", "volume", "pivots", "cci", "wr", "volatility", "avg-price", "roc", "atr", "squeeze", "candle-context", "ai-chat", "regime"]);
 
 function PanelModal({ panel, onClose, badge, subtitle, subtitle2, headerActions, children }: { panel: PanelMeta; onClose: () => void; badge?: React.ReactNode; subtitle?: string; subtitle2?: string; headerActions?: React.ReactNode; children?: React.ReactNode }) {
   useEffect(() => {
@@ -926,7 +927,24 @@ function RsiPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolean
       <div className="flex-1 min-h-0">
         <ResponsiveContainer width="100%" height="100%">
           <ComposedChart data={data} margin={{ top: 4, right: 6, bottom: 0, left: 0 }}>
-            <XAxis dataKey="idx" hide />
+            <XAxis
+              dataKey="idx"
+              type="category"
+              tickLine={false}
+              axisLine={false}
+              height={expanded ? 34 : 0}
+              hide={!expanded}
+              tick={(props: any) => {
+                const d = data[props.index];
+                if (!d) return <g />;
+                return (
+                  <g transform={`translate(${props.x},${props.y})`}>
+                    <text x={0} y={0} dy={11} textAnchor="middle" fontSize={tickStyle.fontSize} fill="var(--text-muted)">{d.date}</text>
+                    {d.month && <text x={0} y={0} dy={23} textAnchor="middle" fontSize={tickStyle.fontSize} fill="var(--text-muted)" fontWeight={700}>{d.month}</text>}
+                  </g>
+                );
+              }}
+            />
             <YAxis
               tick={tickStyle}
               tickLine={false}
@@ -960,27 +978,6 @@ function RsiPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolean
           onChange={e => setOffset(Number(e.target.value))}
           style={{ direction: "rtl" }}
         />
-      )}
-
-      {expanded && (
-        <div className="flex flex-col shrink-0 pb-1" style={{ paddingLeft: yAxisWidth, paddingRight: 6 }}>
-          <div className="flex justify-between">
-            {data.map((d, i) => (
-              <span key={i} style={{ fontSize: tickStyle.fontSize, color: "var(--text-muted)" }}>{d.date}</span>
-            ))}
-          </div>
-          <div className="flex">
-            {data.reduce<{ month: string; count: number }[]>((acc, d) => {
-              if (d.month) acc.push({ month: d.month, count: 1 });
-              else if (acc.length) acc[acc.length - 1].count++;
-              return acc;
-            }, []).map((g, i) => (
-              <div key={i} className="text-center" style={{ flex: g.count, fontSize: tickStyle.fontSize, color: "var(--text-muted)", fontWeight: 700 }}>
-                {g.month}
-              </div>
-            ))}
-          </div>
-        </div>
       )}
 
       {/* Indicator glossary — expanded only */}
@@ -1169,7 +1166,24 @@ function Rsi14PanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boole
       <div className="flex-1 min-h-0">
         <ResponsiveContainer width="100%" height="100%">
           <ComposedChart data={data} margin={{ top: 4, right: 6, bottom: 0, left: 0 }}>
-            <XAxis dataKey="idx" hide />
+            <XAxis
+              dataKey="idx"
+              type="category"
+              tickLine={false}
+              axisLine={false}
+              height={expanded ? 34 : 0}
+              hide={!expanded}
+              tick={(props: any) => {
+                const d = data[props.index];
+                if (!d) return <g />;
+                return (
+                  <g transform={`translate(${props.x},${props.y})`}>
+                    <text x={0} y={0} dy={11} textAnchor="middle" fontSize={tickStyle.fontSize} fill="var(--text-muted)">{d.date}</text>
+                    {d.month && <text x={0} y={0} dy={23} textAnchor="middle" fontSize={tickStyle.fontSize} fill="var(--text-muted)" fontWeight={700}>{d.month}</text>}
+                  </g>
+                );
+              }}
+            />
             <YAxis
               tick={tickStyle}
               tickLine={false}
@@ -1201,28 +1215,6 @@ function Rsi14PanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boole
           onChange={e => setOffset(Number(e.target.value))}
           style={{ direction: "rtl" }}
         />
-      )}
-
-      {/* Date labels */}
-      {expanded && (
-        <div className="flex flex-col shrink-0 pb-1" style={{ paddingLeft: yAxisWidth, paddingRight: 6 }}>
-          <div className="flex justify-between">
-            {data.map((d, i) => (
-              <span key={i} style={{ fontSize: tickStyle.fontSize, color: "var(--text-muted)" }}>{d.date}</span>
-            ))}
-          </div>
-          <div className="flex">
-            {data.reduce<{ month: string; count: number }[]>((acc, d) => {
-              if (d.month) acc.push({ month: d.month, count: 1 });
-              else if (acc.length) acc[acc.length - 1].count++;
-              return acc;
-            }, []).map((g, i) => (
-              <div key={i} className="text-center" style={{ flex: g.count, fontSize: tickStyle.fontSize, color: "var(--text-muted)", fontWeight: 700 }}>
-                {g.month}
-              </div>
-            ))}
-          </div>
-        </div>
       )}
 
       {/* Indicator glossary — expanded only */}
@@ -1940,8 +1932,6 @@ function AdxPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolean
             />
             <YAxis tick={tickStyle} tickLine={false} axisLine={false} width={yAxisWidth} domain={expanded ? [0, Math.max(yDomain[1] as number, 45)] : yDomain} ticks={[25, 40]} tickFormatter={v => String(v)} />
             <Tooltip content={<MaTooltip />} cursor={{ stroke: "rgba(255,255,255,0.35)", strokeWidth: 1 }} position={{ x: 60, y: 10 }} />
-            <ReferenceArea y1={0} y2={25} fill="rgba(167,139,250,0.22)" ifOverflow="hidden" />
-            <ReferenceArea y1={25} y2={200} fill="rgba(96,165,250,0.18)" ifOverflow="hidden" />
             <ReferenceLine y={25} stroke="rgba(255,255,255,0.15)" strokeWidth={1} strokeDasharray="3 3" />
             <ReferenceLine y={40} stroke="rgba(255,255,255,0.10)" strokeWidth={1} strokeDasharray="2 4" />
             {showDiPlus  && <Line dataKey="diPlus"  name="+DI" type="monotone" dot={false} strokeWidth={expanded ? 2 : 1.5} stroke="#60a5fa" isAnimationActive={false} />}
@@ -3079,6 +3069,266 @@ function AtrPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolean
           {[
             { color: "#a78bfa", name: "ATR(14)", body: "Average True Range over 14 periods. True Range is the greatest of: current High−Low, |High−Prior Close|, |Low−Prior Close|. ATR averages these over 14 bars, expressed in pips for forex. Rising ATR = expanding daily ranges, active market, wider stops required. Falling ATR = compression, quieter conditions, tighter stops viable. Use a 1–1.5× ATR multiplier to set stops outside the noise of normal daily movement." },
             { color: "#f59e0b", name: "ATR SMA(20)", body: "A 20-bar simple moving average of ATR(14). Serves as the benchmark for 'normal' volatility. When ATR is significantly above its SMA20 (>25%), the market is in an elevated-volatility regime — size down. When ATR is significantly below its SMA20 (<75%), the market is compressing — a precursor to a volatility breakout and sharp directional move. The SMA20 is the reference line that contextualises whether today's ATR is a warning or routine." },
+          ].map((item, i, arr) => (
+            <div key={item.name} className="flex-1 flex flex-col gap-1 px-3 py-2.5" style={{ borderRight: i < arr.length - 1 ? "1px solid var(--border-subtle)" : undefined }}>
+              <div className="flex items-center gap-1.5">
+                <span style={{ width: 8, height: 8, borderRadius: "50%", background: item.color, flexShrink: 0 }} />
+                <span className="text-[10px] font-bold" style={{ color: item.color }}>{item.name}</span>
+              </div>
+              <p className="text-[10px] leading-relaxed" style={{ color: "var(--text-secondary)" }}>{item.body}</p>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Squeeze ─────────────────────────────────────────────────────────────────
+
+const SQZ_WINDOW = 20;
+
+function buildSqueezeAnalysis(rows: SheetRow[]): { headline: string; bullets: string[]; description: string } {
+  if (rows.length < 3) return { headline: "—", bullets: [], description: "—" };
+
+  const cur  = rows[rows.length - 1];
+  const prev = rows[rows.length - 2];
+
+  const squeezed     = cur.bbUpper  < cur.keltnerUpper  && cur.bbLower  > cur.keltnerLower;
+  const wasSqueezed  = prev.bbUpper < prev.keltnerUpper && prev.bbLower > prev.keltnerLower;
+  const justFired    = wasSqueezed  && !squeezed;
+  const justEntered  = !wasSqueezed && squeezed;
+
+  const bbWidth  = (cur.bbUpper  - cur.bbLower)  * 10000;
+  const kcWidth  = (cur.keltnerUpper - cur.keltnerLower) * 10000;
+
+  // Count consecutive bars in current squeeze state
+  let streak = 0;
+  for (let i = rows.length - 1; i >= 0; i--) {
+    const r = rows[i];
+    const s = r.bbUpper < r.keltnerUpper && r.bbLower > r.keltnerLower;
+    if (s === squeezed) streak++;
+    else break;
+  }
+
+  // Momentum: close − avg(20-bar HH+LL midpoint, sma20) — approximate via last 20 rows
+  const win20 = rows.slice(Math.max(0, rows.length - 20));
+  const hh20  = Math.max(...win20.map(r => r.high));
+  const ll20  = Math.min(...win20.map(r => r.low));
+  const mom   = (cur.close - ((hh20 + ll20) / 2 + cur.sma20) / 2) * 10000;
+  const momPrev = (() => {
+    const w = rows.slice(Math.max(0, rows.length - 21), rows.length - 1);
+    if (!w.length) return mom;
+    const h = Math.max(...w.map(r => r.high));
+    const l = Math.min(...w.map(r => r.low));
+    return (prev.close - ((h + l) / 2 + prev.sma20) / 2) * 10000;
+  })();
+  const momRising = mom > momPrev;
+
+  const headline = justFired   ? "Squeeze Fired — Volatility Expansion Underway"
+    : justEntered ? "Squeeze Active — Volatility Contracting"
+    : squeezed    ? `Squeeze: ${streak} bars — Coiling Continues`
+    : `Squeeze Released — ${momRising ? "Bullish" : "Bearish"} Momentum`;
+
+  const bullets: string[] = [
+    `BB width: ${bbWidth.toFixed(1)} pips | KC width: ${kcWidth.toFixed(1)} pips | Ratio: ${(bbWidth / kcWidth).toFixed(2)}`,
+    `Squeeze ${squeezed ? "ON" : "OFF"} for ${streak} consecutive bar${streak !== 1 ? "s" : ""}`,
+    `Momentum: ${mom >= 0 ? "+" : ""}${mom.toFixed(1)} pips — ${momRising ? "rising" : "falling"}`,
+  ];
+
+  let description = "";
+  if (justFired) {
+    description = `The Bollinger Bands have just expanded outside the Keltner Channels — the squeeze has fired. Compressed volatility is releasing. Momentum is ${momRising ? "positive and rising, favouring longs" : "negative, favouring shorts"}. This is typically the highest-conviction entry window. Confirm direction with price action and volume before committing.`;
+  } else if (squeezed && streak <= 3) {
+    description = `The Bollinger Bands have just moved inside the Keltner Channels, signalling a new volatility squeeze. The market is beginning to coil. Historically, early-stage squeezes offer low-risk entry opportunities ahead of the breakout. Watch for momentum to build direction while waiting for the squeeze to fire.`;
+  } else if (squeezed) {
+    description = `The squeeze has been active for ${streak} bars. Volatility remains compressed — the Bollinger Bands are fully inside the Keltner Channels. Extended squeezes often precede sharp directional moves. Momentum is ${momRising ? "building to the upside" : "pressing to the downside"}. Patience is required — wait for the bands to expand before entering.`;
+  } else if (momRising) {
+    description = `The squeeze is off and momentum is rising. Bullish pressure is expanding. This is a continuation environment — pullbacks toward the midline are buying opportunities while momentum remains positive and rising. Monitor for momentum to peak and turn down as the first sign of exhaustion.`;
+  } else {
+    description = `The squeeze is off and momentum is falling. Bearish pressure is expanding. Avoid long entries until momentum stabilises. Short setups on bounces have the highest probability while momentum remains negative and declining.`;
+  }
+
+  return { headline, bullets, description };
+}
+
+function SqueezePanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolean }) {
+  const windowSize = expanded ? 40 : SQZ_WINDOW;
+  const maxOffset  = Math.max(0, rows.length - windowSize);
+  const [offset, setOffset] = useState(0);
+
+  const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+
+  const data = useMemo(() => {
+    const start = rows.length - windowSize - offset;
+    const end   = rows.length - offset;
+    const slice = rows.slice(Math.max(0, start), end);
+    return slice.map((r, i) => {
+      const parts     = r.date.split("-");
+      const monthIdx  = parseInt(parts[1]) - 1;
+      const prevMonth = i > 0 ? parseInt(slice[i-1].date.split("-")[1]) - 1 : -1;
+      const absIdx    = Math.max(0, start) + i;
+
+      const squeezed = r.bbUpper < r.keltnerUpper && r.bbLower > r.keltnerLower;
+
+      // Momentum: close − avg(HH20+LL20 midpoint, sma20)
+      const win = rows.slice(Math.max(0, absIdx - 19), absIdx + 1);
+      const hh  = Math.max(...win.map(x => x.high));
+      const ll  = Math.min(...win.map(x => x.low));
+      const mom = (r.close - ((hh + ll) / 2 + r.sma20) / 2) * 10000;
+
+      const prevMom = (() => {
+        if (i === 0) return mom;
+        const pi  = absIdx - 1;
+        const pw  = rows.slice(Math.max(0, pi - 19), pi + 1);
+        const ph  = Math.max(...pw.map(x => x.high));
+        const pl  = Math.min(...pw.map(x => x.low));
+        return (slice[i - 1].close - ((ph + pl) / 2 + slice[i - 1].sma20) / 2) * 10000;
+      })();
+
+      return {
+        idx:      i,
+        date:     parseInt(parts[2]).toString(),
+        month:    monthIdx !== prevMonth ? MONTHS[monthIdx] : "",
+        squeezed,
+        mom,
+        rising:   mom > prevMom,
+      };
+    });
+  }, [rows, offset, windowSize]);
+
+  const tickStyle  = { fill: "var(--text-muted)", fontSize: expanded ? 12 : 9 };
+  const yAxisWidth = expanded ? 48 : 34;
+  const analysis   = useMemo(() => expanded ? buildSqueezeAnalysis(rows) : null, [rows, expanded]);
+
+  const latest = data[data.length - 1];
+  const squeezed = latest?.squeezed ?? false;
+
+  const yDomain = useMemo(() => {
+    const vals = data.map(d => d.mom);
+    if (!vals.length) return ["auto", "auto"] as const;
+    const abs = Math.max(...vals.map(Math.abs));
+    const pad = abs * 0.25;
+    return [-(abs + pad), abs + pad] as const;
+  }, [data]);
+
+  return (
+    <div className="flex flex-col h-full">
+      {expanded && analysis && (
+        <div className="shrink-0 flex" style={{ borderBottom: "1px solid var(--border-subtle)", background: "rgba(255,255,255,0.02)" }}>
+          <div className="flex flex-col items-center justify-center px-5 py-2.5" style={{ flex: "0 0 50%", minWidth: 0, maxWidth: "50%" }}>
+            <ul className="flex flex-col gap-0.5 text-center">
+              {analysis.bullets.map((b, i) => (
+                <li key={i} className="text-[11px]" style={{ color: "var(--text-secondary)" }}>{b}</li>
+              ))}
+            </ul>
+          </div>
+          <div style={{ width: 1, background: "var(--border-medium)", alignSelf: "stretch", margin: "8px 0" }} />
+          <div className="flex-1 flex items-center justify-center px-5 py-2.5">
+            <p className="text-[11px] leading-relaxed text-center" style={{ color: "var(--text-secondary)" }}>{analysis.description}</p>
+          </div>
+        </div>
+      )}
+
+      <div className="flex-1 min-h-0">
+        <ResponsiveContainer width="100%" height="100%">
+          <ComposedChart data={data} margin={{ top: 4, right: 6, bottom: 0, left: 0 }} barCategoryGap={expanded ? 2 : 1}>
+            <XAxis
+              dataKey="idx"
+              type="category"
+              tickLine={false}
+              axisLine={false}
+              height={expanded ? 34 : 0}
+              hide={!expanded}
+              tick={(props: any) => {
+                const d = data[props.index];
+                if (!d) return <g />;
+                return (
+                  <g transform={`translate(${props.x},${props.y})`}>
+                    <text x={0} y={0} dy={11} textAnchor="middle" fontSize={tickStyle.fontSize} fill="var(--text-muted)">{d.date}</text>
+                    {d.month && <text x={0} y={0} dy={23} textAnchor="middle" fontSize={tickStyle.fontSize} fill="var(--text-muted)" fontWeight={700}>{d.month}</text>}
+                  </g>
+                );
+              }}
+            />
+            <YAxis tick={tickStyle} tickLine={false} axisLine={false} width={yAxisWidth} domain={yDomain} tickFormatter={v => v.toFixed(0)} />
+            <ReferenceLine y={0} stroke="rgba(255,255,255,0.18)" strokeWidth={1} />
+            <Tooltip
+              cursor={{ stroke: "rgba(255,255,255,0.35)", strokeWidth: 1 }}
+              position={{ x: 60, y: 10 }}
+              content={({ active, payload }) => {
+                if (!active || !payload?.length) return null;
+                const d = payload[0].payload as typeof data[0];
+                return (
+                  <div className="rounded-lg px-3 py-2 text-[10px]" style={{ background: "var(--bg-panel)", border: "1px solid var(--border-medium)", color: "var(--text-secondary)" }}>
+                    <div style={{ color: d.squeezed ? "#fbbf24" : "#9ca3af", fontWeight: 700 }}>Squeeze: {d.squeezed ? "ON" : "OFF"}</div>
+                    <div style={{ color: d.mom >= 0 ? "#60a5fa" : "#a78bfa" }}>Momentum: {d.mom >= 0 ? "+" : ""}{d.mom.toFixed(1)} pips</div>
+                    <div style={{ color: "var(--text-muted)" }}>{d.rising ? "↑ Rising" : "↓ Falling"}</div>
+                  </div>
+                );
+              }}
+            />
+            <Bar dataKey="mom" name="Momentum" isAnimationActive={false}>
+              {data.map((d, i) => {
+                const color = d.mom >= 0
+                  ? (d.rising ? "#60a5fa" : "#93c5fd")
+                  : (d.rising ? "#c4b5fd" : "#a78bfa");
+                return <Cell key={i} fill={color} />;
+              })}
+            </Bar>
+            {/* Squeeze dots at zero line */}
+            <Line
+              dataKey={() => 0}
+              dot={(props: any) => {
+                const d = data[props.index];
+                if (!d) return <circle key={props.index} />;
+                return (
+                  <circle
+                    key={props.index}
+                    cx={props.cx}
+                    cy={props.cy}
+                    r={expanded ? 3 : 2}
+                    fill={d.squeezed ? "#fbbf24" : "#9ca3af"}
+                    stroke="none"
+                  />
+                );
+              }}
+              activeDot={false}
+              stroke="none"
+              isAnimationActive={false}
+            />
+          </ComposedChart>
+        </ResponsiveContainer>
+      </div>
+
+      {expanded && maxOffset > 0 && (
+        <input type="range" className="momentum-scroll" min={0} max={maxOffset} value={offset}
+          onChange={e => setOffset(Number(e.target.value))} style={{ direction: "rtl" }} />
+      )}
+
+      {!expanded && (
+        <div className="shrink-0 flex flex-col items-center pb-1 gap-1">
+          <div className="flex items-center gap-1.5" style={{ fontSize: 9, color: squeezed ? "#fbbf24" : "#9ca3af" }}>
+            <span style={{ width: 6, height: 6, borderRadius: "50%", background: squeezed ? "#fbbf24" : "#9ca3af", flexShrink: 0 }} />
+            {squeezed ? "SQUEEZE ON" : "SQUEEZE OFF"}
+          </div>
+          <div style={{
+            height: 3,
+            width: "calc(100% - 16px)",
+            borderRadius: 2,
+            background: squeezed ? "rgba(251,191,36,0.22)" : "#9ca3af",
+            boxShadow: squeezed ? "none" : "0 0 6px rgba(156,163,175,0.65)",
+            transition: "all 0.3s",
+          }} />
+        </div>
+      )}
+
+      {expanded && (
+        <div className="shrink-0 flex" style={{ borderTop: "1px solid var(--border-subtle)", background: "rgba(255,255,255,0.015)" }}>
+          {[
+            { color: "#9ca3af", name: "Squeeze Dot — OFF", body: "Gray dot: Bollinger Bands are outside the Keltner Channels. Volatility is expanding. The squeeze has fired or was never active. Momentum bars during this phase indicate the direction and strength of the breakout move." },
+            { color: "#fbbf24", name: "Squeeze Dot — ON",  body: "Yellow dot: Bollinger Bands are fully inside the Keltner Channels. The market is coiling — volatility is compressed. The longer the squeeze persists, the more energy accumulates. Wait for the dots to turn gray before entering in the direction of momentum." },
+            { color: "#60a5fa", name: "Momentum",          body: "A momentum oscillator derived from close relative to the 20-bar highest high/lowest low midpoint and SMA20. Rising blue bars = bullish momentum strengthening. Fading blue bars = bullish momentum weakening. Purple bars = bearish momentum. Use momentum direction at squeeze fire to determine trade bias." },
           ].map((item, i, arr) => (
             <div key={item.name} className="flex-1 flex flex-col gap-1 px-3 py-2.5" style={{ borderRight: i < arr.length - 1 ? "1px solid var(--border-subtle)" : undefined }}>
               <div className="flex items-center gap-1.5">
@@ -7247,6 +7497,7 @@ export function AnalyticsV3() {
                             {p.id === "avg-price"       && <AvgPricePanelBody     rows={ichiRows.length > 0 ? ichiRows : sheetRows} />}
                             {p.id === "roc"             && <RocPanelBody          rows={ichiRows.length > 0 ? ichiRows : sheetRows} />}
                             {p.id === "atr"             && <AtrPanelBody          rows={ichiRows.length > 0 ? ichiRows : sheetRows} />}
+                            {p.id === "squeeze"         && <SqueezePanelBody      rows={ichiRows.length > 0 ? ichiRows : sheetRows} />}
                             {p.id === "failure-swing"   && <FailureSwingPanelBody  rows={sheetRows} />}
                             {p.id === "candle-context"  && <CandleContextPanelBody    rows={sheetRows} />}
                             {p.id === "market-structure" && <MarketStructurePanelBody rows={ichiRows.length > 0 ? ichiRows : sheetRows} />}
@@ -7311,6 +7562,7 @@ export function AnalyticsV3() {
           {expanded.id === "avg-price"       && <AvgPricePanelBody   rows={ichiRows.length > 0 ? ichiRows : sheetRows} expanded />}
           {expanded.id === "roc"             && <RocPanelBody        rows={ichiRows.length > 0 ? ichiRows : sheetRows} expanded />}
           {expanded.id === "atr"             && <AtrPanelBody             rows={ichiRows.length > 0 ? ichiRows : sheetRows} expanded />}
+          {expanded.id === "squeeze"         && <SqueezePanelBody         rows={ichiRows.length > 0 ? ichiRows : sheetRows} expanded />}
           {expanded.id === "failure-swing"   && <FailureSwingPanelBody   rows={sheetRows} expanded />}
           {expanded.id === "ai-chat"         && <AlertsPanel instrument={selectedPair.replace("/", "_")} alerts={alerts} onUpdate={updateAlert} onDelete={deleteAlert} />}
           {expanded.id === "candle-context"   && <CandleContextPanelBody    rows={sheetRows} expanded />}

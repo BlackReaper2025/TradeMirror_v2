@@ -8,7 +8,7 @@ export interface Alert {
   id: string;
   name: string;
   instrument: string;
-  direction: "above" | "below";
+  direction: "above" | "below" | "crosses";
   price: number;
   active: boolean;
   status: "watching" | "triggered" | "paused" | "deleted";
@@ -165,12 +165,84 @@ function SettingsPopup({ alert, anchorRef, onUpdate, onClose }: SettingsPopupPro
   );
 }
 
+// ─── Direction popup ──────────────────────────────────────────────────────────
+
+interface DirectionPopupProps {
+  alert: Alert;
+  anchorRef: React.RefObject<HTMLDivElement | null>;
+  onUpdate: (id: string, patch: Partial<Alert>) => void;
+  onClose: () => void;
+}
+
+function DirectionPopup({ alert, anchorRef, onUpdate, onClose }: DirectionPopupProps) {
+  const popupRef = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState({ top: 0, left: 0 });
+
+  useEffect(() => {
+    if (anchorRef.current) {
+      const r = anchorRef.current.getBoundingClientRect();
+      setPos({ top: r.bottom + 4, left: r.left });
+    }
+  }, []);
+
+  useEffect(() => {
+    function handleClick(e: MouseEvent) {
+      if (
+        popupRef.current && !popupRef.current.contains(e.target as Node) &&
+        anchorRef.current && !anchorRef.current.contains(e.target as Node)
+      ) {
+        onClose();
+      }
+    }
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, [onClose]);
+
+  return createPortal(
+    <div
+      ref={popupRef}
+      style={{
+        position: "fixed",
+        top: pos.top,
+        left: pos.left,
+        zIndex: 99999,
+        background: "#14142a",
+        border: "1px solid rgba(167,139,250,0.30)",
+        borderRadius: 8,
+        padding: "5px 8px",
+        boxShadow: "0 8px 32px rgba(0,0,0,0.70)",
+        display: "flex", flexDirection: "column", gap: 4,
+      }}
+    >
+      {(["above", "below", "crosses"] as const).map(dir => (
+        <label key={dir} style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", padding: "2px 0" }}>
+          <input
+            type="radio"
+            name={`dir-portal-${alert.id}`}
+            value={dir}
+            checked={alert.direction === dir}
+            onChange={() => { onUpdate(alert.id, { direction: dir }); onClose(); }}
+            style={{ accentColor: "#a78bfa", width: 10, height: 10, cursor: "pointer" }}
+          />
+          <span style={{ fontSize: 10, color: alert.direction === dir ? "#c4b5fd" : "var(--text-muted)", fontWeight: alert.direction === dir ? 600 : 400 }}>
+            {dir}
+          </span>
+        </label>
+      ))}
+    </div>,
+    document.body,
+  );
+}
+
 // ─── Main panel ───────────────────────────────────────────────────────────────
 
 export function AlertsPanel({ instrument, alerts, onUpdate, onDelete }: AlertsPanelProps) {
   const visible = alerts.filter(a => a.instrument === instrument && a.status !== "deleted");
   const [openSettings, setOpenSettings] = useState<string | null>(null);
+  const [openDir, setOpenDir] = useState<string | null>(null);
   const btnRefs = useRef<Record<string, HTMLButtonElement | null>>({});
+  const dirRefs = useRef<Record<string, HTMLDivElement | null>>({});
+  const dirAnchorRefs = useRef<Record<string, React.RefObject<HTMLDivElement | null>>>({});
 
   const close = useCallback(() => setOpenSettings(null), []);
 
@@ -184,7 +256,12 @@ export function AlertsPanel({ instrument, alerts, onUpdate, onDelete }: AlertsPa
         )}
         {visible.map((alert, i) => {
           const isOpen = openSettings === alert.id;
+          const isDirOpen = openDir === alert.id;
           const btnRef = { current: btnRefs.current[alert.id] ?? null } as React.RefObject<HTMLButtonElement | null>;
+          if (!dirAnchorRefs.current[alert.id]) {
+            dirAnchorRefs.current[alert.id] = { current: null } as React.RefObject<HTMLDivElement | null>;
+          }
+          const dirAnchorRef = dirAnchorRefs.current[alert.id];
 
           return (
             <div
@@ -209,14 +286,30 @@ export function AlertsPanel({ instrument, alerts, onUpdate, onDelete }: AlertsPa
               />
 
               {/* Direction */}
-              <select
-                value={alert.direction}
-                onChange={e => onUpdate(alert.id, { direction: e.target.value as Alert["direction"] })}
-                style={{ ...inputStyle, width: 58 }}
+              <div
+                ref={el => { dirRefs.current[alert.id] = el; dirAnchorRef.current = el; }}
+                onClick={() => setOpenDir(isDirOpen ? null : alert.id)}
+                style={{
+                  fontSize: 10, fontWeight: 600, padding: "3px 8px", borderRadius: 6,
+                  background: isDirOpen ? "rgba(167,139,250,0.22)" : "rgba(167,139,250,0.10)",
+                  border: `1px solid ${isDirOpen ? "rgba(167,139,250,0.55)" : "rgba(167,139,250,0.30)"}`,
+                  color: isDirOpen ? "#c4b5fd" : "#a78bfa",
+                  cursor: "pointer", flexShrink: 0, userSelect: "none",
+                  display: "flex", alignItems: "center",
+                }}
               >
-                <option value="above">above</option>
-                <option value="below">below</option>
-              </select>
+                {alert.direction}
+              </div>
+
+              {/* Direction portal */}
+              {isDirOpen && (
+                <DirectionPopup
+                  alert={alert}
+                  anchorRef={dirAnchorRef}
+                  onUpdate={onUpdate}
+                  onClose={() => setOpenDir(null)}
+                />
+              )}
 
               {/* Price */}
               <input
