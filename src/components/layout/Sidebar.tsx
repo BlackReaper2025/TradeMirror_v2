@@ -15,13 +15,12 @@ import { useTheme } from "../../theme/ThemeContext";
 import { openUrl as openExternal } from "@tauri-apps/plugin-opener";
 
 export type Page =
-  | "dashboard" | "trade-log" | "calendar" | "analytics" | "analytics-v3"
+  | "dashboard" | "trade-log" | "calendar" | "analytics-v3"
   | "risk-calculator" | "settings";
 
 const NAV_ITEMS: { id: Page; label: string; icon: React.ElementType }[] = [
   { id: "dashboard",       label: "Dashboard",   icon: LayoutDashboard },
   { id: "trade-log",       label: "Trade Log",   icon: ScrollText      },
-  { id: "analytics",       label: "Analytics",   icon: BarChart2       },
   { id: "analytics-v3",   label: "Analytics V3", icon: BarChart2      },
 ];
 
@@ -53,11 +52,15 @@ function openUrl(url: string) {
 // ─── Shared nav button ────────────────────────────────────────────────────────
 
 function NavBtn({
-  icon: Icon, label, isActive, collapsed, onClick,
+  icon: Icon, label, isActive, collapsed, onClick, neutral,
 }: {
   icon: React.ElementType; label: string; isActive: boolean;
-  collapsed: boolean; onClick: () => void;
+  collapsed: boolean; onClick: () => void; neutral?: boolean;
 }) {
+  const activeBg     = neutral ? "rgba(255,255,255,0.06)"  : "var(--accent-dim)";
+  const activeColor  = neutral ? "rgba(255,255,255,0.75)"  : "var(--accent-text)";
+  const activeBorder = neutral ? "1px solid rgba(255,255,255,0.12)" : "1px solid var(--accent-border)";
+
   return (
     <button
       onClick={onClick}
@@ -67,9 +70,9 @@ function NavBtn({
         collapsed ? "px-0 py-2.5 justify-center" : "px-3 py-2.5",
       )}
       style={{
-        background: isActive ? "var(--accent-dim)" : "transparent",
-        color:      isActive ? "var(--accent-text)" : "var(--text-secondary)",
-        border:     isActive ? "1px solid var(--accent-border)" : "1px solid transparent",
+        background: isActive ? activeBg     : "transparent",
+        color:      isActive ? activeColor  : "var(--text-secondary)",
+        border:     isActive ? activeBorder : "1px solid transparent",
       }}
       onMouseEnter={(e) => {
         if (!isActive) {
@@ -364,6 +367,7 @@ export function Sidebar({ activePage, onNavigate, collapsed, onToggleCollapse }:
             isActive={activePage === id}
             collapsed={collapsed}
             onClick={() => onNavigate(id)}
+            neutral={id === "analytics-v3"}
           />
         ))}
       </nav>

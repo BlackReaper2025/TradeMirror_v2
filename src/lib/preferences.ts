@@ -99,13 +99,17 @@ export function setQuotesIdx(idx: number): void {
 
 export function getAnalyticsPanelOrder(defaultOrder: string[]): string[] {
   try {
-    const raw = localStorage.getItem("tm_analytics_panel_order_v2");
+    const raw = localStorage.getItem("tm_analytics_panel_order_v9");
     if (!raw) return [...defaultOrder];
     const saved = JSON.parse(raw) as unknown;
+    const ids = saved as unknown[];
     if (
-      !Array.isArray(saved) ||
-      saved.length !== defaultOrder.length ||
-      !saved.every((id): id is string => typeof id === "string" && defaultOrder.includes(id))
+      !Array.isArray(ids) ||
+      ids.length !== defaultOrder.length ||
+      !ids.every((id): id is string => typeof id === "string" && defaultOrder.includes(id)) ||
+      new Set(ids).size !== ids.length || // reject duplicates
+      ids[0] !== defaultOrder[0] ||       // pinned slot 0 must match
+      ids[1] !== defaultOrder[1]          // pinned slot 1 must match
     ) return [...defaultOrder];
     return saved;
   } catch {
@@ -113,5 +117,5 @@ export function getAnalyticsPanelOrder(defaultOrder: string[]): string[] {
   }
 }
 export function setAnalyticsPanelOrder(order: string[]): void {
-  localStorage.setItem("tm_analytics_panel_order_v2", JSON.stringify(order));
+  localStorage.setItem("tm_analytics_panel_order_v9", JSON.stringify(order));
 }
