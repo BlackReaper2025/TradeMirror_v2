@@ -673,30 +673,33 @@ function PriceHistoryChart({ pair }: { rows: SheetRow[]; pair: string }) {
           - Math.floor(new Date(candles[n - 2].timestamp).getTime() / 1000)
         : 86400;
 
-      // All cloud series cover EVERY point — value controls visibility, not presence.
-      // bullFill = upper when bullish, else = lower (zero-width → invisible)
-      // bearFill = upper when bearish, else = lower (zero-width → invisible)
-      // mask     = lower always (cancels fill below cloud floor, low opacity to keep candles visible)
-      const bullFillData: { time: UTCTimestamp; value: number }[] = [];
-      const bearFillData: { time: UTCTimestamp; value: number }[] = [];
-      const maskData:     { time: UTCTimestamp; value: number }[] = [];
-      const spanAData:    { time: UTCTimestamp; value: number }[] = [];
-      const spanBData:    { time: UTCTimestamp; value: number }[] = [];
-
+      // Build cloud points shifted +OFFSET bars forward
+      const cloudPts: { time: UTCTimestamp; a: number; b: number }[] = [];
       for (let i = 25; i < n; i++) {
         const a = spanA[i], b = spanB[i];
         if (a === null || b === null) continue;
         const t: UTCTimestamp = i + OFFSET < n
           ? times[i + OFFSET]
           : (times[n - 1] + (i + OFFSET - n + 1) * candleDuration) as UTCTimestamp;
-        const upper = Math.max(a, b);
-        const lower = Math.min(a, b);
-        const bullish = a >= b;
-        bullFillData.push({ time: t, value: bullish ? upper : lower });
-        bearFillData.push({ time: t, value: bullish ? lower : upper });
-        maskData.push({ time: t, value: lower });
-        spanAData.push({ time: t, value: a });
-        spanBData.push({ time: t, value: b });
+        cloudPts.push({ time: t, a, b });
+      }
+
+      // Split into contiguous same-regime segments.
+      // Each AreaSeries only covers its own regime's bars, so there is never a
+      // cross-regime diagonal "streak" at the crossover point.
+      const segs: { bullish: boolean; pts: typeof cloudPts }[] = [];
+      for (const pt of cloudPts) {
+        const bull = pt.a >= pt.b;
+        if (!segs.length || segs[segs.length - 1].bullish !== bull)
+          segs.push({ bullish: bull, pts: [] });
+        segs[segs.length - 1].pts.push(pt);
+      }
+
+      const spanAData: { time: UTCTimestamp; value: number }[] = [];
+      const spanBData: { time: UTCTimestamp; value: number }[] = [];
+      for (const pt of cloudPts) {
+        spanAData.push({ time: pt.time, value: pt.a });
+        spanBData.push({ time: pt.time, value: pt.b });
       }
 
       // Chikou (close shifted -26 bars)
@@ -716,13 +719,15 @@ function PriceHistoryChart({ pair }: { rows: SheetRow[]; pair: string }) {
         s.applyOptions(indOpts); return s;
       };
 
-      const bullF = mkArea("rgba(38,166,154,0.2)", "rgba(38,166,154,0.2)");
-      const bearF = mkArea("rgba(239,83,80,0.2)",  "rgba(239,83,80,0.2)");
-      // Lighter mask so candles below the cloud remain visible
-      const cloudMask = mkArea("rgba(15,17,23,0.6)", "rgba(15,17,23,0.6)");
-      bullF.setData(bullFillData);
-      bearF.setData(bearFillData);
-      cloudMask.setData(maskData);
+      // One fill AreaSeries per segment (no mask — 15% fill on dark bg barely tints
+      // candles below the cloud while keeping them fully readable)
+      const segSeries: any[] = [];
+      for (const seg of segs) {
+        const c = seg.bullish ? "rgba(38,166,154,0.15)" : "rgba(239,83,80,0.15)";
+        const fill = mkArea(c, c);
+        fill.setData(seg.pts.map(p => ({ time: p.time, value: Math.max(p.a, p.b) })));
+        segSeries.push(fill);
+      }
 
       const tenkanS = mkLine("#ef5350", 1, LineStyle.Solid);
       const kijunS  = mkLine("#1565c0", 1, LineStyle.Solid);
@@ -736,7 +741,7 @@ function PriceHistoryChart({ pair }: { rows: SheetRow[]; pair: string }) {
       spanBS.setData(spanBData);
       chikouS.setData(chikouData);
 
-      indSeriesRef.current.ichi = [bullF, bearF, cloudMask, tenkanS, kijunS, spanAS, spanBS, chikouS];
+      indSeriesRef.current.ichi = [...segSeries, tenkanS, kijunS, spanAS, spanBS, chikouS];
     } else {
       const period = ({ ema9: 9, ema20: 20, ema50: 50, ema200: 200 } as Record<string, number>)[key]!;
       const color  = IND_DEFS.find(d => d.key === key)!.color;
