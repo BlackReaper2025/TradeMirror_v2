@@ -29,7 +29,7 @@ import type { AlertSound } from "../lib/alertSound";
 import { AlertsPanel, type Alert } from "../components/panels/AlertsPanel";
 import { invoke }                from "@tauri-apps/api/core";
 import {
-  createChart, CandlestickSeries, AreaSeries,
+  createChart, CandlestickSeries, AreaSeries, LineSeries,
   ColorType, CrosshairMode, LineStyle,
 } from "lightweight-charts";
 import type { IChartApi, UTCTimestamp } from "lightweight-charts";
@@ -520,30 +520,130 @@ function CandleShape({ x, width, payload, background, yDomain }: any) {
   );
 }
 
-function PriceHistoryChart({ rows, pair }: { rows: SheetRow[]; pair: string }) {
-  const [viewMode,  setViewMode]  = useState<"candles" | "line">("candles");
-  const [chartTf,   setChartTf]   = useState<"1W" | "1D" | "4H" | "1H" | "15M" | "5M">("1D");
-  const [tfRows,    setTfRows]    = useState<RawCandleTf[]>([]);
-  const [tfLoading, setTfLoading] = useState(false);
+// ─── Indicator helpers ─────────────────────────────────────────────────────────
 
-  const containerRef = useRef<HTMLDivElement>(null);
-  const chartRef     = useRef<IChartApi | null>(null);
-  const seriesRef    = useRef<any>(null);
-  const tfRowsRef    = useRef<RawCandleTf[]>([]);
-  const viewModeRef  = useRef(viewMode);
+type IndKey = "bb" | "ema9" | "ema20" | "ema50" | "ema200";
 
-  useEffect(() => { tfRowsRef.current = tfRows; },  [tfRows]);
-  useEffect(() => { viewModeRef.current = viewMode; }, [viewMode]);
+const IND_DEFS: { key: IndKey; label: string; color: string }[] = [
+  { key: "bb",    label: "BB(20,2)", color: "#64b5f6" },
+  { key: "ema9",  label: "EMA 9",   color: "#ff9f0a" },
+  { key: "ema20", label: "EMA 20",  color: "#30d158" },
+  { key: "ema50", label: "EMA 50",  color: "#ff6b6b" },
+  { key: "ema200",label: "EMA 200", color: "#bf5af2" },
+];
 
-  // Fetch on tf / pair change
+function computeEMA(closes: number[], period: number): (number | null)[] {
+  if (closes.length < period) return closes.map(() => null);
+  const k = 2 / (period + 1);
+  const result: (number | null)[] = closes.map(() => null);
+  result[period - 1] = closes.slice(0, period).reduce((a, b) => a + b, 0) / period;
+  for (let i = period; i < closes.length; i++)
+    result[i] = closes[i] * k + result[i - 1]! * (1 - k);
+  return result;
+}
+
+function computeBB(closes: number[], period = 20, mult = 2) {
+  const upper:  (number | null)[] = closes.map(() => null);
+  const middle: (number | null)[] = closes.map(() => null);
+  const lower:  (number | null)[] = closes.map(() => null);
+  for (let i = period - 1; i < closes.length; i++) {
+    const sl  = closes.slice(i - period + 1, i + 1);
+    const sma = sl.reduce((a, b) => a + b, 0) / period;
+    const std = Math.sqrt(sl.reduce((a, b) => a + (b - sma) ** 2, 0) / period);
+    middle[i] = sma; upper[i] = sma + mult * std; lower[i] = sma - mult * std;
+  }
+  return { upper, middle, lower };
+}
+
+// ─── Price history chart ────────────────────────────────────────────────────────
+
+function PriceHistoryChart({ pair }: { rows: SheetRow[]; pair: string }) {
+  const [viewMode,   setViewMode]   = useState<"candles" | "line">("candles");
+  const [chartTf,    setChartTf]    = useState<"1W" | "1D" | "4H" | "1H" | "15M" | "5M">("1D");
+  const [tfRows,     setTfRows]     = useState<RawCandleTf[]>([]);
+  const [tfLoading,  setTfLoading]  = useState(false);
+  const [activeInds, setActiveInds] = useState<Set<IndKey>>(new Set());
+
+  const containerRef  = useRef<HTMLDivElement>(null);
+  const chartRef      = useRef<IChartApi | null>(null);
+  const seriesRef     = useRef<any>(null);
+  const indSeriesRef  = useRef<Partial<Record<IndKey, any[]>>>({});
+  const tfRowsRef     = useRef<RawCandleTf[]>([]);
+  const viewModeRef   = useRef(viewMode);
+  const activeIndsRef = useRef<Set<IndKey>>(new Set());
+
+  useEffect(() => { tfRowsRef.current    = tfRows;     }, [tfRows]);
+  useEffect(() => { viewModeRef.current  = viewMode;   }, [viewMode]);
+  useEffect(() => { activeIndsRef.current = activeInds; }, [activeInds]);
+
+  // Fetch on tf / pair change — also clears stale indicator series
   useEffect(() => {
     setTfLoading(true);
     setTfRows([]);
+    if (chartRef.current)
+      activeIndsRef.current.forEach(key => removeIndSeries(key));
     invoke<RawCandleTf[]>("get_live_candles", { pair, tf: chartTf })
       .then(candles => setTfRows(candles))
       .catch(() => {})
       .finally(() => setTfLoading(false));
-  }, [chartTf, pair]);
+  }, [chartTf, pair]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Indicator series helpers ────────────────────────────────────────────────
+
+  const removeIndSeries = useCallback((key: IndKey) => {
+    const existing = indSeriesRef.current[key];
+    if (existing && chartRef.current) {
+      existing.forEach((s: any) => { try { chartRef.current!.removeSeries(s); } catch (_) {} });
+    }
+    delete indSeriesRef.current[key];
+  }, []);
+
+  const addIndSeries = useCallback((key: IndKey, candles: RawCandleTf[]) => {
+    const chart = chartRef.current;
+    if (!chart || candles.length === 0) return;
+    removeIndSeries(key);
+
+    const times  = candles.map(r => Math.floor(new Date(r.timestamp).getTime() / 1000) as UTCTimestamp);
+    const closes = candles.map(r => r.close);
+    const toData = (vals: (number | null)[]) =>
+      vals.reduce<{ time: UTCTimestamp; value: number }[]>((acc, v, i) => {
+        if (v !== null) acc.push({ time: times[i], value: v });
+        return acc;
+      }, []);
+    const indOpts = { lastValueVisible: false, priceLineVisible: false,
+                      priceFormat: { type: "price" as const, precision: 5, minMove: 0.00001 } };
+
+    if (key === "bb") {
+      const { upper, middle, lower } = computeBB(closes);
+      const mk = (color: string, style: LineStyle) => {
+        const s = chart.addSeries(LineSeries, { color, lineWidth: 1, lineStyle: style });
+        s.applyOptions(indOpts); return s;
+      };
+      const uS = mk("rgba(100,181,246,0.8)",  LineStyle.Dashed);
+      const mS = mk("rgba(100,181,246,0.45)", LineStyle.Solid);
+      const lS = mk("rgba(100,181,246,0.8)",  LineStyle.Dashed);
+      uS.setData(toData(upper)); mS.setData(toData(middle)); lS.setData(toData(lower));
+      indSeriesRef.current.bb = [uS, mS, lS];
+    } else {
+      const period = ({ ema9: 9, ema20: 20, ema50: 50, ema200: 200 } as Record<string, number>)[key]!;
+      const color  = IND_DEFS.find(d => d.key === key)!.color;
+      const s = chart.addSeries(LineSeries, { color, lineWidth: 1 });
+      s.applyOptions(indOpts);
+      s.setData(toData(computeEMA(closes, period)));
+      indSeriesRef.current[key] = [s];
+    }
+  }, [removeIndSeries]);
+
+  const toggleInd = useCallback((key: IndKey) => {
+    setActiveInds(prev => {
+      const next = new Set(prev);
+      if (next.has(key)) { next.delete(key); removeIndSeries(key); }
+      else               { next.add(key);    addIndSeries(key, tfRowsRef.current); }
+      return next;
+    });
+  }, [addIndSeries, removeIndSeries]);
+
+  // ── Price series helpers ────────────────────────────────────────────────────
 
   const applyData = useCallback((candles: RawCandleTf[], mode: string) => {
     const chart  = chartRef.current;
@@ -563,14 +663,8 @@ function PriceHistoryChart({ rows, pair }: { rows: SheetRow[]; pair: string }) {
     const last = candles[candles.length - 1];
     if (last) {
       const isUp = candles.length > 1 ? last.close >= candles[candles.length - 2].close : true;
-      series.createPriceLine({
-        price: last.close,
-        color: isUp ? "#60a5fa" : "#a78bfa",
-        lineWidth: 1,
-        lineStyle: LineStyle.Dashed,
-        axisLabelVisible: true,
-        title: "",
-      });
+      series.createPriceLine({ price: last.close, color: isUp ? "#60a5fa" : "#a78bfa",
+        lineWidth: 1, lineStyle: LineStyle.Dashed, axisLabelVisible: true, title: "" });
     }
     chart.timeScale().fitContent();
   }, []);
@@ -600,15 +694,8 @@ function PriceHistoryChart({ rows, pair }: { rows: SheetRow[]; pair: string }) {
   useEffect(() => {
     if (!containerRef.current) return;
     const chart = createChart(containerRef.current, {
-      layout: {
-        background: { type: ColorType.Solid, color: "#0f1117" },
-        textColor: "#94a3b8",
-        fontSize: 11,
-      },
-      grid: {
-        vertLines: { color: "rgba(148,163,184,0.06)" },
-        horzLines: { color: "rgba(148,163,184,0.06)" },
-      },
+      layout: { background: { type: ColorType.Solid, color: "#0f1117" }, textColor: "#94a3b8", fontSize: 11 },
+      grid: { vertLines: { color: "rgba(148,163,184,0.06)" }, horzLines: { color: "rgba(148,163,184,0.06)" } },
       crosshair: { mode: CrosshairMode.Normal },
       timeScale: { borderColor: "rgba(148,163,184,0.15)", timeVisible: true, secondsVisible: false },
       rightPriceScale: { borderColor: "rgba(148,163,184,0.15)", scaleMargins: { top: 0.08, bottom: 0.08 } },
@@ -619,23 +706,28 @@ function PriceHistoryChart({ rows, pair }: { rows: SheetRow[]; pair: string }) {
       if (containerRef.current) chart.applyOptions({ width: containerRef.current.clientWidth });
     });
     ro.observe(containerRef.current);
-    return () => { ro.disconnect(); chart.remove(); chartRef.current = null; seriesRef.current = null; };
+    return () => {
+      ro.disconnect(); chart.remove();
+      chartRef.current = null; seriesRef.current = null; indSeriesRef.current = {};
+    };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Recreate series on viewMode change
+  // Recreate price series on viewMode change (indicator series survive)
   useEffect(() => {
     if (!chartRef.current) return;
     createSeries(chartRef.current, viewMode);
   }, [viewMode, createSeries]);
 
-  // Apply data when tfRows loads
+  // Apply price data + refresh all active indicators when data arrives
   useEffect(() => {
     if (tfRows.length === 0) return;
     applyData(tfRows, viewModeRef.current);
-  }, [tfRows, applyData]);
+    activeIndsRef.current.forEach(key => addIndSeries(key, tfRows));
+  }, [tfRows, applyData, addIndSeries]);
 
   return (
     <div style={{ width: "66.667%", marginBottom: 10, flexShrink: 0 }}>
+      {/* Row 1: timeframes + view mode */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
         <div style={{ display: "flex", gap: 4 }}>
           {(["1W","1D","4H","1H","15M","5M"] as const).map(tf => (
@@ -655,6 +747,26 @@ function PriceHistoryChart({ rows, pair }: { rows: SheetRow[]; pair: string }) {
           background: "var(--bg-panel-alt)", border: "1px solid var(--border-medium)",
           borderRadius: 8, color: "var(--text-secondary)", cursor: "pointer",
         }}>{viewMode}</button>
+      </div>
+      {/* Row 2: indicator toggles */}
+      <div style={{ display: "flex", gap: 4, marginBottom: 4 }}>
+        {IND_DEFS.map(({ key, label, color }) => {
+          const on = activeInds.has(key);
+          return (
+            <button key={key} onClick={() => toggleInd(key)} style={{
+              fontSize: 9, fontWeight: 700, padding: "3px 9px",
+              textTransform: "uppercase", letterSpacing: "0.08em",
+              background: on ? `${color}18` : "var(--bg-panel-alt)",
+              border: `1px solid ${on ? color : "var(--border-medium)"}`,
+              color: on ? color : "var(--text-secondary)",
+              borderRadius: 8, cursor: "pointer",
+              display: "flex", alignItems: "center", gap: 5,
+            }}>
+              {on && <span style={{ width: 10, height: 2, background: color, borderRadius: 1, display: "inline-block", flexShrink: 0 }} />}
+              {label}
+            </button>
+          );
+        })}
       </div>
       <div style={{ borderRadius: 14, overflow: "hidden", position: "relative" }}>
         {tfLoading && (
