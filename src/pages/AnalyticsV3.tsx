@@ -725,9 +725,24 @@ function PriceHistoryChart({ pair }: { rows: SheetRow[]; pair: string }) {
     activeIndsRef.current.forEach(key => addIndSeries(key, tfRows));
   }, [tfRows, applyData, addIndSeries]);
 
+  const [showIndPanel, setShowIndPanel] = useState(false);
+  const indBtnRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    if (!showIndPanel) return;
+    const close = (e: MouseEvent) => {
+      if (indBtnRef.current && !indBtnRef.current.closest("[data-ind-panel]")?.contains(e.target as Node))
+        setShowIndPanel(false);
+    };
+    document.addEventListener("mousedown", close);
+    return () => document.removeEventListener("mousedown", close);
+  }, [showIndPanel]);
+
+  const anyActive = activeInds.size > 0;
+
   return (
     <div style={{ width: "66.667%", marginBottom: 10, flexShrink: 0 }}>
-      {/* Row 1: timeframes + view mode */}
+      {/* Toolbar: timeframes · Indicators button · view mode */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
         <div style={{ display: "flex", gap: 4 }}>
           {(["1W","1D","4H","1H","15M","5M"] as const).map(tf => (
@@ -741,32 +756,71 @@ function PriceHistoryChart({ pair }: { rows: SheetRow[]; pair: string }) {
             }}>{tf}</button>
           ))}
         </div>
-        <button onClick={() => setViewMode(v => v === "candles" ? "line" : "candles")} style={{
-          fontSize: 9, fontWeight: 700, padding: "4px 10px",
-          textTransform: "uppercase", letterSpacing: "0.08em",
-          background: "var(--bg-panel-alt)", border: "1px solid var(--border-medium)",
-          borderRadius: 8, color: "var(--text-secondary)", cursor: "pointer",
-        }}>{viewMode}</button>
-      </div>
-      {/* Row 2: indicator toggles */}
-      <div style={{ display: "flex", gap: 4, marginBottom: 4 }}>
-        {IND_DEFS.map(({ key, label, color }) => {
-          const on = activeInds.has(key);
-          return (
-            <button key={key} onClick={() => toggleInd(key)} style={{
-              fontSize: 9, fontWeight: 700, padding: "3px 9px",
-              textTransform: "uppercase", letterSpacing: "0.08em",
-              background: on ? `${color}18` : "var(--bg-panel-alt)",
-              border: `1px solid ${on ? color : "var(--border-medium)"}`,
-              color: on ? color : "var(--text-secondary)",
-              borderRadius: 8, cursor: "pointer",
-              display: "flex", alignItems: "center", gap: 5,
-            }}>
-              {on && <span style={{ width: 10, height: 2, background: color, borderRadius: 1, display: "inline-block", flexShrink: 0 }} />}
-              {label}
+        <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+          {/* Indicators button + dropdown */}
+          <div style={{ position: "relative" }} data-ind-panel>
+            <button
+              ref={indBtnRef}
+              onClick={() => setShowIndPanel(v => !v)}
+              style={{
+                fontSize: 9, fontWeight: 700, padding: "4px 10px",
+                textTransform: "uppercase", letterSpacing: "0.08em",
+                background: anyActive ? "var(--accent-dim)"    : "var(--bg-panel-alt)",
+                border:     anyActive ? "1px solid var(--accent-border)" : "1px solid var(--border-medium)",
+                color:      anyActive ? "var(--accent-text)"   : "var(--text-secondary)",
+                borderRadius: 8, cursor: "pointer",
+              }}
+            >
+              Indicators{anyActive ? ` (${activeInds.size})` : ""}
             </button>
-          );
-        })}
+            {showIndPanel && (
+              <div style={{
+                position: "absolute", top: "calc(100% + 6px)", right: 0, zIndex: 50,
+                background: "var(--bg-panel)", border: "1px solid var(--border-medium)",
+                borderRadius: 10, padding: "8px 0", minWidth: 180,
+                boxShadow: "0 8px 24px rgba(0,0,0,0.45)",
+              }}>
+                <div style={{ padding: "4px 12px 8px", fontSize: 9, fontWeight: 800,
+                  textTransform: "uppercase", letterSpacing: "0.1em", color: "var(--text-muted)" }}>
+                  Indicators
+                </div>
+                {IND_DEFS.map(({ key, label, color }) => {
+                  const on = activeInds.has(key);
+                  return (
+                    <button key={key} onClick={() => toggleInd(key)} style={{
+                      width: "100%", display: "flex", alignItems: "center", gap: 10,
+                      padding: "7px 12px", background: "none", border: "none",
+                      cursor: "pointer", textAlign: "left",
+                    }}>
+                      {/* colour swatch / checkbox */}
+                      <span style={{
+                        width: 14, height: 14, borderRadius: 3, flexShrink: 0,
+                        border: `2px solid ${color}`,
+                        background: on ? color : "transparent",
+                        display: "flex", alignItems: "center", justifyContent: "center",
+                      }}>
+                        {on && <span style={{ width: 6, height: 6, borderRadius: 1, background: "#0f1117" }} />}
+                      </span>
+                      {/* colour line preview */}
+                      <span style={{ width: 18, height: 2, background: color, borderRadius: 1, flexShrink: 0 }} />
+                      <span style={{ fontSize: 11, fontWeight: 600,
+                        color: on ? "var(--text-primary)" : "var(--text-secondary)" }}>
+                        {label}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+          {/* View mode toggle */}
+          <button onClick={() => setViewMode(v => v === "candles" ? "line" : "candles")} style={{
+            fontSize: 9, fontWeight: 700, padding: "4px 10px",
+            textTransform: "uppercase", letterSpacing: "0.08em",
+            background: "var(--bg-panel-alt)", border: "1px solid var(--border-medium)",
+            borderRadius: 8, color: "var(--text-secondary)", cursor: "pointer",
+          }}>{viewMode}</button>
+        </div>
       </div>
       <div style={{ borderRadius: 14, overflow: "hidden", position: "relative" }}>
         {tfLoading && (
