@@ -673,25 +673,32 @@ function PriceHistoryChart({ pair }: { rows: SheetRow[]; pair: string }) {
           - Math.floor(new Date(candles[n - 2].timestamp).getTime() / 1000)
         : 86400;
 
-      // Build cloud data shifted +26 bars
-      const bullFill: { time: UTCTimestamp; value: number }[] = [];
-      const bullMask: { time: UTCTimestamp; value: number }[] = [];
-      const bearFill: { time: UTCTimestamp; value: number }[] = [];
-      const bearMask: { time: UTCTimestamp; value: number }[] = [];
+      // All cloud series cover EVERY point — value controls visibility, not presence.
+      // bullFill = upper when bullish, else = lower (zero-width → invisible)
+      // bearFill = upper when bearish, else = lower (zero-width → invisible)
+      // mask     = lower always (cancels fill below cloud floor, low opacity to keep candles visible)
+      const bullFillData: { time: UTCTimestamp; value: number }[] = [];
+      const bearFillData: { time: UTCTimestamp; value: number }[] = [];
+      const maskData:     { time: UTCTimestamp; value: number }[] = [];
+      const spanAData:    { time: UTCTimestamp; value: number }[] = [];
+      const spanBData:    { time: UTCTimestamp; value: number }[] = [];
+
       for (let i = 25; i < n; i++) {
         const a = spanA[i], b = spanB[i];
         if (a === null || b === null) continue;
         const t: UTCTimestamp = i + OFFSET < n
           ? times[i + OFFSET]
           : (times[n - 1] + (i + OFFSET - n + 1) * candleDuration) as UTCTimestamp;
-        if (a >= b) {
-          bullFill.push({ time: t, value: a });
-          bullMask.push({ time: t, value: b });
-        } else {
-          bearFill.push({ time: t, value: b });
-          bearMask.push({ time: t, value: a });
-        }
+        const upper = Math.max(a, b);
+        const lower = Math.min(a, b);
+        const bullish = a >= b;
+        bullFillData.push({ time: t, value: bullish ? upper : lower });
+        bearFillData.push({ time: t, value: bullish ? lower : upper });
+        maskData.push({ time: t, value: lower });
+        spanAData.push({ time: t, value: a });
+        spanBData.push({ time: t, value: b });
       }
+
       // Chikou (close shifted -26 bars)
       const chikouData: { time: UTCTimestamp; value: number }[] = [];
       for (let i = OFFSET; i < n; i++)
@@ -710,11 +717,12 @@ function PriceHistoryChart({ pair }: { rows: SheetRow[]; pair: string }) {
       };
 
       const bullF = mkArea("rgba(38,166,154,0.2)", "rgba(38,166,154,0.2)");
-      const bullM = mkArea("rgba(15,17,23,0.85)",  "rgba(15,17,23,0.85)");
       const bearF = mkArea("rgba(239,83,80,0.2)",  "rgba(239,83,80,0.2)");
-      const bearM = mkArea("rgba(15,17,23,0.85)",  "rgba(15,17,23,0.85)");
-      if (bullFill.length) { bullF.setData(bullFill); bullM.setData(bullMask); }
-      if (bearFill.length) { bearF.setData(bearFill); bearM.setData(bearMask); }
+      // Lighter mask so candles below the cloud remain visible
+      const cloudMask = mkArea("rgba(15,17,23,0.6)", "rgba(15,17,23,0.6)");
+      bullF.setData(bullFillData);
+      bearF.setData(bearFillData);
+      cloudMask.setData(maskData);
 
       const tenkanS = mkLine("#ef5350", 1, LineStyle.Solid);
       const kijunS  = mkLine("#1565c0", 1, LineStyle.Solid);
@@ -724,19 +732,11 @@ function PriceHistoryChart({ pair }: { rows: SheetRow[]; pair: string }) {
 
       tenkanS.setData(toData(tenkan));
       kijunS.setData(toData(kijun));
-      spanAS.setData(bullFill.length || bearFill.length
-        ? [...bullFill.map(p => ({ time: p.time, value: p.value })),
-           ...bearFill.map(p => ({ time: p.time, value: p.value }))]
-            .sort((a, b) => (a.time as number) - (b.time as number))
-        : []);
-      spanBS.setData(bullMask.length || bearMask.length
-        ? [...bullMask.map(p => ({ time: p.time, value: p.value })),
-           ...bearMask.map(p => ({ time: p.time, value: p.value }))]
-            .sort((a, b) => (a.time as number) - (b.time as number))
-        : []);
+      spanAS.setData(spanAData);
+      spanBS.setData(spanBData);
       chikouS.setData(chikouData);
 
-      indSeriesRef.current.ichi = [bullF, bullM, bearF, bearM, tenkanS, kijunS, spanAS, spanBS, chikouS];
+      indSeriesRef.current.ichi = [bullF, bearF, cloudMask, tenkanS, kijunS, spanAS, spanBS, chikouS];
     } else {
       const period = ({ ema9: 9, ema20: 20, ema50: 50, ema200: 200 } as Record<string, number>)[key]!;
       const color  = IND_DEFS.find(d => d.key === key)!.color;
