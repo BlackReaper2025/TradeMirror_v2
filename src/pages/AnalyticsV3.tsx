@@ -615,15 +615,34 @@ function PriceHistoryChart({ pair }: { rows: SheetRow[]; pair: string }) {
 
     if (key === "bb") {
       const { upper, middle, lower } = computeBB(closes);
+
+      // Fill layer: blue tint from upper band to chart bottom (15% opacity)
+      const fillArea = chart.addSeries(AreaSeries, {
+        lineColor: "rgba(0,0,0,0)", lineWidth: 1,
+        topColor: "rgba(100,181,246,0.15)", bottomColor: "rgba(100,181,246,0.15)",
+      });
+      fillArea.applyOptions({ lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false });
+      fillArea.setData(toData(upper));
+
+      // Mask layer: background colour from lower band to chart bottom (85% opacity)
+      // Cancels the fill below the lower band while keeping candles ~visible
+      const maskArea = chart.addSeries(AreaSeries, {
+        lineColor: "rgba(0,0,0,0)", lineWidth: 1,
+        topColor: "rgba(15,17,23,0.85)", bottomColor: "rgba(15,17,23,0.85)",
+      });
+      maskArea.applyOptions({ lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false });
+      maskArea.setData(toData(lower));
+
+      // Border lines
       const mk = (color: string, style: LineStyle) => {
         const s = chart.addSeries(LineSeries, { color, lineWidth: 1, lineStyle: style });
         s.applyOptions(indOpts); return s;
       };
-      const uS = mk("rgba(100,181,246,0.8)",  LineStyle.Dashed);
-      const mS = mk("rgba(100,181,246,0.45)", LineStyle.Solid);
-      const lS = mk("rgba(100,181,246,0.8)",  LineStyle.Dashed);
+      const uS = mk("rgba(100,181,246,0.85)", LineStyle.Solid);
+      const mS = mk("rgba(100,181,246,0.5)",  LineStyle.Dashed);
+      const lS = mk("rgba(100,181,246,0.85)", LineStyle.Solid);
       uS.setData(toData(upper)); mS.setData(toData(middle)); lS.setData(toData(lower));
-      indSeriesRef.current.bb = [uS, mS, lS];
+      indSeriesRef.current.bb = [fillArea, maskArea, uS, mS, lS];
     } else {
       const period = ({ ema9: 9, ema20: 20, ema50: 50, ema200: 200 } as Record<string, number>)[key]!;
       const color  = IND_DEFS.find(d => d.key === key)!.color;
