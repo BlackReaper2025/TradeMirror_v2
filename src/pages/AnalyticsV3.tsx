@@ -522,10 +522,11 @@ function CandleShape({ x, width, payload, background, yDomain }: any) {
 
 // ─── Indicator helpers ─────────────────────────────────────────────────────────
 
-type IndKey = "bb" | "ema9" | "ema20" | "ema50" | "ema200";
+type IndKey = "bb" | "ichi" | "ema9" | "ema20" | "ema50" | "ema200";
 
 const IND_DEFS: { key: IndKey; label: string; color: string }[] = [
   { key: "bb",    label: "BB(20,2)", color: "#64b5f6" },
+  { key: "ichi",  label: "Ichimoku", color: "#26a69a" },
   { key: "ema9",  label: "EMA 9",   color: "#ff9f0a" },
   { key: "ema20", label: "EMA 20",  color: "#30d158" },
   { key: "ema50", label: "EMA 50",  color: "#ff6b6b" },
@@ -553,6 +554,24 @@ function computeBB(closes: number[], period = 20, mult = 2) {
     middle[i] = sma; upper[i] = sma + mult * std; lower[i] = sma - mult * std;
   }
   return { upper, middle, lower };
+}
+
+function computeIchimoku(highs: number[], lows: number[]) {
+  const n = highs.length;
+  const hh = (from: number, to: number) => Math.max(...highs.slice(from, to + 1));
+  const ll = (from: number, to: number) => Math.min(...lows.slice(from, to + 1));
+  const tenkan:  (number | null)[] = Array(n).fill(null);
+  const kijun:   (number | null)[] = Array(n).fill(null);
+  const spanA:   (number | null)[] = Array(n).fill(null);
+  const spanB:   (number | null)[] = Array(n).fill(null);
+  for (let i = 8;  i < n; i++) tenkan[i] = (hh(i - 8, i)  + ll(i - 8, i))  / 2;
+  for (let i = 25; i < n; i++) kijun[i]  = (hh(i - 25, i) + ll(i - 25, i)) / 2;
+  for (let i = 25; i < n; i++) {
+    if (tenkan[i] !== null && kijun[i] !== null)
+      spanA[i] = (tenkan[i]! + kijun[i]!) / 2;
+  }
+  for (let i = 51; i < n; i++) spanB[i] = (hh(i - 51, i) + ll(i - 51, i)) / 2;
+  return { tenkan, kijun, spanA, spanB };
 }
 
 // ─── Price history chart ────────────────────────────────────────────────────────
@@ -643,6 +662,81 @@ function PriceHistoryChart({ pair }: { rows: SheetRow[]; pair: string }) {
       const lS = mk("rgba(100,181,246,0.85)", LineStyle.Solid);
       uS.setData(toData(upper)); mS.setData(toData(middle)); lS.setData(toData(lower));
       indSeriesRef.current.bb = [fillArea, maskArea, uS, mS, lS];
+    } else if (key === "ichi") {
+      const highs = candles.map(r => r.high);
+      const lows  = candles.map(r => r.low);
+      const { tenkan, kijun, spanA, spanB } = computeIchimoku(highs, lows);
+      const OFFSET = 26;
+      const n = candles.length;
+      const candleDuration = n > 1
+        ? Math.floor(new Date(candles[n - 1].timestamp).getTime() / 1000)
+          - Math.floor(new Date(candles[n - 2].timestamp).getTime() / 1000)
+        : 86400;
+
+      // Build cloud data shifted +26 bars
+      const bullFill: { time: UTCTimestamp; value: number }[] = [];
+      const bullMask: { time: UTCTimestamp; value: number }[] = [];
+      const bearFill: { time: UTCTimestamp; value: number }[] = [];
+      const bearMask: { time: UTCTimestamp; value: number }[] = [];
+      for (let i = 25; i < n; i++) {
+        const a = spanA[i], b = spanB[i];
+        if (a === null || b === null) continue;
+        const t: UTCTimestamp = i + OFFSET < n
+          ? times[i + OFFSET]
+          : (times[n - 1] + (i + OFFSET - n + 1) * candleDuration) as UTCTimestamp;
+        if (a >= b) {
+          bullFill.push({ time: t, value: a });
+          bullMask.push({ time: t, value: b });
+        } else {
+          bearFill.push({ time: t, value: b });
+          bearMask.push({ time: t, value: a });
+        }
+      }
+      // Chikou (close shifted -26 bars)
+      const chikouData: { time: UTCTimestamp; value: number }[] = [];
+      for (let i = OFFSET; i < n; i++)
+        chikouData.push({ time: times[i - OFFSET], value: closes[i] });
+
+      const mkArea = (top: string, bot: string) => {
+        const s = chart.addSeries(AreaSeries, {
+          lineColor: "rgba(0,0,0,0)", lineWidth: 1, topColor: top, bottomColor: bot,
+        });
+        s.applyOptions({ lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false });
+        return s;
+      };
+      const mkLine = (color: string, width: 1 | 2, style: LineStyle) => {
+        const s = chart.addSeries(LineSeries, { color, lineWidth: width, lineStyle: style });
+        s.applyOptions(indOpts); return s;
+      };
+
+      const bullF = mkArea("rgba(38,166,154,0.2)", "rgba(38,166,154,0.2)");
+      const bullM = mkArea("rgba(15,17,23,0.85)",  "rgba(15,17,23,0.85)");
+      const bearF = mkArea("rgba(239,83,80,0.2)",  "rgba(239,83,80,0.2)");
+      const bearM = mkArea("rgba(15,17,23,0.85)",  "rgba(15,17,23,0.85)");
+      if (bullFill.length) { bullF.setData(bullFill); bullM.setData(bullMask); }
+      if (bearFill.length) { bearF.setData(bearFill); bearM.setData(bearMask); }
+
+      const tenkanS = mkLine("#ef5350", 1, LineStyle.Solid);
+      const kijunS  = mkLine("#1565c0", 1, LineStyle.Solid);
+      const spanAS  = mkLine("rgba(38,166,154,0.8)", 1, LineStyle.Solid);
+      const spanBS  = mkLine("rgba(239,83,80,0.8)",  1, LineStyle.Solid);
+      const chikouS = mkLine("#9c27b0", 1, LineStyle.Dashed);
+
+      tenkanS.setData(toData(tenkan));
+      kijunS.setData(toData(kijun));
+      spanAS.setData(bullFill.length || bearFill.length
+        ? [...bullFill.map(p => ({ time: p.time, value: p.value })),
+           ...bearFill.map(p => ({ time: p.time, value: p.value }))]
+            .sort((a, b) => (a.time as number) - (b.time as number))
+        : []);
+      spanBS.setData(bullMask.length || bearMask.length
+        ? [...bullMask.map(p => ({ time: p.time, value: p.value })),
+           ...bearMask.map(p => ({ time: p.time, value: p.value }))]
+            .sort((a, b) => (a.time as number) - (b.time as number))
+        : []);
+      chikouS.setData(chikouData);
+
+      indSeriesRef.current.ichi = [bullF, bullM, bearF, bearM, tenkanS, kijunS, spanAS, spanBS, chikouS];
     } else {
       const period = ({ ema9: 9, ema20: 20, ema50: 50, ema200: 200 } as Record<string, number>)[key]!;
       const color  = IND_DEFS.find(d => d.key === key)!.color;
