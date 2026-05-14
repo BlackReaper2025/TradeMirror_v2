@@ -95,6 +95,60 @@ pub fn fetch_raw_candles(
     Ok(candles)
 }
 
+pub fn fetch_raw_candles_tf(
+    api_key:     &str,
+    instrument:  &str,
+    granularity: &str,
+    count:       u32,
+) -> Result<Vec<RawCandle>, String> {
+    let url = format!(
+        "{}/instruments/{}/candles?granularity={}&count={}&price=M",
+        BASE_URL, instrument, granularity, count,
+    );
+
+    let response = reqwest::blocking::Client::new()
+        .get(&url)
+        .header("Authorization", format!("Bearer {}", api_key))
+        .header("Accept-Datetime-Format", "RFC3339")
+        .send()
+        .map_err(|e| format!("OANDA request failed: {}", e))?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body   = response.text().unwrap_or_default();
+        return Err(format!("OANDA error {}: {}", status, body));
+    }
+
+    let parsed: OandaResponse = response.json()
+        .map_err(|e| format!("OANDA parse error: {}", e))?;
+
+    let candles = parsed.candles
+        .into_iter()
+        .map(|c| {
+            let raw_date = c.time.get(..10).unwrap_or(&c.time);
+            let date = if granularity == "D" {
+                let utc_hour: u32 = c.time.get(11..13)
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(0);
+                if utc_hour >= 12 { advance_date(raw_date) } else { raw_date.to_string() }
+            } else {
+                raw_date.to_string()
+            };
+            RawCandle {
+                date,
+                timestamp: c.time,
+                open:   parse_f64(&c.mid.o),
+                high:   parse_f64(&c.mid.h),
+                low:    parse_f64(&c.mid.l),
+                close:  parse_f64(&c.mid.c),
+                volume: c.volume as f64,
+            }
+        })
+        .collect();
+
+    Ok(candles)
+}
+
 fn parse_f64(s: &str) -> f64 {
     s.parse().unwrap_or(0.0)
 }

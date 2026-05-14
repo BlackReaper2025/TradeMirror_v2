@@ -315,6 +315,36 @@ fn get_ichi_rows_v3(app: tauri::AppHandle) -> Result<Vec<CandleV3>, String> {
     ).unwrap_or_default())
 }
 
+// ─── Live candles for any timeframe (price chart) ────────────────────────────
+
+#[tauri::command]
+fn get_live_candles(pair: String, tf: String) -> Result<Vec<oanda_client::RawCandle>, String> {
+    let contents = std::fs::read_to_string(OANDA_KEY_PATH)
+        .map_err(|e| format!("key file: {}", e))?;
+    let api_key = contents.lines().next().unwrap_or("").trim().to_string();
+    if api_key.is_empty() { return Err("OANDA key file is empty".into()); }
+
+    let instrument = if pair.contains('_') {
+        pair.clone()
+    } else if pair.contains('/') {
+        pair.replace('/', "_")
+    } else {
+        format!("{}_{}", &pair[..3], &pair[3..])
+    };
+
+    let granularity = match tf.as_str() {
+        "1W"  => "W",
+        "1D"  => "D",
+        "4H"  => "H4",
+        "1H"  => "H1",
+        "15M" => "M15",
+        "5M"  => "M5",
+        _     => return Err(format!("Unknown timeframe: {}", tf)),
+    };
+
+    oanda_client::fetch_raw_candles_tf(&api_key, &instrument, granularity, 200)
+}
+
 // ─── App entry point ──────────────────────────────────────────────────────────
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -382,7 +412,7 @@ pub fn run() {
 
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![list_images, read_credentials_file, write_text_file, get_candles_v3, get_ichi_rows_v3, sync_oanda_candles_v3, send_test_notification, get_forex_news, get_live_price])
+        .invoke_handler(tauri::generate_handler![list_images, read_credentials_file, write_text_file, get_candles_v3, get_ichi_rows_v3, sync_oanda_candles_v3, send_test_notification, get_forex_news, get_live_price, get_live_candles])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

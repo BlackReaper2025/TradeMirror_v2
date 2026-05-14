@@ -53,6 +53,11 @@ interface RawCandleV3 {
   inside_bar: boolean; rsi_divergence: boolean;
 }
 
+interface RawCandleTf {
+  date: string; timestamp: string;
+  open: number; high: number; low: number; close: number; volume: number;
+}
+
 // Maps a raw backend row to SheetRow shape (for panel analysis) and EurusdSnapshot shape (for last row).
 function mapToSheetRow(c: RawCandleV3) {
   return {
@@ -362,6 +367,16 @@ function fmtDate(d: string) {
   return `${parseInt(m)}/${parseInt(day)}`;
 }
 
+function fmtTfLabel(timestamp: string, tf: string): string {
+  const date = timestamp.slice(0, 10);
+  const time = timestamp.slice(11, 16);
+  const [, m, day] = date.split("-");
+  const mmdd = `${parseInt(m)}/${parseInt(day)}`;
+  if (tf === "1W" || tf === "1D") return mmdd;
+  if (tf === "4H" || tf === "1H") return `${mmdd} ${time}`;
+  return time;
+}
+
 function isForexOpen(): boolean {
   const now = new Date();
   const day = now.getUTCDay();
@@ -511,28 +526,44 @@ function CandleShape({ x, width, payload, background, yDomain }: any) {
 
 function PriceHistoryChart({ rows, pair }: { rows: SheetRow[]; pair: string }) {
   const WINDOW = 90;
-  const slice  = rows.slice(-WINDOW);
-  const [viewMode, setViewMode] = useState<"candles" | "line">("candles");
-  const [chartTf,  setChartTf]  = useState<"1W" | "1D" | "4H" | "1H" | "15M" | "5M">("1D");
+  const [viewMode,  setViewMode]  = useState<"candles" | "line">("candles");
+  const [chartTf,   setChartTf]   = useState<"1W" | "1D" | "4H" | "1H" | "15M" | "5M">("1D");
+  const [tfRows,    setTfRows]    = useState<RawCandleTf[]>([]);
+  const [tfLoading, setTfLoading] = useState(false);
 
-  const livePrice = rows.length > 0 ? rows[rows.length - 1].close : null;
-  const prevClose = rows.length > 1 ? rows[rows.length - 2].close : null;
+  useEffect(() => {
+    setTfLoading(true);
+    setTfRows([]);
+    invoke<RawCandleTf[]>("get_live_candles", { pair, tf: chartTf })
+      .then(candles => setTfRows(candles))
+      .catch(() => {})
+      .finally(() => setTfLoading(false));
+  }, [chartTf, pair]);
+
+  const slice = tfRows.slice(-WINDOW);
+
+  const livePrice = slice.length > 0 ? slice[slice.length - 1].close
+                  : rows.length  > 0 ? rows[rows.length - 1].close : null;
+  const prevClose = slice.length > 1 ? slice[slice.length - 2].close
+                  : rows.length  > 1 ? rows[rows.length - 2].close : null;
   const change    = livePrice != null && prevClose != null ? livePrice - prevClose : 0;
   const changePct = prevClose ? (change / prevClose) * 100 : 0;
   const isUp      = change >= 0;
   const accent    = isUp ? "#60a5fa" : "#a78bfa";
 
   const data = slice.map(r => ({
-    date:  fmtDate(r.date),
+    date:  fmtTfLabel(r.timestamp, chartTf),
     open:  r.open,
     high:  r.high,
     low:   r.low,
     close: r.close,
   }));
 
-  const pad  = (Math.max(...slice.map(r => r.high)) - Math.min(...slice.map(r => r.low))) * 0.06;
-  const yMin = Math.min(...slice.map(r => r.low))  - pad;
-  const yMax = Math.max(...slice.map(r => r.high)) + pad;
+  const pad  = slice.length > 0
+    ? (Math.max(...slice.map(r => r.high)) - Math.min(...slice.map(r => r.low))) * 0.06
+    : 0.002;
+  const yMin = slice.length > 0 ? Math.min(...slice.map(r => r.low))  - pad : 1.0;
+  const yMax = slice.length > 0 ? Math.max(...slice.map(r => r.high)) + pad : 1.1;
 
   const legendItems = viewMode === "candles"
     ? [{ color: "#60a5fa", label: "Bullish" }, { color: "#a78bfa", label: "Bearish" }]
@@ -576,9 +607,14 @@ function PriceHistoryChart({ rows, pair }: { rows: SheetRow[]; pair: string }) {
         </button>
       </div>
       <div style={{ borderRadius: 14, overflow: "hidden", position: "relative" }}>
+        {tfLoading && (
+          <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", zIndex: 10, pointerEvents: "none" }}>
+            <span style={{ fontSize: 11, color: "var(--text-muted)", letterSpacing: "0.05em" }}>Loading…</span>
+          </div>
+        )}
 
         {/* Chart */}
-        <div style={{ height: 480, padding: "8px 0 0" }}>
+        <div style={{ height: 480, padding: "8px 0 0", opacity: tfLoading ? 0.3 : 1 }}>
           <ResponsiveContainer width="100%" height="100%">
             <ComposedChart data={data} margin={{ top: 6, right: 16, bottom: 4, left: 4 }}>
               <defs>
