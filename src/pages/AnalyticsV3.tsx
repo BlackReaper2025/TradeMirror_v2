@@ -28,6 +28,11 @@ import { playAlertSound } from "../lib/alertSound";
 import type { AlertSound } from "../lib/alertSound";
 import { AlertsPanel, type Alert } from "../components/panels/AlertsPanel";
 import { invoke }                from "@tauri-apps/api/core";
+import {
+  createChart, CandlestickSeries, AreaSeries,
+  ColorType, CrosshairMode, LineStyle,
+} from "lightweight-charts";
+import type { IChartApi, UTCTimestamp } from "lightweight-charts";
 const ALERTS_JSON_PATH = "D:\\Dev\\TradeMirror_v2\\TradeMirror\\TradeMirror_Alert_Test\\alerts.json";
 
 // ─── V3 backend candle type (Rust snake_case serialization) ──────────────────
@@ -367,15 +372,6 @@ function fmtDate(d: string) {
   return `${parseInt(m)}/${parseInt(day)}`;
 }
 
-function fmtTfLabel(timestamp: string, tf: string): string {
-  const date = timestamp.slice(0, 10);
-  const time = timestamp.slice(11, 16);
-  const [, m, day] = date.split("-");
-  const mmdd = `${parseInt(m)}/${parseInt(day)}`;
-  if (tf === "1W" || tf === "1D") return mmdd;
-  if (tf === "4H" || tf === "1H") return `${mmdd} ${time}`;
-  return time;
-}
 
 function isForexOpen(): boolean {
   const now = new Date();
@@ -525,12 +521,21 @@ function CandleShape({ x, width, payload, background, yDomain }: any) {
 }
 
 function PriceHistoryChart({ rows, pair }: { rows: SheetRow[]; pair: string }) {
-  const WINDOW = 90;
   const [viewMode,  setViewMode]  = useState<"candles" | "line">("candles");
   const [chartTf,   setChartTf]   = useState<"1W" | "1D" | "4H" | "1H" | "15M" | "5M">("1D");
   const [tfRows,    setTfRows]    = useState<RawCandleTf[]>([]);
   const [tfLoading, setTfLoading] = useState(false);
 
+  const containerRef = useRef<HTMLDivElement>(null);
+  const chartRef     = useRef<IChartApi | null>(null);
+  const seriesRef    = useRef<any>(null);
+  const tfRowsRef    = useRef<RawCandleTf[]>([]);
+  const viewModeRef  = useRef(viewMode);
+
+  useEffect(() => { tfRowsRef.current = tfRows; },  [tfRows]);
+  useEffect(() => { viewModeRef.current = viewMode; }, [viewMode]);
+
+  // Fetch on tf / pair change
   useEffect(() => {
     setTfLoading(true);
     setTfRows([]);
@@ -540,71 +545,116 @@ function PriceHistoryChart({ rows, pair }: { rows: SheetRow[]; pair: string }) {
       .finally(() => setTfLoading(false));
   }, [chartTf, pair]);
 
-  const slice = tfRows.slice(-WINDOW);
+  const applyData = useCallback((candles: RawCandleTf[], mode: string) => {
+    const chart  = chartRef.current;
+    const series = seriesRef.current;
+    if (!chart || !series || candles.length === 0) return;
+    if (mode === "candles") {
+      series.setData(candles.map(r => ({
+        time:  Math.floor(new Date(r.timestamp).getTime() / 1000) as UTCTimestamp,
+        open: r.open, high: r.high, low: r.low, close: r.close,
+      })));
+    } else {
+      series.setData(candles.map(r => ({
+        time:  Math.floor(new Date(r.timestamp).getTime() / 1000) as UTCTimestamp,
+        value: r.close,
+      })));
+    }
+    const last = candles[candles.length - 1];
+    if (last) {
+      const isUp = candles.length > 1 ? last.close >= candles[candles.length - 2].close : true;
+      series.createPriceLine({
+        price: last.close,
+        color: isUp ? "#60a5fa" : "#a78bfa",
+        lineWidth: 1,
+        lineStyle: LineStyle.Dashed,
+        axisLabelVisible: true,
+        title: "",
+      });
+    }
+    chart.timeScale().fitContent();
+  }, []);
 
-  const livePrice = slice.length > 0 ? slice[slice.length - 1].close
-                  : rows.length  > 0 ? rows[rows.length - 1].close : null;
-  const prevClose = slice.length > 1 ? slice[slice.length - 2].close
-                  : rows.length  > 1 ? rows[rows.length - 2].close : null;
-  const change    = livePrice != null && prevClose != null ? livePrice - prevClose : 0;
-  const changePct = prevClose ? (change / prevClose) * 100 : 0;
-  const isUp      = change >= 0;
-  const accent    = isUp ? "#60a5fa" : "#a78bfa";
+  const createSeries = useCallback((chart: IChartApi, mode: string) => {
+    if (seriesRef.current) { chart.removeSeries(seriesRef.current); seriesRef.current = null; }
+    if (mode === "candles") {
+      const s = chart.addSeries(CandlestickSeries, {
+        upColor: "#60a5fa", downColor: "#a78bfa",
+        borderUpColor: "#60a5fa", borderDownColor: "#a78bfa",
+        wickUpColor:   "#60a5fa", wickDownColor:   "#a78bfa",
+      });
+      s.applyOptions({ priceFormat: { type: "price", precision: 5, minMove: 0.00001 } });
+      seriesRef.current = s;
+    } else {
+      const s = chart.addSeries(AreaSeries, {
+        lineColor: "#60a5fa", lineWidth: 2,
+        topColor: "rgba(96,165,250,0.18)", bottomColor: "rgba(96,165,250,0)",
+      });
+      s.applyOptions({ priceFormat: { type: "price", precision: 5, minMove: 0.00001 } });
+      seriesRef.current = s;
+    }
+    if (tfRowsRef.current.length > 0) applyData(tfRowsRef.current, mode);
+  }, [applyData]);
 
-  const data = slice.map(r => ({
-    date:  fmtTfLabel(r.timestamp, chartTf),
-    open:  r.open,
-    high:  r.high,
-    low:   r.low,
-    close: r.close,
-  }));
+  // Init chart once
+  useEffect(() => {
+    if (!containerRef.current) return;
+    const chart = createChart(containerRef.current, {
+      layout: {
+        background: { type: ColorType.Solid, color: "#0f1117" },
+        textColor: "#94a3b8",
+        fontSize: 11,
+      },
+      grid: {
+        vertLines: { color: "rgba(148,163,184,0.06)" },
+        horzLines: { color: "rgba(148,163,184,0.06)" },
+      },
+      crosshair: { mode: CrosshairMode.Normal },
+      timeScale: { borderColor: "rgba(148,163,184,0.15)", timeVisible: true, secondsVisible: false },
+      rightPriceScale: { borderColor: "rgba(148,163,184,0.15)", scaleMargins: { top: 0.08, bottom: 0.08 } },
+    });
+    chartRef.current = chart;
+    createSeries(chart, viewModeRef.current);
+    const ro = new ResizeObserver(() => {
+      if (containerRef.current) chart.applyOptions({ width: containerRef.current.clientWidth });
+    });
+    ro.observe(containerRef.current);
+    return () => { ro.disconnect(); chart.remove(); chartRef.current = null; seriesRef.current = null; };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const pad  = slice.length > 0
-    ? (Math.max(...slice.map(r => r.high)) - Math.min(...slice.map(r => r.low))) * 0.06
-    : 0.002;
-  const yMin = slice.length > 0 ? Math.min(...slice.map(r => r.low))  - pad : 1.0;
-  const yMax = slice.length > 0 ? Math.max(...slice.map(r => r.high)) + pad : 1.1;
+  // Recreate series on viewMode change
+  useEffect(() => {
+    if (!chartRef.current) return;
+    createSeries(chartRef.current, viewMode);
+  }, [viewMode, createSeries]);
 
-  const legendItems = viewMode === "candles"
-    ? [{ color: "#60a5fa", label: "Bullish" }, { color: "#a78bfa", label: "Bearish" }]
-    : [{ color: accent,    label: "Close"   }];
+  // Apply data when tfRows loads
+  useEffect(() => {
+    if (tfRows.length === 0) return;
+    applyData(tfRows, viewModeRef.current);
+  }, [tfRows, applyData]);
 
   return (
     <div style={{ width: "66.667%", marginBottom: 10, flexShrink: 0 }}>
-      {/* Button row above panel */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
-        {/* Timeframe buttons */}
         <div style={{ display: "flex", gap: 4 }}>
           {(["1W","1D","4H","1H","15M","5M"] as const).map(tf => (
-            <button
-              key={tf}
-              onClick={() => setChartTf(tf)}
-              style={{
-                fontSize: 9, fontWeight: 700, padding: "4px 10px",
-                textTransform: "uppercase", letterSpacing: "0.08em",
-                background: chartTf === tf ? "var(--accent-dim)"    : "var(--bg-panel-alt)",
-                border:     chartTf === tf ? "1px solid var(--accent-border)" : "1px solid var(--border-medium)",
-                color:      chartTf === tf ? "var(--accent-text)"   : "var(--text-secondary)",
-                borderRadius: 8, cursor: "pointer",
-              }}
-            >
-              {tf}
-            </button>
+            <button key={tf} onClick={() => setChartTf(tf)} style={{
+              fontSize: 9, fontWeight: 700, padding: "4px 10px",
+              textTransform: "uppercase", letterSpacing: "0.08em",
+              background: chartTf === tf ? "var(--accent-dim)"    : "var(--bg-panel-alt)",
+              border:     chartTf === tf ? "1px solid var(--accent-border)" : "1px solid var(--border-medium)",
+              color:      chartTf === tf ? "var(--accent-text)"   : "var(--text-secondary)",
+              borderRadius: 8, cursor: "pointer",
+            }}>{tf}</button>
           ))}
         </div>
-        {/* Candles / Line toggle */}
-        <button
-          onClick={() => setViewMode(v => v === "candles" ? "line" : "candles")}
-          style={{
-            fontSize: 9, fontWeight: 700, padding: "4px 10px",
-            textTransform: "uppercase", letterSpacing: "0.08em",
-            background: "var(--bg-panel-alt)",
-            border: "1px solid var(--border-medium)",
-            borderRadius: 8, color: "var(--text-secondary)", cursor: "pointer",
-          }}
-        >
-          {viewMode}
-        </button>
+        <button onClick={() => setViewMode(v => v === "candles" ? "line" : "candles")} style={{
+          fontSize: 9, fontWeight: 700, padding: "4px 10px",
+          textTransform: "uppercase", letterSpacing: "0.08em",
+          background: "var(--bg-panel-alt)", border: "1px solid var(--border-medium)",
+          borderRadius: 8, color: "var(--text-secondary)", cursor: "pointer",
+        }}>{viewMode}</button>
       </div>
       <div style={{ borderRadius: 14, overflow: "hidden", position: "relative" }}>
         {tfLoading && (
@@ -612,62 +662,7 @@ function PriceHistoryChart({ rows, pair }: { rows: SheetRow[]; pair: string }) {
             <span style={{ fontSize: 11, color: "var(--text-muted)", letterSpacing: "0.05em" }}>Loading…</span>
           </div>
         )}
-
-        {/* Chart */}
-        <div style={{ height: 480, padding: "8px 0 0", opacity: tfLoading ? 0.3 : 1 }}>
-          <ResponsiveContainer width="100%" height="100%">
-            <ComposedChart data={data} margin={{ top: 6, right: 16, bottom: 4, left: 4 }}>
-              <defs>
-                <linearGradient id="phGrad" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%"  stopColor={accent} stopOpacity={0.2} />
-                  <stop offset="95%" stopColor={accent} stopOpacity={0}   />
-                </linearGradient>
-              </defs>
-              <XAxis
-                dataKey="date"
-                tick={{ fontSize: 8, fill: "var(--text-muted)" }}
-                tickLine={false} axisLine={false}
-                interval="preserveStartEnd"
-              />
-              <YAxis
-                domain={[yMin, yMax]}
-                tick={{ fontSize: 8, fill: "var(--text-muted)" }}
-                tickLine={false} axisLine={false}
-                tickFormatter={(v: number) => v.toFixed(4)}
-                width={54}
-              />
-              <Tooltip
-                position={{ x: 10, y: 10 }}
-                content={({ active, payload, label }: any) => {
-                  if (!active || !payload?.length) return null;
-                  const d = payload[0]?.payload;
-                  if (!d) return null;
-                  const bodyColor = d.close >= d.open ? "#60a5fa" : "#a78bfa";
-                  return (
-                    <div style={{ background: "var(--bg-panel-alt)", border: "1px solid var(--border-medium)", borderRadius: 8, padding: "8px 12px", fontSize: 11 }}>
-                      <div style={{ color: "var(--text-muted)", fontSize: 10, marginBottom: 6 }}>{label}</div>
-                      {[["O", d.open], ["H", d.high], ["L", d.low], ["C", d.close]].map(([k, v]) => (
-                        <div key={k as string} style={{ display: "flex", justifyContent: "space-between", gap: 16, color: k === "C" ? bodyColor : "var(--text-secondary)" }}>
-                          <span style={{ fontWeight: 700 }}>{k}</span>
-                          <span style={{ fontVariantNumeric: "tabular-nums" }}>{(v as number).toFixed(5)}</span>
-                        </div>
-                      ))}
-                    </div>
-                  );
-                }}
-              />
-              {livePrice != null && (
-                <ReferenceLine y={livePrice} stroke={accent} strokeDasharray="4 3" strokeWidth={1} strokeOpacity={0.45} />
-              )}
-              {viewMode === "candles" ? (
-                <Bar dataKey="high" shape={<CandleShape yDomain={[yMin, yMax]} />} isAnimationActive={false} fill="transparent" stroke="none" />
-              ) : (
-                <Area dataKey="close" name="Close" type="monotone" stroke={accent} strokeWidth={1.5} fill="url(#phGrad)" dot={false} isAnimationActive={false} />
-              )}
-            </ComposedChart>
-          </ResponsiveContainer>
-        </div>
-
+        <div ref={containerRef} style={{ height: 480, opacity: tfLoading ? 0.3 : 1 }} />
       </div>
     </div>
   );

@@ -19,6 +19,7 @@
     "drizzle-orm": "^0.45.2",
     "framer-motion": "^12.38.0",
     "jose": "^6.2.2",
+    "lightweight-charts": "^5.2.0",
     "lucide-react": "^1.7.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
