@@ -10,6 +10,7 @@ import {
   createAccount,
   upsertSelectedAccount,
   clearAllTradesForAccount,
+  resetAccountBalance,
   getAllQuotes,
   addQuote,
   deleteQuote,
@@ -448,6 +449,37 @@ export function Settings() {
     }
   }
 
+  // ── Balance reset (payout) ──
+  const [resetBal,        setResetBal]        = useState("");
+  const [resetting,       setResetting]       = useState(false);
+  const [resetConfirm,    setResetConfirm]    = useState(false);
+  const [resetDone,       setResetDone]       = useState(false);
+
+  async function handleResetBalance() {
+    const target = parseFloat(resetBal);
+    if (!target || !account || !ready) return;
+    if (!resetConfirm) {
+      setResetConfirm(true);
+      setTimeout(() => setResetConfirm(false), 6000);
+      return;
+    }
+    setResetConfirm(false);
+    setResetting(true);
+    setResetDone(false);
+    try {
+      await resetAccountBalance(account.id, target);
+      tradeEvents.notify();
+      setResetDone(true);
+      setResetBal("");
+      await loadAccounts();
+      setTimeout(() => setResetDone(false), 3000);
+    } catch (err) {
+      console.error("[Settings] balance reset failed:", err);
+    } finally {
+      setResetting(false);
+    }
+  }
+
   // ── Clear trades ──
   const [clearing,      setClearing]      = useState(false);
   const [clearConfirm,  setClearConfirm]  = useState(false);
@@ -822,6 +854,61 @@ export function Settings() {
             >
               {exporting ? "Exporting…" : exportDone ? "✓ Downloaded" : "Export CSV"}
             </button>
+          </div>
+        </Panel>
+
+        {/* ── Balance Reset ── */}
+        <SectionTitle>Balance</SectionTitle>
+        <Panel>
+          <PanelHeader label="Payout Reset" />
+          <div
+            className="flex items-start gap-3 px-4 py-3 rounded-lg mb-4"
+            style={{ background: "rgba(99,102,241,0.06)", border: "1px solid rgba(99,102,241,0.2)" }}
+          >
+            <p className="text-[12px] leading-relaxed" style={{ color: "rgba(165,180,252,0.9)" }}>
+              Use this after receiving a payout. Enter your new account balance and confirm. Trade history is preserved — only the balance anchor is adjusted.
+            </p>
+          </div>
+          <div className="flex flex-col gap-3">
+            <div className="flex items-center gap-3">
+              <div className="flex-1">
+                <div className="text-[12px] font-medium mb-1.5" style={{ color: "var(--text-secondary)" }}>
+                  New balance after payout
+                </div>
+                <input
+                  type="number"
+                  value={resetBal}
+                  onChange={(e) => { setResetBal(e.target.value); setResetConfirm(false); setResetDone(false); }}
+                  placeholder={account ? `Current: $${account.currentBalance.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : "Enter amount"}
+                  className="w-full px-3 py-2.5 rounded-lg text-[13px] transition-colors outline-none"
+                  style={{
+                    background: "var(--bg-panel-alt)",
+                    border: "1px solid var(--border-subtle)",
+                    color: "var(--text-primary)",
+                  }}
+                  onFocus={(e) => { (e.currentTarget as HTMLElement).style.borderColor = "var(--accent-border)"; }}
+                  onBlur={(e)  => { (e.currentTarget as HTMLElement).style.borderColor = "var(--border-subtle)"; }}
+                />
+              </div>
+              <button
+                onClick={handleResetBalance}
+                disabled={resetting || !ready || !resetBal || !parseFloat(resetBal)}
+                className="shrink-0 px-4 py-2.5 rounded-lg text-[12px] font-semibold transition-all disabled:opacity-50 mt-6"
+                style={{
+                  background: resetDone    ? "rgba(74,222,128,0.1)"
+                            : resetConfirm ? "rgba(248,113,113,0.15)"
+                            : "var(--accent-dim)",
+                  border:     resetDone    ? "1px solid rgba(74,222,128,0.3)"
+                            : resetConfirm ? "1px solid rgba(248,113,113,0.4)"
+                            : "1px solid var(--accent-border)",
+                  color:      resetDone    ? "#4ade80"
+                            : resetConfirm ? "#f87171"
+                            : "var(--accent-text)",
+                }}
+              >
+                {resetting ? "Resetting…" : resetDone ? "✓ Reset" : resetConfirm ? "Confirm reset?" : "Reset Balance"}
+              </button>
+            </div>
           </div>
         </Panel>
 

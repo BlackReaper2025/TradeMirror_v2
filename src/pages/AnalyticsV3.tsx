@@ -355,6 +355,16 @@ function fmtDate(d: string) {
   return `${parseInt(m)}/${parseInt(day)}`;
 }
 
+function isForexOpen(): boolean {
+  const now = new Date();
+  const day = now.getUTCDay();
+  const mins = now.getUTCHours() * 60 + now.getUTCMinutes();
+  if (day === 6) return false;
+  if (day === 0 && mins < 22 * 60) return false;
+  if (day === 5 && mins >= 22 * 60) return false;
+  return true;
+}
+
 const PRICE_GRID = "1.1fr 1px 1.4fr 1.4fr 1.4fr 1.4fr 1px 1.1fr 1px 1.0fr 0.9fr 0.9fr";
 
 function VLine() {
@@ -463,6 +473,161 @@ function buildPriceAnalysis(rows: SheetRow[]): { headline: string; bullets: stri
   }
 
   return { headline, bullets, description };
+}
+
+function CandleShape({ x, width, payload, background, yDomain }: any) {
+  if (!payload || !background || !yDomain) return null;
+  const { open, high, low, close } = payload;
+  if ([open, high, low, close].some((v: unknown) => v == null || isNaN(v as number))) return null;
+  const isUp  = close >= open;
+  const color = isUp ? "#60a5fa" : "#a78bfa";
+  const [dMin, dMax] = yDomain;
+  const range = dMax - dMin;
+  if (range === 0) return null;
+  const toPixel = (v: number) => background.y + (dMax - v) / range * background.height;
+  const yH = toPixel(high);
+  const yL = toPixel(low);
+  const yO = toPixel(open);
+  const yC = toPixel(close);
+  const bodyTop = Math.min(yO, yC);
+  const bodyH   = Math.max(Math.abs(yC - yO), 1.5);
+  const cx      = x + width / 2;
+  const bw      = Math.max(width - 2, 2);
+  return (
+    <g>
+      <line x1={cx} y1={yH} x2={cx} y2={yL} stroke={color} strokeWidth={1} strokeOpacity={0.8} />
+      <rect x={cx - bw / 2} y={bodyTop} width={bw} height={bodyH}
+            fill={color} fillOpacity={1} stroke={color} strokeWidth={0.5} />
+    </g>
+  );
+}
+
+function PriceHistoryChart({ rows, pair }: { rows: SheetRow[]; pair: string }) {
+  const WINDOW = 90;
+  const slice  = rows.slice(-WINDOW);
+  const [viewMode, setViewMode] = useState<"candles" | "line">("candles");
+  const [chartTf,  setChartTf]  = useState<"1W" | "1D" | "4H" | "1H" | "15M" | "5M">("1D");
+
+  const livePrice = rows.length > 0 ? rows[rows.length - 1].close : null;
+  const prevClose = rows.length > 1 ? rows[rows.length - 2].close : null;
+  const change    = livePrice != null && prevClose != null ? livePrice - prevClose : 0;
+  const changePct = prevClose ? (change / prevClose) * 100 : 0;
+  const isUp      = change >= 0;
+  const accent    = isUp ? "#60a5fa" : "#a78bfa";
+
+  const data = slice.map(r => ({
+    date:  fmtDate(r.date),
+    open:  r.open,
+    high:  r.high,
+    low:   r.low,
+    close: r.close,
+  }));
+
+  const pad  = (Math.max(...slice.map(r => r.high)) - Math.min(...slice.map(r => r.low))) * 0.06;
+  const yMin = Math.min(...slice.map(r => r.low))  - pad;
+  const yMax = Math.max(...slice.map(r => r.high)) + pad;
+
+  const legendItems = viewMode === "candles"
+    ? [{ color: "#60a5fa", label: "Bullish" }, { color: "#a78bfa", label: "Bearish" }]
+    : [{ color: accent,    label: "Close"   }];
+
+  return (
+    <div style={{ width: "66.667%", marginBottom: 10, flexShrink: 0 }}>
+      {/* Button row above panel */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+        {/* Timeframe buttons */}
+        <div style={{ display: "flex", gap: 4 }}>
+          {(["1W","1D","4H","1H","15M","5M"] as const).map(tf => (
+            <button
+              key={tf}
+              onClick={() => setChartTf(tf)}
+              style={{
+                fontSize: 9, fontWeight: 700, padding: "4px 10px",
+                textTransform: "uppercase", letterSpacing: "0.08em",
+                background: chartTf === tf ? "var(--accent-dim)"    : "var(--bg-panel-alt)",
+                border:     chartTf === tf ? "1px solid var(--accent-border)" : "1px solid var(--border-medium)",
+                color:      chartTf === tf ? "var(--accent-text)"   : "var(--text-secondary)",
+                borderRadius: 8, cursor: "pointer",
+              }}
+            >
+              {tf}
+            </button>
+          ))}
+        </div>
+        {/* Candles / Line toggle */}
+        <button
+          onClick={() => setViewMode(v => v === "candles" ? "line" : "candles")}
+          style={{
+            fontSize: 9, fontWeight: 700, padding: "4px 10px",
+            textTransform: "uppercase", letterSpacing: "0.08em",
+            background: "var(--bg-panel-alt)",
+            border: "1px solid var(--border-medium)",
+            borderRadius: 8, color: "var(--text-secondary)", cursor: "pointer",
+          }}
+        >
+          {viewMode}
+        </button>
+      </div>
+      <div style={{ borderRadius: 14, overflow: "hidden", position: "relative" }}>
+
+        {/* Chart */}
+        <div style={{ height: 480, padding: "8px 0 0" }}>
+          <ResponsiveContainer width="100%" height="100%">
+            <ComposedChart data={data} margin={{ top: 6, right: 16, bottom: 4, left: 4 }}>
+              <defs>
+                <linearGradient id="phGrad" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="5%"  stopColor={accent} stopOpacity={0.2} />
+                  <stop offset="95%" stopColor={accent} stopOpacity={0}   />
+                </linearGradient>
+              </defs>
+              <XAxis
+                dataKey="date"
+                tick={{ fontSize: 8, fill: "var(--text-muted)" }}
+                tickLine={false} axisLine={false}
+                interval="preserveStartEnd"
+              />
+              <YAxis
+                domain={[yMin, yMax]}
+                tick={{ fontSize: 8, fill: "var(--text-muted)" }}
+                tickLine={false} axisLine={false}
+                tickFormatter={(v: number) => v.toFixed(4)}
+                width={54}
+              />
+              <Tooltip
+                position={{ x: 10, y: 10 }}
+                content={({ active, payload, label }: any) => {
+                  if (!active || !payload?.length) return null;
+                  const d = payload[0]?.payload;
+                  if (!d) return null;
+                  const bodyColor = d.close >= d.open ? "#60a5fa" : "#a78bfa";
+                  return (
+                    <div style={{ background: "var(--bg-panel-alt)", border: "1px solid var(--border-medium)", borderRadius: 8, padding: "8px 12px", fontSize: 11 }}>
+                      <div style={{ color: "var(--text-muted)", fontSize: 10, marginBottom: 6 }}>{label}</div>
+                      {[["O", d.open], ["H", d.high], ["L", d.low], ["C", d.close]].map(([k, v]) => (
+                        <div key={k as string} style={{ display: "flex", justifyContent: "space-between", gap: 16, color: k === "C" ? bodyColor : "var(--text-secondary)" }}>
+                          <span style={{ fontWeight: 700 }}>{k}</span>
+                          <span style={{ fontVariantNumeric: "tabular-nums" }}>{(v as number).toFixed(5)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  );
+                }}
+              />
+              {livePrice != null && (
+                <ReferenceLine y={livePrice} stroke={accent} strokeDasharray="4 3" strokeWidth={1} strokeOpacity={0.45} />
+              )}
+              {viewMode === "candles" ? (
+                <Bar dataKey="high" shape={<CandleShape yDomain={[yMin, yMax]} />} isAnimationActive={false} fill="transparent" stroke="none" />
+              ) : (
+                <Area dataKey="close" name="Close" type="monotone" stroke={accent} strokeWidth={1.5} fill="url(#phGrad)" dot={false} isAnimationActive={false} />
+              )}
+            </ComposedChart>
+          </ResponsiveContainer>
+        </div>
+
+      </div>
+    </div>
+  );
 }
 
 function PricePanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolean }) {
@@ -4239,37 +4404,30 @@ function buildMomentumAnalysis(rows: SheetRow[]): { headline: string; bullets: s
   const idx  = rows.length - 1;
   const cur  = rows[idx];
   const cci  = cur.cci;
-  const wr   = computeWR(rows, idx);
   const mom  = computeMom10(rows, idx);
 
   const cciZone = cci > 200 ? "extreme overbought" : cci > 100 ? "overbought" : cci < -200 ? "extreme oversold" : cci < -100 ? "oversold" : cci > 0 ? "mildly bullish" : "mildly bearish";
-  const wrZone  = wr > -20 ? "overbought" : wr < -80 ? "oversold" : "neutral";
 
   const bullets = [
     `CCI: ${cci.toFixed(1)} — ${cciZone}`,
-    `Williams %R: ${wr.toFixed(1)} — ${wrZone}`,
     `Momentum(10): ${mom >= 0 ? "+" : ""}${mom.toFixed(3)}% vs 10-session prior close`,
-    cci > 100 && wr > -20 ? "CCI + WR both confirm overbought — pullback risk elevated"
-      : cci < -100 && wr < -80 ? "CCI + WR both confirm oversold — bounce potential elevated"
-      : "Oscillators mixed — no strong consensus extreme",
+    cci > 100 ? mom > 0 ? "CCI overbought with positive momentum — trend intact but extended"
+                        : "CCI overbought with fading momentum — pullback risk elevated"
+    : cci < -100 ? mom < 0 ? "CCI oversold with negative momentum — decline extended, watch for base"
+                           : "CCI oversold with recovering momentum — bounce potential elevated"
+    : "CCI in neutral range — no extreme momentum signal",
   ];
 
   let headline: string, description: string;
-  if (cci > 100 && wr > -20) {
-    headline    = "Dual Overbought — Pullback Risk Elevated";
-    description = `CCI at ${cci.toFixed(0)} and Williams %R at ${wr.toFixed(1)} are both signalling overbought conditions simultaneously. This dual confirmation raises the probability of a near-term pullback or consolidation. Momentum(10) at ${mom >= 0 ? "+" : ""}${mom.toFixed(3)}% ${mom > 0 ? "confirms the prior trend but the pace is unsustainable." : "is already rolling over — weakening momentum supports the cautious read."} Avoid initiating new longs; watch for CCI to drop below +100 or %R to fall below −20 as early reversal signals.`;
-  } else if (cci < -100 && wr < -80) {
-    headline    = "Dual Oversold — Bounce Potential";
-    description = `CCI at ${cci.toFixed(0)} and Williams %R at ${wr.toFixed(1)} are both deeply oversold. This dual signal suggests the current decline is overextended and a mean-reversion bounce is possible. Momentum(10) at ${mom >= 0 ? "+" : ""}${mom.toFixed(3)}%. A recovery of CCI above −100 combined with %R crossing above −80 would confirm the bounce is underway and offer a lower-risk long entry.`;
-  } else if (cci > 100) {
-    headline    = "CCI Overbought — Strong Bullish Momentum";
-    description = `CCI at ${cci.toFixed(0)} has entered overbought territory above +100, confirming strong bullish momentum. Williams %R at ${wr.toFixed(1)} (${wrZone}) ${wr < -50 ? "has not yet reached overbought — the move may have further to run before exhausting" : "is also elevated, reinforcing mean-reversion caution"}. Momentum(10) at ${mom >= 0 ? "+" : ""}${mom.toFixed(3)}%. Monitor for a CCI rollover back below +100 as the first exit or tightening signal.`;
+  if (cci > 100) {
+    headline    = mom > 0 ? "CCI Overbought — Trend Extended" : "CCI Overbought — Momentum Fading";
+    description = `CCI at ${cci.toFixed(0)} is in overbought territory above +100, signalling strong bullish momentum. Momentum(10) at ${mom >= 0 ? "+" : ""}${mom.toFixed(3)}% ${mom > 0 ? "remains positive — the trend is still pushing forward, though the move is extended and susceptible to a pullback." : "is turning negative — weakening momentum combined with overbought CCI raises the probability of a near-term pullback or consolidation."} Monitor for a CCI rollover back below +100 as the first exit or tightening signal.`;
   } else if (cci < -100) {
-    headline    = "CCI Oversold — Strong Bearish Momentum";
-    description = `CCI at ${cci.toFixed(0)} is in oversold territory below −100, signalling dominant selling pressure. Williams %R at ${wr.toFixed(1)} (${wrZone}) ${wr > -50 ? "is not confirming oversold — further downside remains possible" : "reinforces the oversold picture"}. Momentum(10) at ${mom >= 0 ? "+" : ""}${mom.toFixed(3)}%. A CCI recovery above −100 alongside %R crossing above −80 would be the first indication of a base forming.`;
+    headline    = mom < 0 ? "CCI Oversold — Decline Extended" : "CCI Oversold — Momentum Recovering";
+    description = `CCI at ${cci.toFixed(0)} is in oversold territory below −100, signalling dominant selling pressure. Momentum(10) at ${mom >= 0 ? "+" : ""}${mom.toFixed(3)}% ${mom < 0 ? "remains negative — the decline has not yet shown signs of exhaustion. Await a CCI recovery above −100 before considering mean-reversion longs." : "is turning positive — recovering momentum combined with oversold CCI raises the probability of a base forming. A CCI cross back above −100 would be an early confirmation signal."} `;
   } else {
-    headline    = "Oscillators in Neutral Zone";
-    description = `CCI at ${cci.toFixed(0)} sits in the neutral range (−100 to +100) with Williams %R at ${wr.toFixed(1)} (${wrZone}). No extreme momentum reading in either direction. Momentum(10) at ${mom >= 0 ? "+" : ""}${mom.toFixed(3)}%. In neutral oscillator environments, signals are weaker and mean-reversion trades carry lower edge. Wait for CCI to breach ±100 or %R to reach its extremes (above −20 or below −80) for a higher-conviction setup.`;
+    headline    = "CCI in Neutral Zone";
+    description = `CCI at ${cci.toFixed(0)} sits in the neutral range (−100 to +100). No extreme momentum reading in either direction. Momentum(10) at ${mom >= 0 ? "+" : ""}${mom.toFixed(3)}%. In neutral CCI environments, signals are weaker and mean-reversion trades carry lower edge. Wait for CCI to breach ±100 for a higher-conviction setup.`;
   }
   return { headline, bullets, description };
 }
@@ -7411,6 +7569,63 @@ export function AnalyticsV3() {
 
         {/* ── Scrollable bottom rows — category container panels ── */}
         <div className="flex-1 min-h-0" style={{ overflowY: "auto", paddingTop: "10px", paddingRight: "10px" }}>
+          {sheetRows.length > 0 && (
+            <div style={{ display: "flex", alignItems: "flex-start" }}>
+              <PriceHistoryChart rows={sheetRows} pair={selectedPair} />
+              <div style={{ flex: 1, paddingLeft: 24, marginTop: 4, position: "relative" }}>
+                <span className="flex items-center justify-center" style={{ position: "absolute", top: 0, right: 0, width: 20, height: 20 }}>
+                  <span
+                    className="animate-ping absolute inline-flex rounded-full"
+                    style={{ width: 20, height: 20, opacity: 0.35, background: isForexOpen() ? "#60a5fa" : "#64748b", animationDuration: "2.5s" }}
+                  />
+                  <span
+                    className="relative inline-flex rounded-full"
+                    style={{ width: 8, height: 8, background: isForexOpen() ? "#60a5fa" : "#64748b" }}
+                  />
+                </span>
+                <div style={{ display: "flex", alignItems: "flex-start", gap: 120 }}>
+                  <span style={{
+                    fontSize: 52, fontWeight: 800, color: "#ffffff",
+                    letterSpacing: "-0.02em", lineHeight: 1,
+                    fontVariantNumeric: "tabular-nums",
+                  }}>
+                    {selectedPair}
+                  </span>
+                  {latestRow && (() => {
+                    const pct = (latestRow.close - latestRow.open) / latestRow.open * 100;
+                    const up  = pct >= 0;
+                    return (
+                      <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 0 }}>
+                        <span style={{ fontSize: 10, fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.1em" }}>Today's Change</span>
+                        <span style={{ fontSize: 32, fontWeight: 700, color: up ? "#60a5fa" : "#a78bfa", fontVariantNumeric: "tabular-nums", marginTop: -6 }}>
+                          {up ? "+" : ""}{pct.toFixed(3)}%
+                        </span>
+                      </div>
+                    );
+                  })()}
+                </div>
+                {latestRow && (
+                  <div style={{ height: 1, background: "var(--border-medium)", margin: "14px 0 14px" }} />
+                )}
+                {latestRow && (
+                  <>
+                    <div style={{ display: "flex", gap: 48, justifyContent: "center" }}>
+                      {([["Today's Open", latestRow.open], ["Today's High", latestRow.high], ["Today's Low", latestRow.low], ["Today's Close", latestRow.close]] as const).map(([label, value]) => (
+                        <div key={label} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2 }}>
+                          <span style={{ fontSize: 10, fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.1em" }}>{label}</span>
+                          <span style={{ fontSize: 15, fontWeight: 600, fontVariantNumeric: "tabular-nums", color: label === "Today's Close" ? (latestRow.close >= latestRow.open ? "#60a5fa" : "#a78bfa") : "var(--text-secondary)" }}>
+                            {(value as number).toFixed(5)}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                    <div style={{ height: 1, background: "var(--border-medium)", marginTop: 14 }} />
+                  </>
+                )}
+              </div>
+            </div>
+          )}
+          <div style={{ height: 1, background: "var(--border-medium)", marginBottom: 10 }} />
           <div style={{ display: "flex", flexDirection: "row", flexWrap: "wrap", columnGap: 10, rowGap: 0, alignItems: "flex-start" }}>
             {(() => {
               let offset = 0;

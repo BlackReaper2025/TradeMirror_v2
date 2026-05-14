@@ -991,6 +991,27 @@ export async function updateAccountBalance(accountId: string): Promise<void> {
     .where(eq(accounts.id, accountId));
 }
 
+// ─── Reset account balance to a specific value (payout reset) ───────────────
+// Sets startingBalance so that startingBalance + SUM(pnl) = targetBalance.
+// Trade data is preserved; only the balance anchor shifts.
+
+export async function resetAccountBalance(accountId: string, targetBalance: number): Promise<void> {
+  const db = getDb();
+
+  const allTrades = await db
+    .select({ pnl: trades.pnl })
+    .from(trades)
+    .where(eq(trades.accountId, accountId));
+
+  const totalPnl     = allTrades.reduce((s, t) => s + (t.pnl ?? 0), 0);
+  const newStarting  = targetBalance - totalPnl;
+
+  await db
+    .update(accounts)
+    .set({ startingBalance: newStarting, currentBalance: targetBalance })
+    .where(eq(accounts.id, accountId));
+}
+
 // ─── Rebuild ALL daily_stats from scratch using closedAt dates ───────────────
 // Run once on boot to migrate stale openedAt-based stats rows.
 
