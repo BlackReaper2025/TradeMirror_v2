@@ -150,6 +150,157 @@ fn get_candles_v3(app: tauri::AppHandle) -> Result<Vec<CandleV3>, String> {
 }
 
 
+// ─── Forex news — RSS fetch ───────────────────────────────────────────────────
+
+#[derive(serde::Serialize, Clone)]
+struct NewsItem {
+    title: String,
+    link: String,
+    pub_date: String,
+    source: String,
+}
+
+fn parse_rss(xml: &str, source: &str) -> Vec<NewsItem> {
+    use quick_xml::Reader;
+    use quick_xml::events::Event;
+
+    let mut reader = Reader::from_str(xml);
+    reader.config_mut().trim_text(true);
+
+    let mut items: Vec<NewsItem> = Vec::new();
+    let mut buf = Vec::new();
+    let mut in_item = false;
+    let mut cur_tag = String::new();
+    let mut cur_title = String::new();
+    let mut cur_link = String::new();
+    let mut cur_date = String::new();
+
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(ref e)) => {
+                let name = std::str::from_utf8(e.local_name().as_ref()).unwrap_or("").to_string();
+                if matches!(name.as_str(), "item" | "entry") {
+                    in_item = true;
+                    cur_title.clear(); cur_link.clear(); cur_date.clear();
+                }
+                cur_tag = name;
+            }
+            Ok(Event::End(ref e)) => {
+                let ln = e.local_name();
+                let name = std::str::from_utf8(ln.as_ref()).unwrap_or("");
+                if matches!(name, "item" | "entry") && in_item && !cur_title.is_empty() {
+                    items.push(NewsItem {
+                        title: cur_title.clone(),
+                        link: cur_link.clone(),
+                        pub_date: cur_date.clone(),
+                        source: source.to_string(),
+                    });
+                    in_item = false;
+                }
+                cur_tag.clear();
+            }
+            Ok(Event::Text(ref e)) => {
+                if in_item {
+                    if let Ok(text) = e.unescape() {
+                        let text = text.trim().to_string();
+                        if !text.is_empty() {
+                            match cur_tag.as_str() {
+                                "title" => cur_title = text,
+                                "link" => { if cur_link.is_empty() { cur_link = text; } }
+                                "pubDate" | "published" | "updated" | "date" => cur_date = text,
+                                _ => {}
+                            }
+                        }
+                    }
+                }
+            }
+            Ok(Event::CData(ref e)) => {
+                if in_item {
+                    let text = std::str::from_utf8(e.as_ref()).unwrap_or("").trim().to_string();
+                    if !text.is_empty() && cur_tag == "title" {
+                        cur_title = text;
+                    }
+                }
+            }
+            Ok(Event::Empty(ref e)) => {
+                let eln = e.local_name();
+                let name = std::str::from_utf8(eln.as_ref()).unwrap_or("");
+                if in_item && name == "link" {
+                    for attr in e.attributes().flatten() {
+                        let key = std::str::from_utf8(attr.key.as_ref()).unwrap_or("");
+                        if key == "href" {
+                            if let Ok(val) = std::str::from_utf8(&attr.value) {
+                                cur_link = val.to_string();
+                            }
+                        }
+                    }
+                }
+            }
+            Ok(Event::Eof) | Err(_) => break,
+            _ => {}
+        }
+        buf.clear();
+    }
+    items
+}
+
+fn fetch_rss_items(url: &str, source_name: &str) -> Vec<NewsItem> {
+    let xml = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(6))
+        .user_agent("TradeMirror/1.0")
+        .build()
+        .ok()
+        .and_then(|c| c.get(url).send().ok())
+        .and_then(|r| r.text().ok());
+    match xml {
+        Some(text) => parse_rss(&text, source_name),
+        None => vec![],
+    }
+}
+
+#[tauri::command]
+fn get_forex_news() -> Vec<NewsItem> {
+    let sources: &[(&str, &str)] = &[
+        ("https://www.forexlive.com/feed/news", "ForexLive"),
+        ("https://www.fxstreet.com/rss/news",   "FXStreet"),
+    ];
+    let handles: Vec<_> = sources.iter().map(|&(url, name)| {
+        let url  = url.to_string();
+        let name = name.to_string();
+        std::thread::spawn(move || fetch_rss_items(&url, &name))
+    }).collect();
+    let mut all: Vec<NewsItem> = handles.into_iter()
+        .filter_map(|h| h.join().ok())
+        .flatten()
+        .collect();
+    all.truncate(60);
+    all
+}
+
+// ─── OANDA live price streaming ───────────────────────────────────────────────
+
+/// Fetch the latest mid price for EUR_USD.
+/// Uses M1 candles — universally available on all OANDA accounts.
+/// Reads the API key exactly as background_sync does (proven to work).
+#[tauri::command]
+async fn get_live_price() -> Result<f64, String> {
+    let contents = std::fs::read_to_string(OANDA_KEY_PATH)
+        .map_err(|e| format!("key file: {}", e))?;
+    let api_key = contents.lines().next().unwrap_or("").trim().to_string();
+    if api_key.is_empty() { return Err("OANDA key file is empty".into()); }
+
+    let resp: serde_json::Value = reqwest::Client::new()
+        .get("https://api-fxtrade.oanda.com/v3/instruments/EUR_USD/candles?granularity=M1&count=1&price=M")
+        .header("Authorization", format!("Bearer {}", api_key))
+        .header("Accept-Datetime-Format", "RFC3339")
+        .send().await.map_err(|e| format!("request: {:?}", e))?
+        .json().await.map_err(|e| format!("parse: {}", e))?;
+
+    resp["candles"][0]["mid"]["c"].as_str()
+        .and_then(|s| s.parse::<f64>().ok())
+        .ok_or_else(|| format!("unexpected response: {}", resp))
+}
+
 // ─── Analytics V3 — Ichimoku history (100 rows for cloud + Chikou) ───────────
 
 #[tauri::command]
@@ -231,7 +382,7 @@ pub fn run() {
 
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![list_images, read_credentials_file, write_text_file, get_candles_v3, get_ichi_rows_v3, sync_oanda_candles_v3, send_test_notification])
+        .invoke_handler(tauri::generate_handler![list_images, read_credentials_file, write_text_file, get_candles_v3, get_ichi_rows_v3, sync_oanda_candles_v3, send_test_notification, get_forex_news, get_live_price])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

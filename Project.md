@@ -1,227 +1,588 @@
-# TradeMirror — Project.md (Final)
+# TradeMirror — Project.md (Unified Master Project File)
 
 ## Identity
-TradeMirror is a desktop-first trading psychology dashboard.
+TradeMirror is evolving into:
+- a trading intelligence platform
+- a centralized analytics engine
+- a modular execution system
+- a psychology-first trading operating system
 
-It is not just a dashboard.
-It is a **trading operating system** focused on:
-- discipline
-- behavior
-- decision quality
-
----
-
-## Current State (IMPORTANT)
-
-- Dashboard: COMPLETE (do not modify layout)
-- Trade Log: COMPLETE (preserve)
-- Analytics Screen: BUILT using Google Sheets (preserve structure)
-
-Current priority:
-→ Replace Google Sheets with backend pipeline
-→ Build AI Brain (BrainBot)
+It is NOT just:
+- a dashboard
+- a charting tool
+- a disconnected bot
 
 ---
 
-## Core Rule
+# Division Of Labor
 
-DO NOT rebuild the Analytics screen.
+## Geoff
+- Vision
+- Trading judgment
+- Strategy approval
+- Risk decisions
+- Final authority
 
-ONLY replace the data source.
-
----
-
-## System Architecture (Version 3)
-
-OANDA API → Backend (Brain) → Database → UI
-
-Google Sheets is deprecated.
+Geoff is:
+> the captain
 
 ---
 
-## Data Compatibility Rule (CRITICAL)
+## ChatGPT
+- Architecture
+- Systems planning
+- Product strategy
+- Workflow design
+- Risk framework design
+- Utility scoring design
+- Claude prompt generation
+- Long-term scalability planning
 
-Backend output MUST match the exact structure of the current Google Sheets.
-
-Reason:
-- Analytics screen already works
-- Avoid UI rewrites
-- Preserve all panel logic
-
-Reference:
-Google Sheets contains 80+ structured columns across:
-- price
-- volume
-- volatility
-- momentum
-- trend
-- structure  [oai_citation:4‡EURUSD_AutoSheets.pdf](sediment://file_00000000ab9c720ca014ebc961eb5add)  
+ChatGPT is:
+> the systems brain
 
 ---
 
-## Timeframe Expansion
+## Claude Code
+- Backend implementation
+- Frontend implementation
+- Refactoring
+- Database work
+- OANDA integration
+- Strategy engine implementation
+- Risk engine implementation
+- Alerts engine integration
+- UI implementation
 
-Current: Daily
-
-Next:
-1. 4H
-2. 1H
-3. 15m
-
-Each timeframe must:
-- be independently selectable
-- use same data structure
-
----
-
-## BrainBot System
-
-### Purpose
-Convert raw data → trading decisions
-
-Output:
-- Direction (Long / Short)
-- Entry
-- Stop Loss
-- Take Profit
-- Confidence score
+Claude Code is:
+> the hands on the keyboard
 
 ---
 
-## Brain Layers
+## NotebookLM
+- Strategy research
+- Technical analysis research
+- Book summarization
+- Pattern extraction
+- Strategy ideation
 
-### Layer 1 — Market State
-- EMA alignment
-- ATR vs ATR SMA
-- ADX
-
-Output:
-- Trend
-- Volatility
-- Regime
+NotebookLM is:
+> the research library
 
 ---
 
-### Layer 2 — Structure (NEW PANEL)
+# Current State
 
-Must be calculated:
+Current completed systems:
+- Dashboard COMPLETE
+- Trade Log COMPLETE
+- Analytics V3 BUILT
+- OANDA daily EURUSD backend exists
+- Daily indicators operational
+- Market Structure panel partially implemented
+- Price Alerts Engine already developed separately
+- Telegram alert bot exists: AlphaAlert
 
-- Higher High / Higher Low
-- Lower High / Lower Low
-- Break of Structure (BOS)
-- Change of Character (CHOCH)
+Current immediate priorities:
+1. Minor app tweaks and stabilization
+2. Improve Market Structure panel
+3. Add Regime Detection panel
+4. Integrate Alerts system into TradeMirror
+5. Expand alerts to support indicator conditions
+6. THEN begin deeper bot development
 
-Output:
-- Bullish / Bearish / Range
+The bot is NOT the immediate next step.
+
+The current focus is:
+> strengthening the analytics and intelligence foundation first
+
+Important clarification:
+
+The current immediate priorities remain:
+
+1. Minor app tweaks and stabilization
+2. Improve Market Structure panel
+3. Add Regime Detection panel
+4. Integrate Alerts system into TradeMirror
+5. Expand alerts to support indicator conditions
+
+These systems are considered:
+> intelligence validation infrastructure
+
+NOT:
+> autonomous trading infrastructure
+
+The purpose of these priorities is to:
+- stabilize analytics
+- validate centralized indicator outputs
+- validate live market interpretation
+- validate alert timing and consistency
+- improve market observability
+- improve system explainability
+
+The goal is NOT to prematurely automate trading decisions.
 
 ---
 
-### Layer 3 — Regime Detection (NEW PANEL)
+# Safer Development Path (Post-Validation Phase)
 
-- ADX-based trend detection
-- ATR expansion vs compression
+After the current priorities are completed, TradeMirror development will temporarily narrow scope to prioritize:
 
-Output:
+- simplicity
+- stability
+- data integrity
+- replay consistency
+- explainability
+- maintainability
+- measurable edge validation
+
+The project will intentionally avoid premature expansion into:
+- autonomous execution
+- advanced utility scoring
+- deep confidence scoring systems
+- ML systems
+- excessive strategy abstraction
+- unnecessary intelligence layers
+
+This does NOT mean abandoning the long-term vision.
+
+The long-term vision remains:
+> a professional trading intelligence platform
+
+However, future expansion must occur:
+> only after infrastructure and edge validation are proven.
+
+---
+
+# Critical Architecture Rule
+
+DO NOT rebuild TradeMirror from scratch.
+
+The bot and alerts systems must be integrated directly into the existing architecture.
+
+Existing systems already provide:
+- OANDA ingestion
+- indicator generation
+- Analytics V3 visualization
+- desktop infrastructure
+- frontend framework
+- early price alert infrastructure
+
+These are major strategic advantages.
+
+---
+
+# Analytics V3 Strategic Importance
+
+Analytics V3 is NOT just UI.
+
+It becomes:
+- strategy validation system
+- bot debugging system
+- signal interpretation system
+- execution monitoring layer
+- indicator alert validation layer
+
+Analytics V3 must remain tightly connected to the centralized indicator engine.
+
+---
+
+# Current Analytics Priorities
+
+## Priority 1 — Market Structure Enhancement
+
+The Market Structure panel is now a core intelligence system.
+
+Required capabilities:
+- Swing High detection
+- Swing Low detection
+- Higher High / Higher Low tracking
+- Lower High / Lower Low tracking
+- BOS detection
+- CHOCH detection
+- Bullish/Bearish/Range state
+- Structure break signals
+
+Why this matters:
+> indicators lag, structure reflects market narrative
+
+Market structure becomes one of the most important systems in the entire platform.
+
+---
+
+## Priority 2 — Regime Detection Panel
+
+TradeMirror must include a dedicated Regime Detection panel.
+
+Purpose:
+- identify broad market conditions
+- improve signal interpretation
+- improve market observability
+- validate market context assumptions
+
+Initial regime states should remain intentionally simple:
 - Trending
 - Ranging
-- Expanding
-- Compressing
+- Unclear
+
+Early regime detection is:
+> descriptive infrastructure
+
+NOT:
+> predictive intelligence
+
+Initial core logic sources:
+- ADX
+- ATR vs ATR SMA
+- Bollinger Band width
+
+Avoid overengineering regime classification early.
 
 ---
 
-### Layer 4 — Signal
+## Priority 3 — Alerts System Integration
 
-Use existing indicators:
-- RSI
-- MACD
-- Momentum
-- Volume
+TradeMirror will include a dedicated Alerts system integrated into the core architecture.
 
-(No new indicators needed)
+The alerts system should support:
+- price alerts
+- indicator alerts
+- strategy alerts later
+- Telegram notifications
+- in-app notifications
+- future desktop notifications
 
----
-
-### Layer 5 — Execution
-
-- Entry: confluence
-- Stop: ATR-based
-- Target: pivot / structure
+Current Telegram bot:
+- AlphaAlert
 
 ---
 
-### Layer 6 — Confidence Score
+# Core System Architecture
 
-Weighted scoring:
-- trend alignment
-- momentum
-- structure
-- volatility
-- context
-
----
-
-## UI Rules (DO NOT BREAK)
-
-- 12-column grid system
-- No margin hacks (marginRight, etc.)
-- No layout overrides
-- Preserve all panel positions
-- Preserve all existing functionality  [oai_citation:5‡Project.md](sediment://file_000000003c18722fb8ecc0a10da6a91b)  
+OANDA API
+→ Central Candle Database
+→ Shared Indicator Engine
+→ Structured Indicator Output Layer
+→ Consumers:
+   - Analytics V3
+   - Alerts Engine
+   - Strategy Engine
+   - Risk Engine
+   - Backtester
+   - Paper Trader
+   - Live Execution
+   - ML Systems Later
 
 ---
 
-## Design System
+# Shared Indicator Engine Rule
 
-- Dark, premium fintech aesthetic
-- Subtle glow
-- Clean spacing
-- No clutter
-- No flashy effects
+TradeMirror must maintain:
+- ONE candle source
+- ONE indicator engine
+- ONE structured indicator output layer
+
+NEVER create:
+- duplicate RSI calculations
+- duplicate MACD pipelines
+- duplicate EMA logic
+- separate bot-only indicators
+- separate alert-only indicators
+
+All systems must consume identical outputs.
 
 ---
 
-## Development Strategy
+# Structured Indicator Output Layer
+
+Indicators must expose:
+- numerical values
+- bullish/bearish states
+- confidence scores
+- trend strength
+- volatility regime
+- normalized outputs
+- alert-ready condition states
+
+This becomes:
+> the bridge between analytics, alerts, automation, and execution
+
+---
+
+# Alerts Engine System
+
+Current external alert pipeline:
+OANDA streaming price feed
+→ Python alert engine
+→ Telegram alert
+→ local alert log
+
+Long-term TradeMirror architecture:
+OANDA Data
+→ Central Candle Store
+→ Shared Indicator Engine
+→ Alerts Engine
+→ Notification Router
+→ Telegram / In-App UI
+
+Important constraint:
+
+Alerts are currently:
+> validation and monitoring tools
+
+NOT:
+> automated execution triggers
+
+The alerts system should primarily help validate:
+- indicator consistency
+- structure consistency
+- timing consistency
+- live vs replay behavior
+
+---
+
+# Alerts Screen
+
+TradeMirror will include a dedicated Alerts screen.
+
+The Alerts screen should allow:
+- create alerts
+- edit alerts
+- pause alerts
+- delete alerts
+- reset triggered alerts
+- monitor active alerts
+- view triggered alert history
+- toggle Telegram notifications
+- toggle in-app notifications
+
+---
+
+# Alert Types
+
+## Price Alerts
+Examples:
+- EURUSD above 1.1800
+- EURUSD below 1.1650
+
+## Indicator Alerts
+Examples:
+- RSI crosses below 30
+- RSI crosses above 70
+- MACD crosses signal line
+- ADX rises above 25
+- ATR volatility expansion
+- EMA crossover
+- Bollinger breakout
+- Keltner breakout
+- Market structure BOS
+- CHOCH detection
+
+Indicator alerts MUST consume:
+> the centralized indicator engine
+
+---
+
+# Market Structure Philosophy
+
+The AI brain cannot understand trend narrative without market structure.
+
+Required future additions:
+- liquidity pool detection
+- equal highs / equal lows
+- previous day high / low
+- session highs / lows
+- FVG detection
+- imbalance zones
+
+But these are NOT immediate priorities.
+
+Immediate priority order:
+1. Market Structure
+2. Regime Detection
+3. Multi-timeframe expansion
+4. Liquidity logic later
+
+Important constraint:
+
+Market Structure systems are currently intended to:
+- improve chart interpretation
+- improve signal validation
+- improve contextual understanding
+
+NOT:
+- generate autonomous trade decisions
+- function as a standalone predictive engine
+
+---
+
+# BrainBot Long-Term Purpose
+
+The long-term purpose of BrainBot is to eventually assist with:
+- Directional bias
+- Trade context
+- Entry evaluation
+- Risk awareness
+- Market condition interpretation
+
+However:
+
+BrainBot development is intentionally delayed until:
+- data integrity is stable
+- replay systems are validated
+- indicator consistency is verified
+- alerts systems are stable
+- measurable strategy expectancy exists
+
+The current project phase is:
+> intelligence validation and infrastructure stabilization
+
+---
+
+# Multi-Timeframe Expansion
+
+Current:
+- Daily
+
+Expansion order:
+1. 4H
+2. 1H
+3. 15M
+4. Weekly
+5. 5M
+
+Multi-timeframe purpose:
+- Daily → Bias
+- 4H → Structure
+- 1H → Setup
+- 15M → Entry
+
+All timeframes must use:
+- identical structures
+- centralized indicator engine
+
+Alerts must also support timeframe selection.
+
+---
+
+# Risk Philosophy
+
+Required protections:
+- Max risk per trade
+- Max daily loss
+- Max weekly loss
+- Drawdown protection
+- Consecutive loss lockout
+- Emergency kill switch
+- ATR-aware stop logic
+
+System priority:
+> survivability over aggressiveness
+
+---
+
+# Development Strategy
 
 DO NOT:
 - rebuild UI
-- change panel structure
-- change analytics layout
+- rebuild Analytics V3
+- create duplicate indicator systems
+- create duplicate alert indicator logic
 
 DO:
+- preserve UI
+- centralize indicators
 - build backend separately
-- match data shape exactly
-- plug backend into existing UI
+- create structured outputs
+- integrate alerts as a core platform consumer
 
 ---
 
-## Build Phases (Version 3)
+# Updated Development Priority
 
-Phase 1:
-- OANDA API connection
+## Current Immediate Development Phase
+1. Minor UI/app stabilization
+2. Improve Market Structure panel
+3. Add Regime Detection panel
+4. Integrate Alerts system
+5. Add indicator-based alerts
+6. Improve structured indicator outputs
 
-Phase 2:
-- Store candles (SQLite)
+## Post-Validation Stabilization Phase
+7. Validate candle integrity
+8. Validate indicator consistency
+9. Build replay consistency tools
+10. Validate live vs replay behavior
+11. Validate one small strategy path
+12. Validate paper trading workflows
 
-Phase 3:
-- Rebuild indicators (backend)
+## Secondary Expansion Phase
+13. Multi-timeframe architecture
+14. Shared intelligence systems
+15. Strategy engine
+16. Risk engine
 
-Phase 4:
-- Data adapter (match sheets)
-
-Phase 5:
-- Brain logic
-
-Phase 6:
-- UI connection
+## Later Phase
+17. Backtesting
+18. Paper trading
+19. Live execution
+20. ML later
 
 ---
 
-## Key Insight
+# Machine Learning Philosophy
 
-You are not building a dashboard anymore.
+ML is NOT phase 1.
 
-You are building:
+ML should:
+- assist decisions
+- augment probabilities
+- compare against rules-based systems
 
-→ A decision engine  
-→ A trading brain  
-→ A behavior feedback system
+ML should NEVER bypass:
+- risk engine
+- emergency safeguards
+
+ML remains a distant later-phase system.
+
+TradeMirror must first prove:
+- stable infrastructure
+- stable data
+- stable indicators
+- stable replay systems
+- measurable trading edge
+
+before ML expansion is considered.
+
+---
+
+# Core Survivability Principle
+
+TradeMirror must avoid:
+- architecture sprawl
+- intelligence inflation
+- false confidence from analytics
+- premature automation
+- complexity without measurable edge
+
+Every new system must justify itself by improving at least one of:
+- data integrity
+- explainability
+- validation quality
+- replay consistency
+- measurable trading performance
+- debugging capability
+
+Sophistication alone is NOT progress.
+
+---
+
+# Final Goal
+
+TradeMirror should become:
+- stable
+- explainable
+- scalable
+- psychologically sustainable
+- professionally structured
+

@@ -240,9 +240,16 @@ export function AlertsPanel({ instrument, alerts, onUpdate, onDelete }: AlertsPa
   const visible = alerts.filter(a => a.instrument === instrument && a.status !== "deleted");
   const [openSettings, setOpenSettings] = useState<string | null>(null);
   const [openDir, setOpenDir] = useState<string | null>(null);
+  const [draftPrices, setDraftPrices] = useState<Record<string, string>>({});
   const btnRefs = useRef<Record<string, HTMLButtonElement | null>>({});
   const dirRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const dirAnchorRefs = useRef<Record<string, React.RefObject<HTMLDivElement | null>>>({});
+
+  function commitPrice(id: string, raw: string) {
+    const val = parseFloat(raw);
+    if (!isNaN(val)) onUpdate(id, { price: val });
+    setDraftPrices(d => { const n = { ...d }; delete n[id]; return n; });
+  }
 
   const close = useCallback(() => setOpenSettings(null), []);
 
@@ -313,11 +320,13 @@ export function AlertsPanel({ instrument, alerts, onUpdate, onDelete }: AlertsPa
 
               {/* Price */}
               <input
-                type="number"
-                step="0.00001"
-                value={alert.price.toFixed(5)}
-                onChange={e => onUpdate(alert.id, { price: parseFloat(e.target.value) || 0 })}
-                style={{ ...inputStyle, width: 64 }}
+                type="text"
+                inputMode="decimal"
+                value={draftPrices[alert.id] ?? alert.price.toFixed(5)}
+                onChange={e => setDraftPrices(d => ({ ...d, [alert.id]: e.target.value }))}
+                onBlur={e => commitPrice(alert.id, e.target.value)}
+                onKeyDown={e => { if (e.key === "Enter") { commitPrice(alert.id, (e.target as HTMLInputElement).value); (e.target as HTMLInputElement).blur(); } }}
+                style={{ ...inputStyle, width: 76 }}
               />
 
               {/* Status */}

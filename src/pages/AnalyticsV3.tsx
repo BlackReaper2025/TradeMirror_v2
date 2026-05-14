@@ -108,6 +108,13 @@ interface AlertToast {
   price: number;
 }
 
+interface NewsArticle {
+  title: string;
+  link: string;
+  pub_date: string;
+  source: string;
+}
+
 function formatDataDate(dateStr: string): string {
   // dateStr is "YYYY-MM-DD" — parse as local date to avoid any timezone shift
   const [y, m, d] = dateStr.split("-").map(Number);
@@ -6446,6 +6453,72 @@ function BlankPanel({ area, label, sub, style, onExpand, badge, subtitle, subtit
 }
 
 
+function formatNewsDate(dateStr: string): string {
+  try {
+    const d = new Date(dateStr);
+    if (isNaN(d.getTime())) return "";
+    const diffMs   = Date.now() - d.getTime();
+    const diffMins = Math.floor(diffMs / 60_000);
+    if (diffMins < 1)  return "Just now";
+    if (diffMins < 60) return `${diffMins}m ago`;
+    const diffH = Math.floor(diffMins / 60);
+    if (diffH < 24)    return `${diffH}h ago`;
+    return d.toLocaleDateString();
+  } catch { return ""; }
+}
+
+function ForexNewsPanel({ news, loading }: { news: NewsArticle[]; loading: boolean }) {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", height: 338, marginTop: 14 }}>
+      <div style={{
+        flex: 1, overflowY: "auto", borderRadius: 12,
+        background: "var(--bg-panel)", border: "1px solid var(--border-medium)",
+        padding: "4px 0",
+      }}>
+        {news.length === 0 && !loading && (
+          <div style={{ padding: "20px 12px", fontSize: 11, color: "var(--text-muted)", textAlign: "center", lineHeight: 1.5 }}>
+            No news loaded.<br />Check network access.
+          </div>
+        )}
+        {news.map((item, i) => (
+          <button
+            key={i}
+            onClick={() => invoke("plugin:opener|open_url", { url: item.link }).catch(() => window.open(item.link, "_blank"))}
+            style={{
+              display: "block", width: "100%", textAlign: "left",
+              background: "transparent", border: "none",
+              borderBottom: i < news.length - 1 ? "1px solid var(--border-light)" : "none",
+              padding: "8px 10px", cursor: "pointer",
+            }}
+          >
+            <div style={{ fontSize: 11, fontWeight: 500, color: "var(--text-primary)", lineHeight: 1.4, marginBottom: 4 }}>
+              {item.title}
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <span style={{ fontSize: 9, fontWeight: 700, color: "var(--accent-text)", textTransform: "uppercase", letterSpacing: "0.06em" }}>
+                {item.source}
+              </span>
+              {item.pub_date && (
+                <span style={{ fontSize: 9, color: "var(--text-muted)" }}>
+                  {formatNewsDate(item.pub_date)}
+                </span>
+              )}
+            </div>
+          </button>
+        ))}
+      </div>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 8, marginTop: 5 }}>
+        {loading && (
+          <span style={{ fontSize: 9, color: "var(--text-muted)" }}>Updating…</span>
+        )}
+        <span style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em", color: "var(--text-muted)" }}>
+          Live News · EUR/USD
+        </span>
+      </div>
+    </div>
+  );
+}
+
 export function AnalyticsV3() {
   const { analysisResult, eurusdSnapshot, sheetRows } = useAnalytics();
   const [error, setError]       = useState<string | null>(null);
@@ -6453,11 +6526,41 @@ export function AnalyticsV3() {
   const [alerts, setAlerts] = useState<Alert[]>([]);
   const [toasts, setToasts] = useState<AlertToast[]>([]);
   const seenStatuses = useRef<Record<string, string>>({});
+  const [newsItems, setNewsItems]     = useState<NewsArticle[]>([]);
+  const [newsLoading, setNewsLoading] = useState(false);
+  const [livePrice, setLivePrice]     = useState<number | null>(null);
+  const [priceError, setPriceError]   = useState<string | null>(null);
 
   function saveAlerts(list: Alert[]) {
     invoke("write_text_file", { path: ALERTS_JSON_PATH, content: JSON.stringify(list, null, 2) })
       .catch(console.error);
   }
+
+  // Live price — poll every 2 s
+  useEffect(() => {
+    const poll = () => {
+      invoke<number>("get_live_price")
+        .then(p => { setLivePrice(p); setPriceError(null); })
+        .catch(e => setPriceError(String(e)));
+    };
+    poll();
+    const id = setInterval(poll, 5000);
+    return () => clearInterval(id);
+  }, []);
+
+  // Forex news — fetch on mount then every 60 s
+  useEffect(() => {
+    const load = () => {
+      setNewsLoading(true);
+      invoke<NewsArticle[]>("get_forex_news")
+        .then(items => setNewsItems(items))
+        .catch(() => {})
+        .finally(() => setNewsLoading(false));
+    };
+    load();
+    const id = setInterval(load, 60_000);
+    return () => clearInterval(id);
+  }, []);
 
   // Initial load — seed seenStatuses so we don't fire on startup
   useEffect(() => {
@@ -7573,33 +7676,39 @@ export function AnalyticsV3() {
             <div style={{ display: "flex", alignItems: "flex-start" }}>
               <PriceHistoryChart rows={sheetRows} pair={selectedPair} />
               <div style={{ flex: 1, paddingLeft: 24, marginTop: 4, position: "relative" }}>
-                <span className="flex items-center justify-center" style={{ position: "absolute", top: 0, right: 0, width: 20, height: 20 }}>
-                  <span
-                    className="animate-ping absolute inline-flex rounded-full"
-                    style={{ width: 20, height: 20, opacity: 0.35, background: isForexOpen() ? "#60a5fa" : "#64748b", animationDuration: "2.5s" }}
-                  />
-                  <span
-                    className="relative inline-flex rounded-full"
-                    style={{ width: 8, height: 8, background: isForexOpen() ? "#60a5fa" : "#64748b" }}
-                  />
-                </span>
-                <div style={{ display: "flex", alignItems: "flex-start", gap: 120 }}>
-                  <span style={{
-                    fontSize: 52, fontWeight: 800, color: "#ffffff",
-                    letterSpacing: "-0.02em", lineHeight: 1,
-                    fontVariantNumeric: "tabular-nums",
-                  }}>
-                    {selectedPair}
-                  </span>
+                <div style={{ display: "flex", alignItems: "center", gap: 32 }}>
+                  <div style={{ display: "flex", alignItems: "flex-start" }}>
+                    <span style={{
+                      fontSize: 52, fontWeight: 800, color: "#ffffff",
+                      letterSpacing: "-0.02em", lineHeight: 1,
+                      fontVariantNumeric: "tabular-nums",
+                    }}>
+                      {selectedPair}
+                    </span>
+                    <span className="flex items-center justify-center" style={{ width: 20, height: 20, flexShrink: 0, marginLeft: 10 }}>
+                      <span className="animate-ping absolute inline-flex rounded-full" style={{ width: 12, height: 12, opacity: 0.45, background: "#60a5fa", animationDuration: "2s" }} />
+                      <span className="relative inline-flex rounded-full" style={{ width: 8, height: 8, background: "#60a5fa" }} />
+                    </span>
+                  </div>
                   {latestRow && (() => {
+                    const display = livePrice ?? latestRow.close;
+                    const isUp = display >= latestRow.open;
                     const pct = (latestRow.close - latestRow.open) / latestRow.open * 100;
-                    const up  = pct >= 0;
                     return (
-                      <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 0 }}>
-                        <span style={{ fontSize: 10, fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.1em" }}>Today's Change</span>
-                        <span style={{ fontSize: 32, fontWeight: 700, color: up ? "#60a5fa" : "#a78bfa", fontVariantNumeric: "tabular-nums", marginTop: -6 }}>
-                          {up ? "+" : ""}{pct.toFixed(3)}%
-                        </span>
+                      <div style={{ display: "flex", alignItems: "flex-start", gap: 32, marginTop: 8, marginLeft: -24 }}>
+                        <div style={{ display: "flex", flexDirection: "column", gap: 2, alignItems: "center", marginLeft: -5 }}>
+                          <span style={{ fontSize: 9, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em", color: "var(--text-muted)" }}>Current Price</span>
+                          <span style={{ fontSize: 36, fontWeight: 700, fontVariantNumeric: "tabular-nums", color: isUp ? "#60a5fa" : "#a78bfa", letterSpacing: "-0.01em", lineHeight: 1 }}>
+                            {display.toFixed(5)}
+                          </span>
+                          {priceError && <span style={{ fontSize: 9, color: "#f87171", maxWidth: 200 }}>{priceError}</span>}
+                        </div>
+                        <div style={{ display: "flex", flexDirection: "column", gap: 2, marginLeft: -11 }}>
+                          <span style={{ fontSize: 9, fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.1em" }}>Today's Change</span>
+                          <span style={{ fontSize: 22, fontWeight: 400, color: pct >= 0 ? "#60a5fa" : "#a78bfa", fontVariantNumeric: "tabular-nums", letterSpacing: "-0.01em", lineHeight: 1, marginTop: 12 }}>
+                            {pct >= 0 ? "+" : ""}{pct.toFixed(3)}%
+                          </span>
+                        </div>
                       </div>
                     );
                   })()}
@@ -7622,11 +7731,12 @@ export function AnalyticsV3() {
                     <div style={{ height: 1, background: "var(--border-medium)", marginTop: 14 }} />
                   </>
                 )}
+                <ForexNewsPanel news={newsItems} loading={newsLoading} />
               </div>
             </div>
           )}
-          <div style={{ height: 1, background: "var(--border-medium)", marginBottom: 10 }} />
-          <div style={{ display: "flex", flexDirection: "row", flexWrap: "wrap", columnGap: 10, rowGap: 0, alignItems: "flex-start" }}>
+          <div style={{ height: 2, background: "rgba(255,255,255,0.12)", margin: "10px 0 16px" }} />
+          <div style={{ display: "flex", flexDirection: "row", flexWrap: "wrap", columnGap: 10, rowGap: 0, alignItems: "flex-start", paddingTop: 10 }}>
             {(() => {
               let offset = 0;
               let colsAccum = 0;

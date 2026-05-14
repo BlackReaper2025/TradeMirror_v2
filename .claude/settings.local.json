@@ -46,7 +46,9 @@
       "Bash(node -e \"console.log\\(require\\('./node_modules/three/package.json'\\).version\\)\")",
       "Read(//d E:/Video/New folder/**)",
       "Bash(python3)",
-      "Bash(python3 -c ' *)"
+      "Bash(python3 -c ' *)",
+      "Bash(git rm *)",
+      "Bash(git commit -m ' *)"
     ]
   }
 }
