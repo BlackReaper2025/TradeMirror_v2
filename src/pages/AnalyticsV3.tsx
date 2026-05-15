@@ -225,7 +225,7 @@ const SLOT_AREAS = [
   // ── Context & Patterns ────────────────────────────────────────────────────
   "vol", "cctx", "sess", "fsw",
   // ── Trend & Direction ─────────────────────────────────────────────────────
-  "ma", "adx", "macd", "ichi",
+  "ma", "adx", "macd",
   // ── Momentum & Oscillators ────────────────────────────────────────────────
   "rsi9", "rsi14", "cci", "wr", "roc",
   // ── Volatility & Bands ────────────────────────────────────────────────────
@@ -558,9 +558,8 @@ function computeBB(closes: number[], period = 20, mult = 2) {
 
 // ─── Price history chart ────────────────────────────────────────────────────────
 
-function PriceHistoryChart({ pair }: { rows: SheetRow[]; pair: string }) {
+function PriceHistoryChart({ pair, chartTf, setChartTf }: { rows: SheetRow[]; pair: string; chartTf: "1W" | "1D" | "4H" | "1H" | "15M" | "5M" | "1M"; setChartTf: (tf: "1W" | "1D" | "4H" | "1H" | "15M" | "5M" | "1M") => void }) {
   const [viewMode,   setViewMode]   = useState<"candles" | "line">("candles");
-  const [chartTf,    setChartTf]    = useState<"1W" | "1D" | "4H" | "1H" | "15M" | "5M">("1D");
   const [tfRows,     setTfRows]     = useState<RawCandleTf[]>([]);
   const [tfLoading,  setTfLoading]  = useState(false);
   const [activeInds, setActiveInds] = useState<Set<IndKey>>(new Set());
@@ -644,6 +643,7 @@ function PriceHistoryChart({ pair }: { rows: SheetRow[]; pair: string }) {
       const lS = mk("rgba(100,181,246,0.85)", LineStyle.Solid);
       uS.setData(toData(upper)); mS.setData(toData(middle)); lS.setData(toData(lower));
       indSeriesRef.current.bb = [fillArea, maskArea, uS, mS, lS];
+
     } else {
       const period = ({ ema9: 9, ema20: 20, ema50: 50, ema200: 200 } as Record<string, number>)[key]!;
       const color  = IND_DEFS.find(d => d.key === key)!.color;
@@ -765,7 +765,7 @@ function PriceHistoryChart({ pair }: { rows: SheetRow[]; pair: string }) {
       {/* Toolbar: timeframes · Indicators button · view mode */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
         <div style={{ display: "flex", gap: 4 }}>
-          {(["1W","1D","4H","1H","15M","5M"] as const).map(tf => (
+          {(["1W","1D","4H","1H","15M","5M","1M"] as const).map(tf => (
             <button key={tf} onClick={() => setChartTf(tf)} style={{
               fontSize: 9, fontWeight: 700, padding: "4px 10px",
               textTransform: "uppercase", letterSpacing: "0.08em",
@@ -959,9 +959,13 @@ function MaTooltip({ active, payload }: { active?: boolean; payload?: Array<{ na
   );
 }
 
+interface MacdRow { date: string; macd: number; macdSignal: number; macdHistogram: number; }
+interface MaRow { date: string; open: number; high: number; low: number; close: number; ema9: number; ema20: number; ema50: number; ema100: number; ema200: number; sma20: number; sma50: number; sma200: number; }
+interface AdxRow { date: string; diPlus: number; diMinus: number; adx: number; }
+
 const MACD_WINDOW = 20;
 
-function buildMacdAnalysis(rows: SheetRow[]): { headline: string; bullets: string[]; description: string } {
+function buildMacdAnalysis(rows: MacdRow[]): { headline: string; bullets: string[]; description: string } {
   if (rows.length < 2) return { headline: "Insufficient data", bullets: [], description: "" };
 
   const cur  = rows[rows.length - 1];
@@ -1018,10 +1022,26 @@ function buildMacdAnalysis(rows: SheetRow[]): { headline: string; bullets: strin
   return { headline, bullets, description };
 }
 
-function MacdPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolean }) {
+function MacdPanelBody({ pair, indicatorTf, expanded }: { pair: string; indicatorTf: string; expanded?: boolean }) {
+  const [liveRows, setLiveRows] = useState<MacdRow[]>([]);
+  const [loading,  setLoading]  = useState(false);
+
+  useEffect(() => {
+    setLoading(true);
+    setLiveRows([]);
+    invoke<RawCandleV3[]>("get_live_candles_computed", { pair, tf: indicatorTf })
+      .then(candles => setLiveRows(candles.map(c => ({
+        date: c.date, macd: c.macd, macdSignal: c.macd_signal, macdHistogram: c.macd_histogram,
+      }))))
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, [pair, indicatorTf]);
+
+  const rows = liveRows;
   const windowSize = expanded ? 40 : MACD_WINDOW;
   const maxOffset  = Math.max(0, rows.length - windowSize);
-  const [offset, setOffset]       = useState(0);
+  const [offset, setOffset] = useState(0);
+  useEffect(() => setOffset(0), [indicatorTf, pair]);
   const showHist   = true;
   const showMacd   = true;
   const showSignal = true;
@@ -1052,6 +1072,10 @@ function MacdPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolea
   const yAxisWidth = expanded ? 52 : 36;
 
   const analysis = useMemo(() => expanded ? buildMacdAnalysis(rows) : null, [rows, expanded]);
+
+  if (loading) return (
+    <div className="flex h-full items-center justify-center" style={{ color: "var(--text-muted)", fontSize: 11 }}>Loading…</div>
+  );
 
   return (
     <div className="flex flex-col h-full">
@@ -1158,7 +1182,8 @@ function MacdPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolea
   );
 }
 
-function buildRsiAnalysis(rows: SheetRow[]): { headline: string; bullets: string[]; description: string } {
+interface Rsi9Row { rsi9: number; stochRsiK: number; stochRsiD: number; }
+function buildRsiAnalysis(rows: Rsi9Row[]): { headline: string; bullets: string[]; description: string } {
   if (rows.length < 3) return { headline: "Insufficient data", bullets: [], description: "" };
 
   const cur  = rows[rows.length - 1];
@@ -1262,10 +1287,29 @@ function RsiTooltip({ active, payload }: { active?: boolean; payload?: Array<{ n
   );
 }
 
-function RsiPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolean }) {
+function RsiPanelBody({ pair, indicatorTf, expanded }: { pair: string; indicatorTf: string; expanded?: boolean }) {
+  const [liveRows, setLiveRows] = useState<{ date: string; rsi9: number; stochRsiK: number; stochRsiD: number }[]>([]);
+  const [loading,  setLoading]  = useState(false);
+
+  useEffect(() => {
+    setLoading(true);
+    setLiveRows([]);
+    invoke<RawCandleV3[]>("get_live_candles_computed", { pair, tf: indicatorTf })
+      .then(candles => setLiveRows(candles.map(c => ({
+        date:      c.date,
+        rsi9:      c.rsi9,
+        stochRsiK: c.stoch_rsi_k,
+        stochRsiD: c.stoch_rsi_d,
+      }))))
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, [pair, indicatorTf]);
+
+  const rows = liveRows;
   const windowSize = expanded ? 40 : RSI_WINDOW;
   const maxOffset  = Math.max(0, rows.length - windowSize);
   const [offset, setOffset] = useState(0);
+  useEffect(() => setOffset(0), [indicatorTf, pair]);
   const showRsi = true;
   const showK   = true;
   const showD   = true;
@@ -1294,6 +1338,10 @@ function RsiPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolean
   const tickStyle  = { fill: "var(--text-muted)", fontSize: expanded ? 12 : 9 };
   const yAxisWidth = expanded ? 36 : 28;
   const analysis   = useMemo(() => expanded ? buildRsiAnalysis(rows) : null, [rows, expanded]);
+
+  if (loading) return (
+    <div className="flex h-full items-center justify-center" style={{ color: "var(--text-muted)", fontSize: 11 }}>Loading…</div>
+  );
 
   return (
     <div className="flex flex-col h-full">
@@ -1391,7 +1439,8 @@ function RsiPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolean
   );
 }
 
-function buildRsi14Analysis(rows: SheetRow[]): { headline: string; bullets: string[]; description: string } {
+interface Rsi14Row { rsi14: number; close: number; sma50: number; sma200: number; }
+function buildRsi14Analysis(rows: Rsi14Row[]): { headline: string; bullets: string[]; description: string } {
   if (rows.length < 6) return { headline: "Insufficient data", bullets: [], description: "" };
 
   const cur   = rows[rows.length - 1];
@@ -1486,10 +1535,30 @@ function Rsi14Tooltip({ active, payload }: { active?: boolean; payload?: Array<{
   );
 }
 
-function Rsi14PanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolean }) {
+function Rsi14PanelBody({ pair, indicatorTf, expanded }: { pair: string; indicatorTf: string; expanded?: boolean }) {
+  const [liveRows, setLiveRows] = useState<{ date: string; rsi14: number; close: number; sma50: number; sma200: number }[]>([]);
+  const [loading,  setLoading]  = useState(false);
+
+  useEffect(() => {
+    setLoading(true);
+    setLiveRows([]);
+    invoke<RawCandleV3[]>("get_live_candles_computed", { pair, tf: indicatorTf })
+      .then(candles => setLiveRows(candles.map(c => ({
+        date:   c.date,
+        rsi14:  c.rsi14,
+        close:  c.close,
+        sma50:  c.sma50,
+        sma200: c.sma200,
+      }))))
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, [pair, indicatorTf]);
+
+  const rows = liveRows;
   const windowSize = expanded ? 40 : RSI_WINDOW;
   const maxOffset  = Math.max(0, rows.length - windowSize);
-  const [offset, setOffset]     = useState(0);
+  const [offset, setOffset] = useState(0);
+  useEffect(() => setOffset(0), [indicatorTf, pair]);
   const showRsi14 = true;
   const showTrend = true;
 
@@ -1531,6 +1600,10 @@ function Rsi14PanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boole
     const pad = (max - min) * 0.25;
     return [Math.max(0, min - pad), Math.min(100, max + pad)] as const;
   }, [data, showRsi14, showTrend]);
+
+  if (loading) return (
+    <div className="flex h-full items-center justify-center" style={{ color: "var(--text-muted)", fontSize: 11 }}>Loading…</div>
+  );
 
   return (
     <div className="flex flex-col h-full">
@@ -1627,7 +1700,7 @@ function Rsi14PanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boole
   );
 }
 
-function buildMaAnalysis(rows: SheetRow[]): { headline: string; bullets: string[]; description: string } {
+function buildMaAnalysis(rows: MaRow[]): { headline: string; bullets: string[]; description: string } {
   if (rows.length < 3) return { headline: "Insufficient data", bullets: [], description: "" };
 
   const cur  = rows[rows.length - 1];
@@ -1722,7 +1795,7 @@ function buildMaAnalysis(rows: SheetRow[]): { headline: string; bullets: string[
   return { headline, bullets, description };
 }
 
-function buildAdxAnalysis(rows: SheetRow[]): { headline: string; bullets: string[]; description: string } {
+function buildAdxAnalysis(rows: AdxRow[]): { headline: string; bullets: string[]; description: string } {
   if (rows.length < 3) return { headline: "Insufficient data", bullets: [], description: "" };
 
   const cur  = rows[rows.length - 1];
@@ -1919,7 +1992,8 @@ function buildIchiAnalysis(rows: SheetRow[]): { headline: string; bullets: strin
   return { headline, bullets, description };
 }
 
-function buildKeltAnalysis(rows: SheetRow[]): { headline: string; bullets: string[]; description: string } {
+interface KeltRow { date: string; open: number; high: number; low: number; close: number; keltnerUpper: number; keltnerMiddle: number; keltnerLower: number; }
+function buildKeltAnalysis(rows: KeltRow[]): { headline: string; bullets: string[]; description: string } {
   if (rows.length < 3) return { headline: "Insufficient data", bullets: [], description: "" };
 
   const cur  = rows[rows.length - 1];
@@ -1977,10 +2051,28 @@ function buildKeltAnalysis(rows: SheetRow[]): { headline: string; bullets: strin
 
 const MA_WINDOW = 20;
 
-function MaPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolean }) {
+function MaPanelBody({ pair, indicatorTf, expanded }: { pair: string; indicatorTf: string; expanded?: boolean }) {
+  const [liveRows, setLiveRows] = useState<MaRow[]>([]);
+  const [loading,  setLoading]  = useState(false);
+
+  useEffect(() => {
+    setLoading(true);
+    setLiveRows([]);
+    invoke<RawCandleV3[]>("get_live_candles_computed", { pair, tf: indicatorTf })
+      .then(candles => setLiveRows(candles.map(c => ({
+        date: c.date, open: c.open, high: c.high, low: c.low, close: c.close,
+        ema9: c.ema9, ema20: c.ema20, ema50: c.ema50, ema100: c.ema100, ema200: c.ema200,
+        sma20: c.sma20, sma50: c.sma50, sma200: c.sma200,
+      }))))
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, [pair, indicatorTf]);
+
+  const rows = liveRows;
   const windowSize = expanded ? 40 : MA_WINDOW;
   const maxOffset  = Math.max(0, rows.length - windowSize);
-  const [offset, setOffset]         = useState(0);
+  const [offset, setOffset] = useState(0);
+  useEffect(() => setOffset(0), [indicatorTf, pair]);
   const [showClose] = useState(true);
   const [showEma9,    setShowEma9]   = useState(true);
   const [showEma20,   setShowEma20]  = useState(true);
@@ -2059,7 +2151,11 @@ function MaPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolean 
     });
     obs.observe(el);
     return () => obs.disconnect();
-  }, []);
+  }, [loading]);
+
+  if (loading) return (
+    <div className="flex h-full items-center justify-center" style={{ color: "var(--text-muted)", fontSize: 11 }}>Loading…</div>
+  );
 
   return (
     <div className="flex flex-col h-full">
@@ -2231,10 +2327,26 @@ function MaPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolean 
 
 const ADX_WINDOW = 20;
 
-function AdxPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolean }) {
+function AdxPanelBody({ pair, indicatorTf, expanded }: { pair: string; indicatorTf: string; expanded?: boolean }) {
+  const [liveRows, setLiveRows] = useState<AdxRow[]>([]);
+  const [loading,  setLoading]  = useState(false);
+
+  useEffect(() => {
+    setLoading(true);
+    setLiveRows([]);
+    invoke<RawCandleV3[]>("get_live_candles_computed", { pair, tf: indicatorTf })
+      .then(candles => setLiveRows(candles.map(c => ({
+        date: c.date, diPlus: c.di_plus, diMinus: c.di_minus, adx: c.adx,
+      }))))
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, [pair, indicatorTf]);
+
+  const rows = liveRows;
   const windowSize = expanded ? 40 : ADX_WINDOW;
   const maxOffset  = Math.max(0, rows.length - windowSize);
-  const [offset, setOffset]         = useState(0);
+  const [offset, setOffset] = useState(0);
+  useEffect(() => setOffset(0), [indicatorTf, pair]);
   const showDiPlus  = true;
   const showDiMinus = true;
   const showAdx     = true;
@@ -2277,6 +2389,10 @@ function AdxPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolean
     const pad = (max - min) * 0.15;
     return [Math.max(0, min - pad), max + pad] as const;
   }, [data, showDiPlus, showDiMinus, showAdx]);
+
+  if (loading) return (
+    <div className="flex h-full items-center justify-center" style={{ color: "var(--text-muted)", fontSize: 11 }}>Loading…</div>
+  );
 
   return (
     <div className="flex flex-col h-full">
@@ -2862,7 +2978,9 @@ function SessionPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boo
   );
 }
 
-function computeWR(rows: SheetRow[], idx: number, period = 14): number {
+interface WrRow { date: string; high: number; low: number; close: number; }
+interface RocRow { date: string; close: number; }
+function computeWR(rows: WrRow[], idx: number, period = 14): number {
   const start = Math.max(0, idx - period + 1);
   const slice = rows.slice(start, idx + 1);
   const hh = Math.max(...slice.map(r => r.high));
@@ -2870,18 +2988,23 @@ function computeWR(rows: SheetRow[], idx: number, period = 14): number {
   return hh === ll ? -50 : ((hh - rows[idx].close) / (hh - ll)) * -100;
 }
 
-function computeMom10(rows: SheetRow[], idx: number): number {
+interface CciRow { date: string; cci: number; close: number; }
+function computeMom10(rows: CciRow[], idx: number): number {
   if (idx < 10) return 0;
   const base = rows[idx - 10].close;
   return base > 0 ? ((rows[idx].close - base) / base) * 100 : 0;
 }
 
-function buildAvgPriceAnalysis(rows: SheetRow[]): { headline: string; bullets: string[]; description: string } {
+interface AvgPriceRow { date: string; high: number; low: number; close: number; }
+interface MsRow { date: string; open: number; high: number; low: number; close: number; }
+interface RegimeRow { date: string; open: number; high: number; low: number; close: number; adx: number; atr14: number; bbUpper: number; bbLower: number; }
+
+function buildAvgPriceAnalysis(rows: AvgPriceRow[]): { headline: string; bullets: string[]; description: string } {
   if (rows.length < 6) return { headline: "—", bullets: [], description: "—" };
   const idx  = rows.length - 1;
   const cur  = rows[idx];
 
-  const typical   = (r: SheetRow) => (r.high + r.low + r.close) / 3;
+  const typical   = (r: AvgPriceRow) => (r.high + r.low + r.close) / 3;
   const avgPrice5 = rows.slice(-5).reduce((s, r) => s + typical(r), 0) / 5;
   const deltas    = rows.slice(-5).map((r, i, a) => i === 0 ? 0 : (r.close - a[i - 1].close) * 10000);
   const avgDelta  = deltas.slice(1).reduce((s, d) => s + d, 0) / 4;
@@ -2915,7 +3038,7 @@ function buildAvgPriceAnalysis(rows: SheetRow[]): { headline: string; bullets: s
   return { headline, bullets, description };
 }
 
-function buildRocAnalysis(rows: SheetRow[]): { headline: string; bullets: string[]; description: string } {
+function buildRocAnalysis(rows: RocRow[]): { headline: string; bullets: string[]; description: string } {
   if (rows.length < 6) return { headline: "—", bullets: [], description: "—" };
   const idx  = rows.length - 1;
   const cur  = rows[idx];
@@ -2957,10 +3080,26 @@ function buildRocAnalysis(rows: SheetRow[]): { headline: string; bullets: string
 
 const AVGP_WINDOW = 20;
 
-function AvgPricePanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolean }) {
+function AvgPricePanelBody({ pair, indicatorTf, expanded }: { pair: string; indicatorTf: string; expanded?: boolean }) {
+  const [liveRows, setLiveRows] = useState<AvgPriceRow[]>([]);
+  const [loading,  setLoading]  = useState(false);
+
+  useEffect(() => {
+    setLoading(true);
+    setLiveRows([]);
+    invoke<RawCandleV3[]>("get_live_candles_computed", { pair, tf: indicatorTf })
+      .then(candles => setLiveRows(candles.map(c => ({
+        date: c.date, high: c.high, low: c.low, close: c.close,
+      }))))
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, [pair, indicatorTf]);
+
+  const rows = liveRows;
   const windowSize = expanded ? 40 : AVGP_WINDOW;
   const maxOffset  = Math.max(0, rows.length - windowSize);
-  const [offset, setOffset]       = useState(0);
+  const [offset, setOffset] = useState(0);
+  useEffect(() => setOffset(0), [indicatorTf, pair]);
   const showClose    = true;
   const showAvgPrice = true;
 
@@ -3011,6 +3150,10 @@ function AvgPricePanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: bo
   }, [data, showClose, showAvgPrice]);
 
   const latest = data[data.length - 1];
+
+  if (loading) return (
+    <div className="flex h-full items-center justify-center" style={{ color: "var(--text-muted)", fontSize: 11 }}>Loading…</div>
+  );
 
   return (
     <div className="flex flex-col h-full">
@@ -3103,10 +3246,24 @@ function AvgPricePanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: bo
 
 const ROC_WINDOW = 20;
 
-function RocPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolean }) {
+function RocPanelBody({ pair, indicatorTf, expanded }: { pair: string; indicatorTf: string; expanded?: boolean }) {
+  const [liveRows, setLiveRows] = useState<RocRow[]>([]);
+  const [loading,  setLoading]  = useState(false);
+
+  useEffect(() => {
+    setLoading(true);
+    setLiveRows([]);
+    invoke<RawCandleV3[]>("get_live_candles_computed", { pair, tf: indicatorTf })
+      .then(candles => setLiveRows(candles.map(c => ({ date: c.date, close: c.close }))))
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, [pair, indicatorTf]);
+
+  const rows = liveRows;
   const windowSize = expanded ? 40 : ROC_WINDOW;
   const maxOffset  = Math.max(0, rows.length - windowSize);
   const [offset, setOffset] = useState(0);
+  useEffect(() => setOffset(0), [indicatorTf, pair]);
 
   const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 
@@ -3139,6 +3296,10 @@ function RocPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolean
     const abs = Math.max(0.2, ...data.map(d => Math.abs(d.roc5)));
     return [-(abs * 1.2), abs * 1.2] as const;
   }, [data]);
+
+  if (loading) return (
+    <div className="flex h-full items-center justify-center" style={{ color: "var(--text-muted)", fontSize: 11 }}>Loading…</div>
+  );
 
   return (
     <div className="flex flex-col h-full">
@@ -3227,7 +3388,8 @@ function RocPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolean
   );
 }
 
-function buildVolatilityAnalysis(rows: SheetRow[]): { headline: string; bullets: string[]; description: string } {
+interface VolaRow { date: string; open: number; high: number; low: number; close: number; bbUpper: number; bbMiddle: number; bbLower: number; histVol: number; }
+function buildVolatilityAnalysis(rows: VolaRow[]): { headline: string; bullets: string[]; description: string } {
   if (rows.length < 2) return { headline: "—", bullets: [], description: "—" };
   const cur  = rows[rows.length - 1];
   const { close, bbUpper, bbMiddle, bbLower, histVol } = cur;
@@ -3282,7 +3444,8 @@ function buildVolatilityAnalysis(rows: SheetRow[]): { headline: string; bullets:
   return { headline, bullets, description };
 }
 
-function buildAtrAnalysis(rows: SheetRow[]): { headline: string; bullets: string[]; description: string } {
+interface AtrRow { date: string; atr14: number; }
+function buildAtrAnalysis(rows: AtrRow[]): { headline: string; bullets: string[]; description: string } {
   if (rows.length < 3) return { headline: "Insufficient data", bullets: [], description: "" };
   const cur  = rows[rows.length - 1];
   const prev = rows[rows.length - 2];
@@ -3335,10 +3498,24 @@ function buildAtrAnalysis(rows: SheetRow[]): { headline: string; bullets: string
 
 const ATR_WINDOW = 20;
 
-function AtrPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolean }) {
+function AtrPanelBody({ pair, indicatorTf, expanded }: { pair: string; indicatorTf: string; expanded?: boolean }) {
+  const [liveRows, setLiveRows] = useState<AtrRow[]>([]);
+  const [loading,  setLoading]  = useState(false);
+
+  useEffect(() => {
+    setLoading(true);
+    setLiveRows([]);
+    invoke<RawCandleV3[]>("get_live_candles_computed", { pair, tf: indicatorTf })
+      .then(candles => setLiveRows(candles.map(c => ({ date: c.date, atr14: c.atr14 }))))
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, [pair, indicatorTf]);
+
+  const rows = liveRows;
   const windowSize = expanded ? 40 : ATR_WINDOW;
   const maxOffset  = Math.max(0, rows.length - windowSize);
-  const [offset, setOffset]       = useState(0);
+  const [offset, setOffset] = useState(0);
+  useEffect(() => setOffset(0), [indicatorTf, pair]);
   const showAtr    = true;
   const showAtrSma = true;
 
@@ -3359,15 +3536,15 @@ function AtrPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolean
         idx:    i,
         date:   parseInt(parts[2]).toString(),
         month:  monthIdx !== prevMonth ? MONTHS[monthIdx] : "",
-        atr:    Math.round(r.atr14),
-        atrSma: Math.round(atrSma),
+        atr:    r.atr14,
+        atrSma: atrSma,
         rising: i > 0 ? r.atr14 >= slice[i - 1].atr14 : true,
       };
     });
   }, [rows, offset, windowSize]);
 
   const tickStyle  = { fill: "var(--text-muted)", fontSize: expanded ? 12 : 9 };
-  const yAxisWidth = expanded ? 44 : 32;
+  const yAxisWidth = expanded ? 52 : 52;
   const analysis   = useMemo(() => expanded ? buildAtrAnalysis(rows) : null, [rows, expanded]);
 
   const yDomain = useMemo(() => {
@@ -3384,6 +3561,10 @@ function AtrPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolean
   }, [data, showAtr, showAtrSma]);
 
   const latest = data[data.length - 1];
+
+  if (loading) return (
+    <div className="flex h-full items-center justify-center" style={{ color: "var(--text-muted)", fontSize: 11 }}>Loading…</div>
+  );
 
   return (
     <div className="flex flex-col h-full">
@@ -3424,7 +3605,7 @@ function AtrPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolean
                 );
               }}
             />
-            <YAxis tick={tickStyle} tickLine={false} axisLine={false} width={yAxisWidth} domain={yDomain} tickFormatter={v => v.toFixed(0)} />
+            <YAxis tick={tickStyle} tickLine={false} axisLine={false} width={yAxisWidth} domain={yDomain} tickFormatter={v => v < 1 ? v.toFixed(4) : v.toFixed(1)} />
             <Tooltip
               cursor={{ stroke: "rgba(255,255,255,0.35)", strokeWidth: 1 }}
               position={{ x: 60, y: 10 }}
@@ -3434,9 +3615,9 @@ function AtrPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolean
                 const diff = d.atr - d.atrSma;
                 return (
                   <div className="rounded-lg px-3 py-2 text-[10px]" style={{ background: "var(--bg-panel)", border: "1px solid var(--border-medium)", color: "var(--text-secondary)" }}>
-                    <div style={{ color: "#a78bfa", fontWeight: 700 }}>ATR: {d.atr} pips</div>
-                    <div>SMA20: {d.atrSma} pips</div>
-                    <div style={{ color: diff >= 0 ? "#60a5fa" : "#a78bfa" }}>{diff >= 0 ? "+" : ""}{diff} vs avg</div>
+                    <div style={{ color: "#a78bfa", fontWeight: 700 }}>ATR: {d.atr.toFixed(5)}</div>
+                    <div>SMA20: {d.atrSma.toFixed(5)}</div>
+                    <div style={{ color: diff >= 0 ? "#60a5fa" : "#a78bfa" }}>{diff >= 0 ? "+" : ""}{diff.toFixed(5)} vs avg</div>
                   </div>
                 );
               }}
@@ -3477,7 +3658,8 @@ function AtrPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolean
 
 const SQZ_WINDOW = 20;
 
-function buildSqueezeAnalysis(rows: SheetRow[]): { headline: string; bullets: string[]; description: string } {
+interface SqzRow { date: string; bbUpper: number; bbLower: number; keltnerUpper: number; keltnerLower: number; close: number; sma20: number; high: number; low: number; }
+function buildSqueezeAnalysis(rows: SqzRow[]): { headline: string; bullets: string[]; description: string } {
   if (rows.length < 3) return { headline: "—", bullets: [], description: "—" };
 
   const cur  = rows[rows.length - 1];
@@ -3541,10 +3723,28 @@ function buildSqueezeAnalysis(rows: SheetRow[]): { headline: string; bullets: st
   return { headline, bullets, description };
 }
 
-function SqueezePanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolean }) {
+function SqueezePanelBody({ pair, indicatorTf, expanded }: { pair: string; indicatorTf: string; expanded?: boolean }) {
+  const [liveRows, setLiveRows] = useState<SqzRow[]>([]);
+  const [loading,  setLoading]  = useState(false);
+
+  useEffect(() => {
+    setLoading(true);
+    setLiveRows([]);
+    invoke<RawCandleV3[]>("get_live_candles_computed", { pair, tf: indicatorTf })
+      .then(candles => setLiveRows(candles.map(c => ({
+        date: c.date, high: c.high, low: c.low, close: c.close, sma20: c.sma20,
+        bbUpper: c.bb_upper, bbLower: c.bb_lower,
+        keltnerUpper: c.keltner_upper, keltnerLower: c.keltner_lower,
+      }))))
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, [pair, indicatorTf]);
+
+  const rows = liveRows;
   const windowSize = expanded ? 40 : SQZ_WINDOW;
   const maxOffset  = Math.max(0, rows.length - windowSize);
   const [offset, setOffset] = useState(0);
+  useEffect(() => setOffset(0), [indicatorTf, pair]);
 
   const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 
@@ -3600,6 +3800,10 @@ function SqueezePanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boo
     const pad = abs * 0.25;
     return [-(abs + pad), abs + pad] as const;
   }, [data]);
+
+  if (loading) return (
+    <div className="flex h-full items-center justify-center" style={{ color: "var(--text-muted)", fontSize: 11 }}>Loading…</div>
+  );
 
   return (
     <div className="flex flex-col h-full">
@@ -3937,7 +4141,7 @@ const MS_LOOKBACK = 3;
 type MsSwing = { idx: number; type: "SH" | "SL"; price: number };
 type MsEvent = { idx: number; type: "BOS" | "CHOCH"; direction: "bull" | "bear" };
 
-function computeMarketStructure(rows: SheetRow[], N = MS_LOOKBACK): {
+function computeMarketStructure(rows: MsRow[], N = MS_LOOKBACK): {
   swings: MsSwing[]; events: MsEvent[]; state: "Bullish" | "Bearish" | "Range";
 } {
   if (rows.length < N * 2 + 1) return { swings: [], events: [], state: "Range" };
@@ -3998,7 +4202,7 @@ function computeMarketStructure(rows: SheetRow[], N = MS_LOOKBACK): {
   return { swings: alternating, events, state };
 }
 
-function buildMarketStructureAnalysis(rows: SheetRow[]): { bullets: string[]; description: string } {
+function buildMarketStructureAnalysis(rows: MsRow[]): { bullets: string[]; description: string } {
   const { swings, events, state } = computeMarketStructure(rows);
   const SHs      = swings.filter(s => s.type === "SH");
   const SLs      = swings.filter(s => s.type === "SL");
@@ -4021,10 +4225,26 @@ function buildMarketStructureAnalysis(rows: SheetRow[]): { bullets: string[]; de
   return { bullets, description };
 }
 
-function MarketStructurePanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolean }) {
+function MarketStructurePanelBody({ pair, indicatorTf, expanded }: { pair: string; indicatorTf: string; expanded?: boolean }) {
+  const [liveRows, setLiveRows] = useState<MsRow[]>([]);
+  const [loading,  setLoading]  = useState(false);
+
+  useEffect(() => {
+    setLoading(true);
+    setLiveRows([]);
+    invoke<RawCandleV3[]>("get_live_candles_computed", { pair, tf: indicatorTf })
+      .then(candles => setLiveRows(candles.map(c => ({
+        date: c.date, open: c.open, high: c.high, low: c.low, close: c.close,
+      }))))
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, [pair, indicatorTf]);
+
+  const rows = liveRows;
   const windowSize = expanded ? 40 : MS_WINDOW;
   const maxOffset  = Math.max(0, rows.length - windowSize);
   const [offset, setOffset] = useState(0);
+  useEffect(() => setOffset(0), [indicatorTf, pair]);
   const [showZones, setShowZones] = useState(true);
   const chartRef   = useRef<HTMLDivElement>(null);
   const [chartSize, setChartSize] = useState<{ w: number; h: number } | null>(null);
@@ -4037,7 +4257,7 @@ function MarketStructurePanelBody({ rows, expanded }: { rows: SheetRow[]; expand
       setChartSize({ w: r.width, h: r.height });
     });
     obs.observe(el); return () => obs.disconnect();
-  }, []);
+  }, [loading]);
 
   const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
   const structure = useMemo(() => computeMarketStructure(rows), [rows]);
@@ -4093,6 +4313,10 @@ function MarketStructurePanelBody({ rows, expanded }: { rows: SheetRow[]; expand
     if (!ev) return null;
     return { direction: ev.direction === "bull" ? "Bullish" : "Bearish", barsAgo: rows.length - 1 - ev.idx };
   }, [structure, rows.length]);
+
+  if (loading) return (
+    <div className="flex h-full items-center justify-center" style={{ color: "var(--text-muted)", fontSize: 11 }}>Loading…</div>
+  );
 
   return (
     <div className="flex flex-col h-full">
@@ -4389,10 +4613,27 @@ function MarketStructurePanelBody({ rows, expanded }: { rows: SheetRow[]; expand
 
 const VOLA_WINDOW = 20;
 
-function VolatilityPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolean }) {
+function VolatilityPanelBody({ pair, indicatorTf, expanded }: { pair: string; indicatorTf: string; expanded?: boolean }) {
+  const [liveRows, setLiveRows] = useState<VolaRow[]>([]);
+  const [loading,  setLoading]  = useState(false);
+
+  useEffect(() => {
+    setLoading(true);
+    setLiveRows([]);
+    invoke<RawCandleV3[]>("get_live_candles_computed", { pair, tf: indicatorTf })
+      .then(candles => setLiveRows(candles.map(c => ({
+        date: c.date, open: c.open, high: c.high, low: c.low, close: c.close,
+        bbUpper: c.bb_upper, bbMiddle: c.bb_middle, bbLower: c.bb_lower, histVol: c.hist_vol,
+      }))))
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, [pair, indicatorTf]);
+
+  const rows = liveRows;
   const windowSize = expanded ? 40 : VOLA_WINDOW;
   const maxOffset  = Math.max(0, rows.length - windowSize);
-  const [offset, setOffset]           = useState(0);
+  const [offset, setOffset] = useState(0);
+  useEffect(() => setOffset(0), [indicatorTf, pair]);
   const [showClose,   setShowClose]   = useState(true);
   const [showUpper,   setShowUpper]   = useState(true);
   const [showMid,     setShowMid]     = useState(true);
@@ -4462,9 +4703,13 @@ function VolatilityPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: 
     });
     obs.observe(el);
     return () => obs.disconnect();
-  }, []);
+  }, [loading]);
 
   const latest = data[data.length - 1];
+
+  if (loading) return (
+    <div className="flex h-full items-center justify-center" style={{ color: "var(--text-muted)", fontSize: 11 }}>Loading…</div>
+  );
 
   return (
     <div className="flex flex-col h-full">
@@ -4623,7 +4868,7 @@ function VolatilityPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: 
   );
 }
 
-function buildMomentumAnalysis(rows: SheetRow[]): { headline: string; bullets: string[]; description: string } {
+function buildMomentumAnalysis(rows: CciRow[]): { headline: string; bullets: string[]; description: string } {
   if (rows.length < 2) return { headline: "—", bullets: [], description: "—" };
   const idx  = rows.length - 1;
   const cur  = rows[idx];
@@ -4658,10 +4903,28 @@ function buildMomentumAnalysis(rows: SheetRow[]): { headline: string; bullets: s
 
 const MOM_WINDOW = 20;
 
-function CciPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolean }) {
+function CciPanelBody({ pair, indicatorTf, expanded }: { pair: string; indicatorTf: string; expanded?: boolean }) {
+  const [liveRows, setLiveRows] = useState<CciRow[]>([]);
+  const [loading,  setLoading]  = useState(false);
+
+  useEffect(() => {
+    setLoading(true);
+    setLiveRows([]);
+    invoke<RawCandleV3[]>("get_live_candles_computed", { pair, tf: indicatorTf })
+      .then(candles => setLiveRows(candles.map(c => ({
+        date:  c.date,
+        cci:   c.cci,
+        close: c.close,
+      }))))
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, [pair, indicatorTf]);
+
+  const rows = liveRows;
   const windowSize = expanded ? 40 : MOM_WINDOW;
   const maxOffset  = Math.max(0, rows.length - windowSize);
   const [offset, setOffset] = useState(0);
+  useEffect(() => setOffset(0), [indicatorTf, pair]);
 
   const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 
@@ -4696,6 +4959,10 @@ function CciPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolean
     const abs = Math.max(110, ...data.map(d => Math.abs(d.cci)));
     return [-(abs * 1.12), abs * 1.12] as const;
   }, [data]);
+
+  if (loading) return (
+    <div className="flex h-full items-center justify-center" style={{ color: "var(--text-muted)", fontSize: 11 }}>Loading…</div>
+  );
 
   return (
     <div className="flex flex-col h-full">
@@ -4789,7 +5056,7 @@ function CciPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolean
   );
 }
 
-function buildWrAnalysis(rows: SheetRow[]): { headline: string; bullets: string[]; description: string } {
+function buildWrAnalysis(rows: WrRow[]): { headline: string; bullets: string[]; description: string } {
   if (rows.length < 14) return { headline: "—", bullets: [], description: "—" };
   const idx     = rows.length - 1;
   const wr      = computeWR(rows, idx);
@@ -4819,10 +5086,24 @@ function buildWrAnalysis(rows: SheetRow[]): { headline: string; bullets: string[
   return { headline, bullets, description };
 }
 
-function WrPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolean }) {
+function WrPanelBody({ pair, indicatorTf, expanded }: { pair: string; indicatorTf: string; expanded?: boolean }) {
+  const [liveRows, setLiveRows] = useState<WrRow[]>([]);
+  const [loading,  setLoading]  = useState(false);
+
+  useEffect(() => {
+    setLoading(true);
+    setLiveRows([]);
+    invoke<RawCandleV3[]>("get_live_candles_computed", { pair, tf: indicatorTf })
+      .then(candles => setLiveRows(candles.map(c => ({ date: c.date, high: c.high, low: c.low, close: c.close }))))
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, [pair, indicatorTf]);
+
+  const rows = liveRows;
   const windowSize = expanded ? 40 : MOM_WINDOW;
   const maxOffset  = Math.max(0, rows.length - windowSize);
   const [offset, setOffset] = useState(0);
+  useEffect(() => setOffset(0), [indicatorTf, pair]);
 
   const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 
@@ -4847,6 +5128,10 @@ function WrPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolean 
   const tickStyle  = { fill: "var(--text-muted)", fontSize: expanded ? 12 : 9 };
   const yAxisWidth = expanded ? 44 : 32;
   const analysis   = useMemo(() => expanded ? buildWrAnalysis(rows) : null, [rows, expanded]);
+
+  if (loading) return (
+    <div className="flex h-full items-center justify-center" style={{ color: "var(--text-muted)", fontSize: 11 }}>Loading…</div>
+  );
 
   return (
     <div className="flex flex-col h-full">
@@ -5261,7 +5546,9 @@ function PivotPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boole
   );
 }
 
-function buildVolumeAnalysis(rows: SheetRow[]): { headline: string; bullets: string[]; description: string } {
+interface VolumeRow { date: string; open: number; close: number; volume: number; volumeSma20: number; }
+
+function buildVolumeAnalysis(rows: VolumeRow[]): { headline: string; bullets: string[]; description: string } {
   if (rows.length < 2) return { headline: "—", bullets: [], description: "—" };
   const cur  = rows[rows.length - 1];
   const prev = rows[rows.length - 2];
@@ -5310,10 +5597,26 @@ function buildVolumeAnalysis(rows: SheetRow[]): { headline: string; bullets: str
 
 const VOL_WINDOW = 20;
 
-function VolumePanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolean }) {
+function VolumePanelBody({ pair, indicatorTf, expanded }: { pair: string; indicatorTf: string; expanded?: boolean }) {
+  const [liveRows, setLiveRows] = useState<VolumeRow[]>([]);
+  const [loading,  setLoading]  = useState(false);
+
+  useEffect(() => {
+    setLoading(true);
+    setLiveRows([]);
+    invoke<RawCandleV3[]>("get_live_candles_computed", { pair, tf: indicatorTf })
+      .then(candles => setLiveRows(candles.map(c => ({
+        date: c.date, open: c.open, close: c.close, volume: c.volume, volumeSma20: c.volume_sma20,
+      }))))
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, [pair, indicatorTf]);
+
+  const rows = liveRows;
   const windowSize = expanded ? 40 : VOL_WINDOW;
   const maxOffset  = Math.max(0, rows.length - windowSize);
-  const [offset, setOffset]   = useState(0);
+  const [offset, setOffset] = useState(0);
+  useEffect(() => setOffset(0), [indicatorTf, pair]);
   const showVol = true;
   const showSma = true;
 
@@ -5358,6 +5661,10 @@ function VolumePanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: bool
     if (!vals.length) return [0, "auto"] as const;
     return [0, Math.max(...vals) * 1.15] as const;
   }, [data, showVol, showSma]);
+
+  if (loading) return (
+    <div className="flex h-full items-center justify-center" style={{ color: "var(--text-muted)", fontSize: 11 }}>Loading…</div>
+  );
 
   return (
     <div className="flex flex-col h-full">
@@ -5455,10 +5762,27 @@ function VolumePanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: bool
 
 const KELT_WINDOW = 20;
 
-function KeltPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolean }) {
+function KeltPanelBody({ pair, indicatorTf, expanded }: { pair: string; indicatorTf: string; expanded?: boolean }) {
+  const [liveRows, setLiveRows] = useState<KeltRow[]>([]);
+  const [loading,  setLoading]  = useState(false);
+
+  useEffect(() => {
+    setLoading(true);
+    setLiveRows([]);
+    invoke<RawCandleV3[]>("get_live_candles_computed", { pair, tf: indicatorTf })
+      .then(candles => setLiveRows(candles.map(c => ({
+        date: c.date, open: c.open, high: c.high, low: c.low, close: c.close,
+        keltnerUpper: c.keltner_upper, keltnerMiddle: c.keltner_middle, keltnerLower: c.keltner_lower,
+      }))))
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, [pair, indicatorTf]);
+
+  const rows = liveRows;
   const windowSize = expanded ? 40 : KELT_WINDOW;
   const maxOffset  = Math.max(0, rows.length - windowSize);
-  const [offset, setOffset]           = useState(0);
+  const [offset, setOffset] = useState(0);
+  useEffect(() => setOffset(0), [indicatorTf, pair]);
   const showClose   = true;
   const showUpper   = true;
   const showMid     = true;
@@ -5527,7 +5851,11 @@ function KeltPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolea
     });
     obs.observe(el);
     return () => obs.disconnect();
-  }, []);
+  }, [loading]);
+
+  if (loading) return (
+    <div className="flex h-full items-center justify-center" style={{ color: "var(--text-muted)", fontSize: 11 }}>Loading…</div>
+  );
 
   return (
     <div className="flex flex-col h-full">
@@ -5968,15 +6296,17 @@ interface CandlePattern {
   description: string;
 }
 
-const _bTop = (r: SheetRow) => Math.max(r.open, r.close);
-const _bBot = (r: SheetRow) => Math.min(r.open, r.close);
-const _bMid = (r: SheetRow) => (r.open + r.close) / 2;
-const _bull = (r: SheetRow) => r.close >= r.open;
-const _bear = (r: SheetRow) => r.close <  r.open;
-const _isDojiBody  = (r: SheetRow) => { const b = Math.abs(r.close - r.open); const rng = r.high - r.low; return rng > 0 && b / rng < 0.10; };
-const _isSmallBody = (r: SheetRow) => { const b = Math.abs(r.close - r.open); const rng = r.high - r.low; return rng > 0 && b / rng < 0.30; };
+interface CandleCtxRow { date: string; open: number; high: number; low: number; close: number; }
 
-function detectCandlePatterns(candles: SheetRow[]): CandlePattern[] {
+const _bTop = (r: CandleCtxRow) => Math.max(r.open, r.close);
+const _bBot = (r: CandleCtxRow) => Math.min(r.open, r.close);
+const _bMid = (r: CandleCtxRow) => (r.open + r.close) / 2;
+const _bull = (r: CandleCtxRow) => r.close >= r.open;
+const _bear = (r: CandleCtxRow) => r.close <  r.open;
+const _isDojiBody  = (r: CandleCtxRow) => { const b = Math.abs(r.close - r.open); const rng = r.high - r.low; return rng > 0 && b / rng < 0.10; };
+const _isSmallBody = (r: CandleCtxRow) => { const b = Math.abs(r.close - r.open); const rng = r.high - r.low; return rng > 0 && b / rng < 0.30; };
+
+function detectCandlePatterns(candles: CandleCtxRow[]): CandlePattern[] {
   if (candles.length < 2) return [];
   const out: CandlePattern[] = [];
   const c0 = candles[candles.length - 1];
@@ -6069,7 +6399,7 @@ const REGIME_WINDOW = 20;
 type RegimeState     = "Trending" | "Ranging" | "Compression";
 type VolatilityState = "Expanding" | "Contracting" | "Neutral";
 
-function computeRegime(rows: SheetRow[], idx: number): RegimeState {
+function computeRegime(rows: RegimeRow[], idx: number): RegimeState {
   if (idx < 0 || idx >= rows.length) return "Ranging";
   const r       = rows[idx];
   const adx     = r.adx ?? 0;
@@ -6084,7 +6414,7 @@ function computeRegime(rows: SheetRow[], idx: number): RegimeState {
 const REGIME_MIN_HOLD = 5;
 const REGIME_CONFIRM  = 3;
 
-function computeRegimeSequence(rows: SheetRow[]): RegimeState[] {
+function computeRegimeSequence(rows: RegimeRow[]): RegimeState[] {
   if (!rows.length) return [];
   const result: RegimeState[] = [];
   let current: RegimeState        = computeRegime(rows, 0);
@@ -6119,7 +6449,7 @@ function computeRegimeSequence(rows: SheetRow[]): RegimeState[] {
   return result;
 }
 
-function computeRegimeVolatility(rows: SheetRow[], idx: number): VolatilityState {
+function computeRegimeVolatility(rows: RegimeRow[], idx: number): VolatilityState {
   if (idx < 0 || idx >= rows.length) return "Normal";
   const slice = rows.slice(Math.max(0, idx - 19), idx + 1);
   const sma   = slice.reduce((s, r) => s + (r.atr14 ?? 0), 0) / (slice.length || 1);
@@ -6130,7 +6460,7 @@ function computeRegimeVolatility(rows: SheetRow[], idx: number): VolatilityState
   return "Neutral";
 }
 
-function buildRegimeAnalysis(rows: SheetRow[]): { headline: string; bullets: string[]; description: string } {
+function buildRegimeAnalysis(rows: RegimeRow[]): { headline: string; bullets: string[]; description: string } {
   if (rows.length < 5) return { headline: "—", bullets: [], description: "—" };
   const cur      = rows[rows.length - 1];
   const adx      = cur.adx      ?? 0;
@@ -6169,10 +6499,27 @@ function buildRegimeAnalysis(rows: SheetRow[]): { headline: string; bullets: str
   return { headline, bullets, description };
 }
 
-function RegimePanelBody({ rows, expanded, showCandles, onToggleCandles }: { rows: SheetRow[]; expanded?: boolean; showCandles: boolean; onToggleCandles: () => void }) {
+function RegimePanelBody({ pair, indicatorTf, expanded, showCandles, onToggleCandles }: { pair: string; indicatorTf: string; expanded?: boolean; showCandles: boolean; onToggleCandles: () => void }) {
+  const [liveRows, setLiveRows] = useState<RegimeRow[]>([]);
+  const [loading,  setLoading]  = useState(false);
+
+  useEffect(() => {
+    setLoading(true);
+    setLiveRows([]);
+    invoke<RawCandleV3[]>("get_live_candles_computed", { pair, tf: indicatorTf })
+      .then(candles => setLiveRows(candles.map(c => ({
+        date: c.date, open: c.open, high: c.high, low: c.low, close: c.close,
+        adx: c.adx, atr14: c.atr14, bbUpper: c.bb_upper, bbLower: c.bb_lower,
+      }))))
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, [pair, indicatorTf]);
+
+  const rows = liveRows;
   const windowSize = expanded ? 40 : REGIME_WINDOW;
   const maxOffset  = Math.max(0, rows.length - windowSize);
   const [offset, setOffset] = useState(0);
+  useEffect(() => setOffset(0), [indicatorTf, pair]);
   const chartRef  = useRef<HTMLDivElement>(null);
   const [chartSize, setChartSize] = useState<{ w: number; h: number } | null>(null);
 
@@ -6185,7 +6532,7 @@ function RegimePanelBody({ rows, expanded, showCandles, onToggleCandles }: { row
     });
     ro.observe(el);
     return () => ro.disconnect();
-  }, []);
+  }, [loading]);
 
   const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 
@@ -6250,6 +6597,10 @@ function RegimePanelBody({ rows, expanded, showCandles, onToggleCandles }: { row
     segs.push({ x1: segStart, x2: data.length - 1, regime: segRegime });
     return segs;
   }, [data]);
+
+  if (loading) return (
+    <div className="flex h-full items-center justify-center" style={{ color: "var(--text-muted)", fontSize: 11 }}>Loading…</div>
+  );
 
   return (
     <div className="flex flex-col h-full">
@@ -6428,17 +6779,36 @@ function RegimePanelBody({ rows, expanded, showCandles, onToggleCandles }: { row
 
 // ─── Candle Context Panel body ────────────────────────────────────────────────
 
-function CandleContextPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolean }) {
-  const candles = useMemo(() => rows.slice(-12), [rows]);
-  const patterns = useMemo(() => detectCandlePatterns(candles), [candles]);
+function CandleContextPanelBody({ pair, indicatorTf, expanded }: { pair: string; indicatorTf: string; expanded?: boolean }) {
+  const [liveRows, setLiveRows] = useState<CandleCtxRow[]>([]);
+  const [loading,  setLoading]  = useState(false);
+
+  useEffect(() => {
+    setLoading(true);
+    setLiveRows([]);
+    invoke<RawCandleV3[]>("get_live_candles_computed", { pair, tf: indicatorTf })
+      .then(candles => setLiveRows(candles.map(c => ({
+        date: c.date, open: c.open, high: c.high, low: c.low, close: c.close,
+      }))))
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, [pair, indicatorTf]);
+
+  if (loading) return (
+    <div className="flex h-full items-center justify-center" style={{ color: "var(--text-muted)", fontSize: 11 }}>Loading…</div>
+  );
+
+  const rows = liveRows;
+  const candles = rows.slice(-12);
+  const patterns = detectCandlePatterns(candles);
 
   const BULL = "#60a5fa";
   const BEAR = "#a78bfa";
   const biasColor = (b: string) => b === "bullish" ? BULL : BEAR;
   const tierColor = (t: number) => t === 1 ? "#fbbf24" : t === 2 ? "#60a5fa" : "#94a3b8";
 
-  const yHigh  = useMemo(() => candles.length ? Math.max(...candles.map(c => c.high)) : 1,   [candles]);
-  const yLow   = useMemo(() => candles.length ? Math.min(...candles.map(c => c.low))  : 0,   [candles]);
+  const yHigh  = candles.length ? Math.max(...candles.map(c => c.high)) : 1;
+  const yLow   = candles.length ? Math.min(...candles.map(c => c.low))  : 0;
   const yRange = yHigh - yLow || 0.001;
   const yPad   = yRange * 0.14;
 
@@ -6886,6 +7256,8 @@ export function AnalyticsV3() {
   }
   const [expanded, setExpanded] = useState<PanelMeta | null>(null);
   const [ichiRows, setIchiRows] = useState<SheetRow[]>([]);
+  const [chartTf, setChartTf] = useState<"1W" | "1D" | "4H" | "1H" | "15M" | "5M" | "1M">("1D");
+  const [indicatorTf, setIndicatorTf] = useState<"1W" | "1D" | "4H" | "1H" | "15M" | "5M" | "1M">("1D");
   const [timeframe, setTimeframe] = useState("1D");
   const [tfOpen, setTfOpen]       = useState(false);
   const close = useCallback(() => setExpanded(null), []);
@@ -6987,17 +7359,25 @@ export function AnalyticsV3() {
     analysisResult.direction === "SHORT" ? "short"   :
     "neutral";
 
-  const latestRow   = sheetRows[sheetRows.length - 1];
+  const [indicatorRows, setIndicatorRows] = useState<SheetRow[]>([]);
+  useEffect(() => {
+    invoke<RawCandleV3[]>("get_live_candles_computed", { pair: selectedPair, tf: indicatorTf })
+      .then(candles => setIndicatorRows(candles.map(mapToSheetRow)))
+      .catch(() => {});
+  }, [selectedPair, indicatorTf]);
+  const iRows     = indicatorRows.length > 0 ? indicatorRows : sheetRows;
+
+  const latestRow   = iRows[iRows.length - 1];
   const macdBias    = !latestRow ? "neutral"
     : latestRow.macdHistogram > 0 ? "bullish"
     : latestRow.macdHistogram < 0 ? "bearish"
     : "neutral";
   const macdScore = useMemo(() => {
-    if (!latestRow || sheetRows.length < 2) return 0;
-    const recent = sheetRows.slice(-20);
+    if (!latestRow || iRows.length < 2) return 0;
+    const recent = iRows.slice(-20);
     const maxHist = Math.max(...recent.map(r => Math.abs(r.macdHistogram)));
     return maxHist > 0 ? Math.round((Math.abs(latestRow.macdHistogram) / maxHist) * 100) : 0;
-  }, [sheetRows, latestRow]);
+  }, [iRows, latestRow]);
   const BIAS_STYLE: Record<string, { color: string; bg: string; border: string; glow: string }> = {
     bullish: { color: "#60a5fa", bg: "rgba(96,165,250,0.12)",  border: "rgba(96,165,250,0.35)",  glow: "0 0 8px rgba(96,165,250,0.45)"  },
     bearish: { color: "#a78bfa", bg: "rgba(167,139,250,0.12)", border: "rgba(167,139,250,0.35)", glow: "0 0 8px rgba(167,139,250,0.45)" },
@@ -7022,11 +7402,11 @@ export function AnalyticsV3() {
   );
   const macdBadge         = makeMacdBadge();
   const macdBadgeExpanded = makeMacdBadge(true);
-  const macdHeadline      = sheetRows.length > 0 ? buildMacdAnalysis(sheetRows).headline : "";
-  const priceHeadline     = sheetRows.length > 0 ? buildPriceAnalysis(sheetRows).headline : "";
-  const rsiHeadline       = sheetRows.length > 0 ? buildRsiAnalysis(sheetRows).headline : "";
-  const rsi14Headline     = sheetRows.length > 0 ? buildRsi14Analysis(sheetRows).headline : "";
-  const maHeadline        = sheetRows.length > 0 ? buildMaAnalysis(sheetRows).headline : "";
+  const macdHeadline      = iRows.length > 0 ? buildMacdAnalysis(iRows).headline : "";
+  const priceHeadline     = iRows.length > 0 ? buildPriceAnalysis(iRows).headline : "";
+  const rsiHeadline       = iRows.length > 0 ? buildRsiAnalysis(iRows).headline : "";
+  const rsi14Headline     = iRows.length > 0 ? buildRsi14Analysis(iRows).headline : "";
+  const maHeadline        = iRows.length > 0 ? buildMaAnalysis(iRows).headline : "";
 
   const maBias = !latestRow ? "neutral"
     : (latestRow.close > latestRow.ema50 && latestRow.close > latestRow.ema200) ? "bullish"
@@ -7058,7 +7438,7 @@ export function AnalyticsV3() {
   const maBadge         = makeMaBadge();
   const maBadgeExpanded = makeMaBadge(true);
 
-  const keltHeadline = sheetRows.length > 0 ? buildKeltAnalysis(sheetRows).headline : "";
+  const keltHeadline = iRows.length > 0 ? buildKeltAnalysis(iRows).headline : "";
   const keltBias = !latestRow ? "neutral"
     : latestRow.close > latestRow.keltnerUpper ? "bullish"
     : latestRow.close < latestRow.keltnerLower ? "bearish"
@@ -7091,7 +7471,7 @@ export function AnalyticsV3() {
   const keltBadge         = makeKeltBadge();
   const keltBadgeExpanded = makeKeltBadge(true);
 
-  const adxHeadline = sheetRows.length > 0 ? buildAdxAnalysis(sheetRows).headline : "";
+  const adxHeadline = iRows.length > 0 ? buildAdxAnalysis(iRows).headline : "";
   const adxBias = !latestRow ? "neutral"
     : latestRow.adx >= 25 && latestRow.diPlus > latestRow.diMinus ? "bullish"
     : latestRow.adx >= 25 && latestRow.diMinus > latestRow.diPlus ? "bearish"
@@ -7120,7 +7500,7 @@ export function AnalyticsV3() {
   const adxBadge         = makeAdxBadge();
   const adxBadgeExpanded = makeAdxBadge(true);
 
-  const ichiHeadline = sheetRows.length > 0 ? buildIchiAnalysis(sheetRows).headline : "";
+  const ichiHeadline = iRows.length > 0 ? buildIchiAnalysis(iRows).headline : "";
   // Bias: primary rule — cloud position determines trend direction (above=bullish, below=bearish, inside=neutral)
   const ichiBias = !latestRow ? "neutral"
     : latestRow.close > Math.max(latestRow.senkouA, latestRow.senkouB) ? "bullish"
@@ -7130,11 +7510,11 @@ export function AnalyticsV3() {
   // Confirmations: (1) price vs cloud, (2) cloud color, (3) Tenkan/Kijun alignment, (4) Chikou vs price 26 bars ago
   const ichiScore = useMemo(() => {
     if (!latestRow) return 0;
-    const cloudTop     = Math.max(latestRow.senkouA, latestRow.senkouB);
-    const cloudBottom  = Math.min(latestRow.senkouA, latestRow.senkouB);
+    const cloudTop     = Math.max(latestRow.senkouA ?? 0, latestRow.senkouB ?? 0);
+    const cloudBottom  = Math.min(latestRow.senkouA ?? 0, latestRow.senkouB ?? 0);
     const aboveCloud   = latestRow.close > cloudTop;
     const belowCloud   = latestRow.close < cloudBottom;
-    const bullishCloud = latestRow.senkouA > latestRow.senkouB;
+    const bullishCloud = (latestRow.senkouA ?? 0) > (latestRow.senkouB ?? 0);
     const bearishCloud = latestRow.senkouB > latestRow.senkouA;
     const tkBullish    = latestRow.tenkan > latestRow.kijun;
     const chikouRef    = sheetRows.length > 26 ? sheetRows[sheetRows.length - 27] : null;
@@ -7244,7 +7624,7 @@ export function AnalyticsV3() {
   const volBadge         = makeVolBadge();
   const volBadgeExpanded = makeVolBadge(true);
 
-  const pivotHeadline = sheetRows.length > 0 ? buildPivotAnalysis(sheetRows).headline : "";
+  const pivotHeadline = iRows.length > 0 ? buildPivotAnalysis(iRows).headline : "";
   const pivotBias = !latestRow ? "neutral"
     : latestRow.close > latestRow.r1 ? "bullish"
     : latestRow.close < latestRow.s1 ? "bearish"
@@ -7279,7 +7659,7 @@ export function AnalyticsV3() {
   const pivotBadge         = makePivotBadge();
   const pivotBadgeExpanded = makePivotBadge(true);
 
-  const momHeadline = sheetRows.length > 0 ? buildMomentumAnalysis(sheetRows).headline : "";
+  const momHeadline = iRows.length > 0 ? buildMomentumAnalysis(iRows).headline : "";
   const momBias = !latestRow ? "neutral"
     : latestRow.cci > 50 ? "bullish"
     : latestRow.cci < -50 ? "bearish"
@@ -7309,9 +7689,9 @@ export function AnalyticsV3() {
   const momBadgeExpanded = makeMomBadge(true);
 
   const latestWr = useMemo(() =>
-    sheetRows.length > 0 ? computeWR(sheetRows, sheetRows.length - 1) : -50,
-  [sheetRows]);
-  const wrHeadline = sheetRows.length > 0
+    iRows.length > 0 ? computeWR(iRows, iRows.length - 1) : -50,
+  [iRows]);
+  const wrHeadline = iRows.length > 0
     ? (latestWr > -20 ? "Overbought — Reversal Watch"
       : latestWr < -80 ? "Oversold — Bounce Watch"
       : `Neutral Zone — %R ${latestWr.toFixed(1)}`)
@@ -7343,22 +7723,22 @@ export function AnalyticsV3() {
   const wrBadge         = makeWrBadge();
   const wrBadgeExpanded = makeWrBadge(true);
 
-  const atrHeadline = sheetRows.length > 0 ? buildAtrAnalysis(sheetRows).headline : "";
+  const atrHeadline = iRows.length > 0 ? buildAtrAnalysis(iRows).headline : "";
   const atrBias = useMemo(() => {
-    if (!latestRow || sheetRows.length < 3) return "neutral";
-    const recent20 = sheetRows.slice(-20);
+    if (!latestRow || iRows.length < 3) return "neutral";
+    const recent20 = iRows.slice(-20);
     const avg      = recent20.reduce((s, r) => s + r.atr14, 0) / recent20.length;
     const ratio    = avg > 0 ? latestRow.atr14 / avg : 1;
-    const rising   = latestRow.atr14 > sheetRows[sheetRows.length - 2].atr14;
+    const rising   = latestRow.atr14 > iRows[iRows.length - 2].atr14;
     return ratio > 1.10 && rising ? "bullish" : ratio < 0.90 && !rising ? "bearish" : "neutral";
-  }, [latestRow, sheetRows]);
+  }, [latestRow, iRows]);
   const atrScore = useMemo(() => {
-    if (!latestRow || sheetRows.length < 3) return 0;
-    const recent20 = sheetRows.slice(-20);
+    if (!latestRow || iRows.length < 3) return 0;
+    const recent20 = iRows.slice(-20);
     const avg      = recent20.reduce((s, r) => s + r.atr14, 0) / recent20.length;
     const ratio    = avg > 0 ? latestRow.atr14 / avg : 1;
     return Math.min(100, Math.round(Math.abs(ratio - 1) * 200));
-  }, [latestRow, sheetRows]);
+  }, [latestRow, iRows]);
   const makeAtrBadge = (large?: boolean) => (
     <HoverTooltip tip={`Score ${atrScore}/100 — ATR(14) deviation from 20-bar average, scaled ×2, capped at 100. Higher = further from normal volatility. ${latestRow ? `Current ATR: ${Math.round(latestRow.atr14)} pips.` : ""}`}>
       <span
@@ -7379,7 +7759,7 @@ export function AnalyticsV3() {
   const atrBadge         = makeAtrBadge();
   const atrBadgeExpanded = makeAtrBadge(true);
 
-  const msStructure = useMemo(() => computeMarketStructure(ichiRows.length > 0 ? ichiRows : sheetRows), [ichiRows, sheetRows]);
+  const msStructure = useMemo(() => computeMarketStructure(iRows), [iRows]);
   const msState     = msStructure.state;
   const msHeadline  = msState;
   const msBias      = msState === "Bullish" ? "bullish" : msState === "Bearish" ? "bearish" : "neutral";
@@ -7401,15 +7781,15 @@ export function AnalyticsV3() {
   const msBadgeExpanded = makeMsBadge(true);
 
   const [regimeShowCandles, setRegimeShowCandles] = useState(false);
-  const regimeRows   = ichiRows.length > 0 ? ichiRows : sheetRows;
+  const regimeRows   = iRows;
   const curRegimeState = useMemo<RegimeState>(() => {
-    const seq = computeRegimeSequence(regimeRows);
+    const seq = computeRegimeSequence(iRows);
     return seq[seq.length - 1] ?? "Ranging";
-  }, [regimeRows]);
+  }, [iRows]);
   const curVolState = useMemo<VolatilityState>(() => {
-    return regimeRows.length ? computeRegimeVolatility(regimeRows, regimeRows.length - 1) : "Neutral";
-  }, [regimeRows]);
-  const regimeAdx = regimeRows.length ? (regimeRows[regimeRows.length - 1]?.adx ?? 0) : 0;
+    return iRows.length ? computeRegimeVolatility(iRows, iRows.length - 1) : "Neutral";
+  }, [iRows]);
+  const regimeAdx = iRows.length ? (iRows[iRows.length - 1]?.adx ?? 0) : 0;
   const trendStrength = curRegimeState === "Trending"
     ? regimeAdx >= 35 ? "Strong"
     : regimeAdx >= 25 ? "Normal"
@@ -7498,7 +7878,7 @@ export function AnalyticsV3() {
     : undefined;
   const fswHeadline = "";
 
-  const cctxPatterns   = useMemo(() => detectCandlePatterns(sheetRows.slice(-5)), [sheetRows]);
+  const cctxPatterns   = useMemo(() => detectCandlePatterns(iRows.slice(-5)), [iRows]);
   const cctxTopPattern = cctxPatterns[0] ?? null;
   const cctxBias       = cctxTopPattern ? cctxTopPattern.bias : "neutral";
   const cctxHeadline   = cctxTopPattern ? `${cctxTopPattern.name} · Tier ${cctxTopPattern.tier}` : "No pattern detected";
@@ -7523,7 +7903,7 @@ export function AnalyticsV3() {
   const cctxBadge         = makeCctxBadge();
   const cctxBadgeExpanded = makeCctxBadge(true);
 
-  const volaHeadline = sheetRows.length > 0 ? buildVolatilityAnalysis(sheetRows).headline : "";
+  const volaHeadline = iRows.length > 0 ? buildVolatilityAnalysis(iRows).headline : "";
   const volaBias = !latestRow ? "neutral"
     : latestRow.close > latestRow.bbUpper ? "bullish"
     : latestRow.close < latestRow.bbLower ? "bearish"
@@ -7555,19 +7935,19 @@ export function AnalyticsV3() {
   const volaBadge         = makeVolaBadge();
   const volaBadgeExpanded = makeVolaBadge(true);
 
-  const avgpHeadline = sheetRows.length > 0 ? buildAvgPriceAnalysis(sheetRows).headline : "";
+  const avgpHeadline = iRows.length > 0 ? buildAvgPriceAnalysis(iRows).headline : "";
   const avgpBias = useMemo(() => {
-    if (sheetRows.length < 6) return "neutral";
-    const idx = sheetRows.length - 1;
-    const roc5 = ((sheetRows[idx].close - sheetRows[idx - 5].close) / sheetRows[idx - 5].close) * 100;
+    if (iRows.length < 6) return "neutral";
+    const idx = iRows.length - 1;
+    const roc5 = ((iRows[idx].close - iRows[idx - 5].close) / iRows[idx - 5].close) * 100;
     return roc5 > 0.05 ? "bullish" : roc5 < -0.05 ? "bearish" : "neutral";
-  }, [sheetRows]);
+  }, [iRows]);
   const avgpScore = useMemo(() => {
-    if (sheetRows.length < 6) return 0;
-    const idx  = sheetRows.length - 1;
-    const roc5 = Math.abs(((sheetRows[idx].close - sheetRows[idx - 5].close) / sheetRows[idx - 5].close) * 100);
+    if (iRows.length < 6) return 0;
+    const idx  = iRows.length - 1;
+    const roc5 = Math.abs(((iRows[idx].close - iRows[idx - 5].close) / iRows[idx - 5].close) * 100);
     return Math.min(100, Math.round(roc5 * 20));
-  }, [sheetRows]);
+  }, [iRows]);
   const makeAvgpBadge = (large?: boolean) => (
     <HoverTooltip tip={`Score ${avgpScore}/100 — ROC(5) magnitude × 20, capped at 100 (±5% ROC = score 100). Higher = stronger 5-session directional momentum. ${sheetRows.length >= 6 ? `ROC(5) is ${(((sheetRows[sheetRows.length - 1].close - sheetRows[sheetRows.length - 6].close) / sheetRows[sheetRows.length - 6].close) * 100).toFixed(3)}%.` : ""}`}>
       <span
@@ -7588,21 +7968,21 @@ export function AnalyticsV3() {
   const avgpBadge         = makeAvgpBadge();
   const avgpBadgeExpanded = makeAvgpBadge(true);
 
-  const rocHeadline = sheetRows.length > 0 ? buildRocAnalysis(sheetRows).headline : "";
+  const rocHeadline = iRows.length > 0 ? buildRocAnalysis(iRows).headline : "";
   const rocBias = useMemo(() => {
-    if (sheetRows.length < 6) return "neutral" as const;
-    const idx  = sheetRows.length - 1;
-    const roc5 = ((sheetRows[idx].close - sheetRows[idx - 5].close) / sheetRows[idx - 5].close) * 100;
+    if (iRows.length < 6) return "neutral" as const;
+    const idx  = iRows.length - 1;
+    const roc5 = ((iRows[idx].close - iRows[idx - 5].close) / iRows[idx - 5].close) * 100;
     return roc5 > 0.05 ? "bullish" as const : roc5 < -0.05 ? "bearish" as const : "neutral" as const;
-  }, [sheetRows]);
+  }, [iRows]);
   const rocScore = useMemo(() => {
-    if (sheetRows.length < 6) return 0;
-    const idx  = sheetRows.length - 1;
-    const roc5 = Math.abs(((sheetRows[idx].close - sheetRows[idx - 5].close) / sheetRows[idx - 5].close) * 100);
+    if (iRows.length < 6) return 0;
+    const idx  = iRows.length - 1;
+    const roc5 = Math.abs(((iRows[idx].close - iRows[idx - 5].close) / iRows[idx - 5].close) * 100);
     return Math.min(100, Math.round(roc5 * 20));
-  }, [sheetRows]);
+  }, [iRows]);
   const makeRocBadge = (large?: boolean) => (
-    <HoverTooltip tip={`Score ${rocScore}/100 — ROC(5) magnitude × 20, capped at 100 (±5% ROC = score 100). Higher = stronger 5-session directional momentum. ${sheetRows.length >= 6 ? `ROC(5) is ${(((sheetRows[sheetRows.length - 1].close - sheetRows[sheetRows.length - 6].close) / sheetRows[sheetRows.length - 6].close) * 100).toFixed(3)}%.` : ""}`}>
+    <HoverTooltip tip={`Score ${rocScore}/100 — ROC(5) magnitude × 20, capped at 100 (±5% ROC = score 100). Higher = stronger 5-session directional momentum. ${iRows.length >= 6 ? `ROC(5) is ${(((iRows[iRows.length - 1].close - iRows[iRows.length - 6].close) / iRows[iRows.length - 6].close) * 100).toFixed(3)}%.` : ""}`}>
       <span
         className={`${large ? "text-[11px]" : "text-[8px]"} font-black uppercase rounded-full`}
         style={{
@@ -7682,11 +8062,11 @@ export function AnalyticsV3() {
     : latestRow.close < latestRow.open ? "bearish"
     : "neutral";
   const priceScore = useMemo(() => {
-    if (!latestRow || sheetRows.length < 2) return 0;
-    const recent = sheetRows.slice(-20);
+    if (!latestRow || iRows.length < 2) return 0;
+    const recent = iRows.slice(-20);
     const maxBody = Math.max(...recent.map(r => Math.abs(r.close - r.open)));
     return maxBody > 0 ? Math.round((Math.abs(latestRow.close - latestRow.open) / maxBody) * 100) : 0;
-  }, [sheetRows, latestRow]);
+  }, [iRows, latestRow]);
   const makePriceBadge = (large?: boolean) => (
     <HoverTooltip tip={`Score ${priceScore}/100 — candle body size relative to the 20-session peak. Higher = stronger conviction in the current direction. 100 means today has the largest body in the recent window.`}>
       <span
@@ -7891,7 +8271,7 @@ export function AnalyticsV3() {
         <div className="flex-1 min-h-0" style={{ overflowY: "auto", paddingTop: "10px", paddingRight: "10px" }}>
           {sheetRows.length > 0 && (
             <div style={{ display: "flex", alignItems: "flex-start" }}>
-              <PriceHistoryChart rows={sheetRows} pair={selectedPair} />
+              <PriceHistoryChart rows={sheetRows} pair={selectedPair} chartTf={chartTf} setChartTf={setChartTf} />
               <div style={{ flex: 1, paddingLeft: 24, marginTop: 4, position: "relative" }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 32 }}>
                   <div style={{ display: "flex", alignItems: "flex-start" }}>
@@ -7952,7 +8332,22 @@ export function AnalyticsV3() {
               </div>
             </div>
           )}
-          <div style={{ height: 2, background: "rgba(255,255,255,0.12)", margin: "10px 0 16px" }} />
+          <div style={{ height: 2, background: "rgba(255,255,255,0.12)", margin: "10px 0 10px" }} />
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
+            <span style={{ fontSize: 9, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.1em", color: "var(--text-muted)", whiteSpace: "nowrap" }}>Indicator Timeframe</span>
+            <div style={{ display: "flex", gap: 4 }}>
+              {(["1W","1D","4H","1H","15M","5M","1M"] as const).map(tf => (
+                <button key={tf} onClick={() => setIndicatorTf(tf)} style={{
+                  fontSize: 9, fontWeight: 700, padding: "4px 10px",
+                  textTransform: "uppercase", letterSpacing: "0.08em",
+                  background: indicatorTf === tf ? "var(--accent-dim)"    : "var(--bg-panel-alt)",
+                  border:     indicatorTf === tf ? "1px solid var(--accent-border)" : "1px solid var(--border-medium)",
+                  color:      indicatorTf === tf ? "var(--accent-text)"   : "var(--text-secondary)",
+                  borderRadius: 8, cursor: "pointer",
+                }}>{tf}</button>
+              ))}
+            </div>
+          </div>
           <div style={{ display: "flex", flexDirection: "row", flexWrap: "wrap", columnGap: 10, rowGap: 0, alignItems: "flex-start", paddingTop: 10 }}>
             {(() => {
               let offset = 0;
@@ -8023,27 +8418,27 @@ export function AnalyticsV3() {
                             subtitle2={p.id === "regime" ? regimeAlignmentInsight : undefined}
                             onExpand={() => setExpanded({ id: p.id, label: p.label, sub: p.sub })}>
                             {p.id === "price"           && <PricePanelBody        rows={sheetRows} />}
-                            {p.id === "macd"            && <MacdPanelBody         rows={ichiRows.length > 0 ? ichiRows : sheetRows} />}
-                            {p.id === "rsi9"            && <RsiPanelBody          rows={ichiRows.length > 0 ? ichiRows : sheetRows} />}
-                            {p.id === "rsi14"           && <Rsi14PanelBody        rows={ichiRows.length > 0 ? ichiRows : sheetRows} />}
-                            {p.id === "moving-averages" && <MaPanelBody           rows={ichiRows.length > 0 ? ichiRows : sheetRows} />}
-                            {p.id === "keltner"         && <KeltPanelBody         rows={ichiRows.length > 0 ? ichiRows : sheetRows} />}
-                            {p.id === "adx"             && <AdxPanelBody          rows={ichiRows.length > 0 ? ichiRows : sheetRows} />}
+                            {p.id === "macd"            && <MacdPanelBody         pair={selectedPair} indicatorTf={indicatorTf} />}
+                            {p.id === "rsi9"            && <RsiPanelBody          pair={selectedPair} indicatorTf={indicatorTf} />}
+                            {p.id === "rsi14"           && <Rsi14PanelBody        pair={selectedPair} indicatorTf={indicatorTf} />}
+                            {p.id === "moving-averages" && <MaPanelBody           pair={selectedPair} indicatorTf={indicatorTf} />}
+                            {p.id === "keltner"         && <KeltPanelBody         pair={selectedPair} indicatorTf={indicatorTf} />}
+                            {p.id === "adx"             && <AdxPanelBody          pair={selectedPair} indicatorTf={indicatorTf} />}
                             {p.id === "ichimoku"        && <IchiPanelBody         rows={ichiRows.length > 0 ? ichiRows : sheetRows} />}
                             {p.id === "session"         && <SessionPanelBody      rows={sheetRows} />}
-                            {p.id === "volume"          && <VolumePanelBody       rows={sheetRows} />}
+                            {p.id === "volume"          && <VolumePanelBody       pair={selectedPair} indicatorTf={indicatorTf} />}
                             {p.id === "pivots"          && <PivotPanelBody        rows={ichiRows.length > 0 ? ichiRows : sheetRows} />}
-                            {p.id === "cci"             && <CciPanelBody          rows={ichiRows.length > 0 ? ichiRows : sheetRows} />}
-                            {p.id === "wr"              && <WrPanelBody           rows={ichiRows.length > 0 ? ichiRows : sheetRows} />}
-                            {p.id === "volatility"      && <VolatilityPanelBody   rows={ichiRows.length > 0 ? ichiRows : sheetRows} />}
-                            {p.id === "avg-price"       && <AvgPricePanelBody     rows={ichiRows.length > 0 ? ichiRows : sheetRows} />}
-                            {p.id === "roc"             && <RocPanelBody          rows={ichiRows.length > 0 ? ichiRows : sheetRows} />}
-                            {p.id === "atr"             && <AtrPanelBody          rows={ichiRows.length > 0 ? ichiRows : sheetRows} />}
-                            {p.id === "squeeze"         && <SqueezePanelBody      rows={ichiRows.length > 0 ? ichiRows : sheetRows} />}
+                            {p.id === "cci"             && <CciPanelBody          pair={selectedPair} indicatorTf={indicatorTf} />}
+                            {p.id === "wr"              && <WrPanelBody           pair={selectedPair} indicatorTf={indicatorTf} />}
+                            {p.id === "volatility"      && <VolatilityPanelBody   pair={selectedPair} indicatorTf={indicatorTf} />}
+                            {p.id === "avg-price"       && <AvgPricePanelBody     pair={selectedPair} indicatorTf={indicatorTf} />}
+                            {p.id === "roc"             && <RocPanelBody          pair={selectedPair} indicatorTf={indicatorTf} />}
+                            {p.id === "atr"             && <AtrPanelBody          pair={selectedPair} indicatorTf={indicatorTf} />}
+                            {p.id === "squeeze"         && <SqueezePanelBody      pair={selectedPair} indicatorTf={indicatorTf} />}
                             {p.id === "failure-swing"   && <FailureSwingPanelBody  rows={sheetRows} />}
-                            {p.id === "candle-context"  && <CandleContextPanelBody    rows={sheetRows} />}
-                            {p.id === "market-structure" && <MarketStructurePanelBody rows={ichiRows.length > 0 ? ichiRows : sheetRows} />}
-                            {p.id === "regime"          && <RegimePanelBody           rows={ichiRows.length > 0 ? ichiRows : sheetRows} showCandles={regimeShowCandles} onToggleCandles={() => setRegimeShowCandles(v => !v)} />}
+                            {p.id === "candle-context"  && <CandleContextPanelBody    pair={selectedPair} indicatorTf={indicatorTf} />}
+                            {p.id === "market-structure" && <MarketStructurePanelBody pair={selectedPair} indicatorTf={indicatorTf} />}
+                            {p.id === "regime"          && <RegimePanelBody           pair={selectedPair} indicatorTf={indicatorTf} showCandles={regimeShowCandles} onToggleCandles={() => setRegimeShowCandles(v => !v)} />}
                           </BlankPanel>
                         );
                       })}
@@ -8088,28 +8483,28 @@ export function AnalyticsV3() {
         ) : undefined} badge={expanded.id === "ai-synthesis" ? aisBadgeExpanded : expanded.id === "macd" ? macdBadgeExpanded : expanded.id === "price" ? priceBadgeExpanded : expanded.id === "rsi9" ? rsiBadgeExpanded : expanded.id === "rsi14" ? rsi14BadgeExpanded : expanded.id === "moving-averages" ? maBadgeExpanded : expanded.id === "keltner" ? keltBadgeExpanded : expanded.id === "adx" ? adxBadgeExpanded : expanded.id === "ichimoku" ? ichiBadgeExpanded : expanded.id === "session" ? sessionBadgeExpanded : expanded.id === "volume" ? volBadgeExpanded : expanded.id === "pivots" ? pivotBadgeExpanded : expanded.id === "cci" ? momBadgeExpanded : expanded.id === "wr" ? wrBadgeExpanded : expanded.id === "volatility" ? volaBadgeExpanded : expanded.id === "avg-price" ? avgpBadgeExpanded : expanded.id === "roc" ? rocBadgeExpanded : expanded.id === "atr" ? atrBadgeExpanded : expanded.id === "candle-context" ? cctxBadgeExpanded : expanded.id === "market-structure" ? msBadgeExpanded : expanded.id === "regime" ? regimeBadgeExpanded : undefined} subtitle={expanded.id === "ai-synthesis" ? aisHeadline : expanded.id === "macd" ? macdHeadline : expanded.id === "price" ? priceHeadline : expanded.id === "rsi9" ? rsiHeadline : expanded.id === "rsi14" ? rsi14Headline : expanded.id === "moving-averages" ? maHeadline : expanded.id === "keltner" ? keltHeadline : expanded.id === "adx" ? adxHeadline : expanded.id === "ichimoku" ? ichiHeadline : expanded.id === "session" ? sessionHeadline : expanded.id === "volume" ? volHeadline : expanded.id === "pivots" ? pivotHeadline : expanded.id === "cci" ? momHeadline : expanded.id === "wr" ? wrHeadline : expanded.id === "volatility" ? volaHeadline : expanded.id === "avg-price" ? avgpHeadline : expanded.id === "roc" ? rocHeadline : expanded.id === "atr" ? atrHeadline : expanded.id === "failure-swing" ? fswHeadline : expanded.id === "candle-context" ? cctxHeadline : expanded.id === "market-structure" ? msHeadline : expanded.id === "regime" ? regimeHeadline : undefined} subtitle2={expanded.id === "regime" ? regimeAlignmentInsight : undefined}>
           {expanded.id === "ai-synthesis"    && <AiSynthesisPanelBody result={analysisResult} expanded />}
           {expanded.id === "price"           && <PricePanelBody      rows={sheetRows} expanded />}
-          {expanded.id === "macd"            && <MacdPanelBody       rows={ichiRows.length > 0 ? ichiRows : sheetRows} expanded />}
-          {expanded.id === "rsi9"            && <RsiPanelBody        rows={ichiRows.length > 0 ? ichiRows : sheetRows} expanded />}
-          {expanded.id === "rsi14"           && <Rsi14PanelBody      rows={ichiRows.length > 0 ? ichiRows : sheetRows} expanded />}
-          {expanded.id === "moving-averages" && <MaPanelBody         rows={ichiRows.length > 0 ? ichiRows : sheetRows} expanded />}
-          {expanded.id === "keltner"         && <KeltPanelBody       rows={ichiRows.length > 0 ? ichiRows : sheetRows} expanded />}
-          {expanded.id === "adx"             && <AdxPanelBody        rows={ichiRows.length > 0 ? ichiRows : sheetRows} expanded />}
+          {expanded.id === "macd"            && <MacdPanelBody       pair={selectedPair} indicatorTf={indicatorTf} expanded />}
+          {expanded.id === "rsi9"            && <RsiPanelBody        pair={selectedPair} indicatorTf={indicatorTf} expanded />}
+          {expanded.id === "rsi14"           && <Rsi14PanelBody      pair={selectedPair} indicatorTf={indicatorTf} expanded />}
+          {expanded.id === "moving-averages" && <MaPanelBody         pair={selectedPair} indicatorTf={indicatorTf} expanded />}
+          {expanded.id === "keltner"         && <KeltPanelBody       pair={selectedPair} indicatorTf={indicatorTf} expanded />}
+          {expanded.id === "adx"             && <AdxPanelBody        pair={selectedPair} indicatorTf={indicatorTf} expanded />}
           {expanded.id === "ichimoku"        && <IchiPanelBody       rows={ichiRows.length > 0 ? ichiRows : sheetRows} expanded />}
           {expanded.id === "session"         && <SessionPanelBody    rows={sheetRows} expanded />}
-          {expanded.id === "volume"          && <VolumePanelBody     rows={sheetRows} expanded />}
+          {expanded.id === "volume"          && <VolumePanelBody     pair={selectedPair} indicatorTf={indicatorTf} expanded />}
           {expanded.id === "pivots"          && <PivotPanelBody      rows={ichiRows.length > 0 ? ichiRows : sheetRows} expanded />}
-          {expanded.id === "cci"             && <CciPanelBody        rows={ichiRows.length > 0 ? ichiRows : sheetRows} expanded />}
-          {expanded.id === "wr"              && <WrPanelBody         rows={ichiRows.length > 0 ? ichiRows : sheetRows} expanded />}
-          {expanded.id === "volatility"      && <VolatilityPanelBody rows={ichiRows.length > 0 ? ichiRows : sheetRows} expanded />}
-          {expanded.id === "avg-price"       && <AvgPricePanelBody   rows={ichiRows.length > 0 ? ichiRows : sheetRows} expanded />}
-          {expanded.id === "roc"             && <RocPanelBody        rows={ichiRows.length > 0 ? ichiRows : sheetRows} expanded />}
-          {expanded.id === "atr"             && <AtrPanelBody             rows={ichiRows.length > 0 ? ichiRows : sheetRows} expanded />}
-          {expanded.id === "squeeze"         && <SqueezePanelBody         rows={ichiRows.length > 0 ? ichiRows : sheetRows} expanded />}
+          {expanded.id === "cci"             && <CciPanelBody        pair={selectedPair} indicatorTf={indicatorTf} expanded />}
+          {expanded.id === "wr"              && <WrPanelBody         pair={selectedPair} indicatorTf={indicatorTf} expanded />}
+          {expanded.id === "volatility"      && <VolatilityPanelBody pair={selectedPair} indicatorTf={indicatorTf} expanded />}
+          {expanded.id === "avg-price"       && <AvgPricePanelBody   pair={selectedPair} indicatorTf={indicatorTf} expanded />}
+          {expanded.id === "roc"             && <RocPanelBody        pair={selectedPair} indicatorTf={indicatorTf} expanded />}
+          {expanded.id === "atr"             && <AtrPanelBody             pair={selectedPair} indicatorTf={indicatorTf} expanded />}
+          {expanded.id === "squeeze"         && <SqueezePanelBody         pair={selectedPair} indicatorTf={indicatorTf} expanded />}
           {expanded.id === "failure-swing"   && <FailureSwingPanelBody   rows={sheetRows} expanded />}
           {expanded.id === "ai-chat"         && <AlertsPanel instrument={selectedPair.replace("/", "_")} alerts={alerts} onUpdate={updateAlert} onDelete={deleteAlert} />}
-          {expanded.id === "candle-context"   && <CandleContextPanelBody    rows={sheetRows} expanded />}
-          {expanded.id === "market-structure" && <MarketStructurePanelBody  rows={ichiRows.length > 0 ? ichiRows : sheetRows} expanded />}
-          {expanded.id === "regime"           && <RegimePanelBody           rows={ichiRows.length > 0 ? ichiRows : sheetRows} expanded showCandles={regimeShowCandles} onToggleCandles={() => setRegimeShowCandles(v => !v)} />}
+          {expanded.id === "candle-context"   && <CandleContextPanelBody    pair={selectedPair} indicatorTf={indicatorTf} expanded />}
+          {expanded.id === "market-structure" && <MarketStructurePanelBody  pair={selectedPair} indicatorTf={indicatorTf} expanded />}
+          {expanded.id === "regime"           && <RegimePanelBody           pair={selectedPair} indicatorTf={indicatorTf} expanded showCandles={regimeShowCandles} onToggleCandles={() => setRegimeShowCandles(v => !v)} />}
         </PanelModal>
       )}
 
