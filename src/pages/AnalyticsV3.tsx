@@ -714,6 +714,7 @@ function PriceHistoryChart({ pair, chartTf, setChartTf }: { rows: SheetRow[]; pa
   useEffect(() => {
     if (!containerRef.current) return;
     const chart = createChart(containerRef.current, {
+      height: 480,
       layout: { background: { type: ColorType.Solid, color: "#0f1117" }, textColor: "#94a3b8", fontSize: 11 },
       grid: { vertLines: { color: "rgba(148,163,184,0.06)" }, horzLines: { color: "rgba(148,163,184,0.06)" } },
       crosshair: { mode: CrosshairMode.Normal },
@@ -723,7 +724,7 @@ function PriceHistoryChart({ pair, chartTf, setChartTf }: { rows: SheetRow[]; pa
     chartRef.current = chart;
     createSeries(chart, viewModeRef.current);
     const ro = new ResizeObserver(() => {
-      if (containerRef.current) chart.applyOptions({ width: containerRef.current.clientWidth });
+      if (containerRef.current) chart.applyOptions({ width: containerRef.current.clientWidth, height: 480 });
     });
     ro.observe(containerRef.current);
     return () => {
