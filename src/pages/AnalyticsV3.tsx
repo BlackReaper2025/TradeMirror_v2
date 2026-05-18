@@ -724,7 +724,10 @@ function PriceHistoryChart({ pair, chartTf, setChartTf }: { rows: SheetRow[]; pa
     chartRef.current = chart;
     createSeries(chart, viewModeRef.current);
     const ro = new ResizeObserver(() => {
-      if (containerRef.current) chart.applyOptions({ width: containerRef.current.clientWidth, height: 480 });
+      if (containerRef.current) {
+        chart.applyOptions({ width: containerRef.current.clientWidth, height: 480 });
+        if (containerRef.current.clientWidth > 0) chart.timeScale().fitContent();
+      }
     });
     ro.observe(containerRef.current);
     return () => {
@@ -1992,7 +1995,6 @@ function buildIchiAnalysis(rows: SheetRow[]): { headline: string; bullets: strin
 
   return { headline, bullets, description };
 }
-
 interface KeltRow { date: string; open: number; high: number; low: number; close: number; keltnerUpper: number; keltnerMiddle: number; keltnerLower: number; }
 function buildKeltAnalysis(rows: KeltRow[]): { headline: string; bullets: string[]; description: string } {
   if (rows.length < 3) return { headline: "Insufficient data", bullets: [], description: "" };
@@ -2496,12 +2498,12 @@ function IchiPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolea
   const showSenkouA = true;
   const showSenkouB = true;
   const showChikou  = true;
-  const [showCandles, setShowCandles] = useState(() => localStorage.getItem("tm_ichi_show_candles") === "1");
+  const [showCandles, setShowCandles] = useState(() => localStorage.getItem("tm_ichi_show_candles") !== "0");
   const chartRef  = useRef<HTMLDivElement>(null);
   const [chartSize, setChartSize] = useState<{ w: number; h: number } | null>(null);
 
   useEffect(() => {
-    const handler = () => setShowCandles(localStorage.getItem("tm_ichi_show_candles") === "1");
+    const handler = () => setShowCandles(localStorage.getItem("tm_ichi_show_candles") !== "0");
     window.addEventListener("tm:ichi-candles-changed", handler);
     return () => window.removeEventListener("tm:ichi-candles-changed", handler);
   }, []);
@@ -2683,8 +2685,8 @@ function IchiPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolea
               }}
             />
             {/* Senkou spans — dashed */}
-            {showSenkouB && <Line dataKey="senkouB" name="Senkou B" type="monotone" dot={false} strokeWidth={expanded ? 1.5 : 1} stroke="#a78bfa" strokeDasharray="3 2" isAnimationActive={false} connectNulls={false} />}
-            {showSenkouA && <Line dataKey="senkouA" name="Senkou A" type="monotone" dot={false} strokeWidth={expanded ? 1.5 : 1} stroke="#60a5fa" strokeDasharray="3 2" isAnimationActive={false} connectNulls={false} />}
+            {showSenkouB && <Line dataKey="senkouB" name="Senkou B" type="linear" dot={false} strokeWidth={expanded ? 1.5 : 1} stroke="#a78bfa" strokeDasharray="3 2" isAnimationActive={false} connectNulls={false} />}
+            {showSenkouA && <Line dataKey="senkouA" name="Senkou A" type="linear" dot={false} strokeWidth={expanded ? 1.5 : 1} stroke="#60a5fa" strokeDasharray="3 2" isAnimationActive={false} connectNulls={false} />}
             {/* Chikou — close plotted 26 bars back */}
             {showChikou  && <Line dataKey="chikou"  name="Chikou"  type="monotone" dot={false} strokeWidth={expanded ? 1.5 : 1} stroke="#a78bfa" strokeDasharray="2 3" isAnimationActive={false} connectNulls={false} />}
             {/* Current-bar lines */}
@@ -2696,13 +2698,15 @@ function IchiPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolea
 
         {/* Cloud fill + candle overlay — absolutely positioned SVG, no Recharts internals needed */}
         {chartSize && (() => {
+          const xAxisH     = expanded ? 34 : 0;
           const plotLeft   = yAxisWidth;
           const plotTop    = 4;
           const plotWidth  = chartSize.w - yAxisWidth - 6;
-          const plotHeight = chartSize.h - plotTop;
+          const plotHeight = chartSize.h - plotTop - xAxisH;
           const [yMin, yMax] = yDomain as [number, number];
           if (typeof yMin !== 'number' || typeof yMax !== 'number' || yMax === yMin) return null;
-          const xPx = (idx: number) => plotLeft + (idx / (totalPoints - 1)) * plotWidth;
+          const bandW = plotWidth / totalPoints;
+          const xPx = (idx: number) => plotLeft + bandW / 2 + idx * bandW;
           const yPx = (val: number) => plotTop + ((yMax - val) / (yMax - yMin)) * plotHeight;
 
           type Pt = { idx: number; top: number; bot: number };
@@ -2737,7 +2741,7 @@ function IchiPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolea
             return `M ${top} L ${bot} Z`;
           };
 
-          const candleW = Math.max(2, Math.floor((plotWidth / (totalPoints - 1)) * 0.6));
+          const candleW = Math.max(2, Math.floor(bandW * 0.6));
 
           return (
             <svg style={{ position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none", overflow: "hidden" }}>
@@ -2798,6 +2802,8 @@ function IchiPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolea
     </div>
   );
 }
+
+
 
 const SESSION_WINDOW = 20;
 
@@ -7256,7 +7262,6 @@ export function AnalyticsV3() {
     });
   }
   const [expanded, setExpanded] = useState<PanelMeta | null>(null);
-  const [ichiRows, setIchiRows] = useState<SheetRow[]>([]);
   const [chartTf, setChartTf] = useState<"1W" | "1D" | "4H" | "1H" | "15M" | "5M" | "1M">("1D");
   const [indicatorTf, setIndicatorTf] = useState<"1W" | "1D" | "4H" | "1H" | "15M" | "5M" | "1M">("1D");
   const [timeframe, setTimeframe] = useState("1D");
@@ -7325,11 +7330,6 @@ export function AnalyticsV3() {
   }, [draggingSlot]);
 
   useEffect(() => {
-    const loadIchiRows = () =>
-      invoke<RawCandleV3[]>("get_ichi_rows_v3")
-        .then(candles => { if (candles.length) setIchiRows(candles.map(mapToSheetRow)); })
-        .catch(() => {});
-
     const loadCandles = () =>
       invoke<RawCandleV3[]>("get_candles_v3")
         .then(candles => {
@@ -7343,7 +7343,6 @@ export function AnalyticsV3() {
             momentumChartData, volatilityChartData, directionalChartData,
             sheetRows: candles.map(mapToSheetRow),
           });
-          loadIchiRows();
         })
         .catch(err => setError(String(err)));
 
@@ -7502,13 +7501,10 @@ export function AnalyticsV3() {
   const adxBadgeExpanded = makeAdxBadge(true);
 
   const ichiHeadline = iRows.length > 0 ? buildIchiAnalysis(iRows).headline : "";
-  // Bias: primary rule — cloud position determines trend direction (above=bullish, below=bearish, inside=neutral)
   const ichiBias = !latestRow ? "neutral"
     : latestRow.close > Math.max(latestRow.senkouA, latestRow.senkouB) ? "bullish"
     : latestRow.close < Math.min(latestRow.senkouA, latestRow.senkouB) ? "bearish"
     : "neutral";
-  // Score: counts how many of the 4 Ichimoku confirmations align with the bias direction
-  // Confirmations: (1) price vs cloud, (2) cloud color, (3) Tenkan/Kijun alignment, (4) Chikou vs price 26 bars ago
   const ichiScore = useMemo(() => {
     if (!latestRow) return 0;
     const cloudTop     = Math.max(latestRow.senkouA ?? 0, latestRow.senkouB ?? 0);
@@ -7534,7 +7530,6 @@ export function AnalyticsV3() {
       if (chikouBull === false) c++;
       return Math.round((c / 4) * 100);
     }
-    // Inside cloud — score reflects penetration depth (higher = closer to a breakout edge)
     const bandwidth = cloudTop - cloudBottom;
     if (bandwidth <= 0) return 0;
     const cloudMid = (cloudTop + cloudBottom) / 2;
@@ -8425,10 +8420,10 @@ export function AnalyticsV3() {
                             {p.id === "moving-averages" && <MaPanelBody           pair={selectedPair} indicatorTf={indicatorTf} />}
                             {p.id === "keltner"         && <KeltPanelBody         pair={selectedPair} indicatorTf={indicatorTf} />}
                             {p.id === "adx"             && <AdxPanelBody          pair={selectedPair} indicatorTf={indicatorTf} />}
-                            {p.id === "ichimoku"        && <IchiPanelBody         rows={ichiRows.length > 0 ? ichiRows : sheetRows} />}
+                            {p.id === "ichimoku"        && <IchiPanelBody         rows={sheetRows} />}
                             {p.id === "session"         && <SessionPanelBody      rows={sheetRows} />}
                             {p.id === "volume"          && <VolumePanelBody       pair={selectedPair} indicatorTf={indicatorTf} />}
-                            {p.id === "pivots"          && <PivotPanelBody        rows={ichiRows.length > 0 ? ichiRows : sheetRows} />}
+                            {p.id === "pivots"          && <PivotPanelBody        rows={sheetRows} />}
                             {p.id === "cci"             && <CciPanelBody          pair={selectedPair} indicatorTf={indicatorTf} />}
                             {p.id === "wr"              && <WrPanelBody           pair={selectedPair} indicatorTf={indicatorTf} />}
                             {p.id === "volatility"      && <VolatilityPanelBody   pair={selectedPair} indicatorTf={indicatorTf} />}
@@ -8490,10 +8485,10 @@ export function AnalyticsV3() {
           {expanded.id === "moving-averages" && <MaPanelBody         pair={selectedPair} indicatorTf={indicatorTf} expanded />}
           {expanded.id === "keltner"         && <KeltPanelBody       pair={selectedPair} indicatorTf={indicatorTf} expanded />}
           {expanded.id === "adx"             && <AdxPanelBody        pair={selectedPair} indicatorTf={indicatorTf} expanded />}
-          {expanded.id === "ichimoku"        && <IchiPanelBody       rows={ichiRows.length > 0 ? ichiRows : sheetRows} expanded />}
+          {expanded.id === "ichimoku"        && <IchiPanelBody       rows={sheetRows} expanded />}
           {expanded.id === "session"         && <SessionPanelBody    rows={sheetRows} expanded />}
           {expanded.id === "volume"          && <VolumePanelBody     pair={selectedPair} indicatorTf={indicatorTf} expanded />}
-          {expanded.id === "pivots"          && <PivotPanelBody      rows={ichiRows.length > 0 ? ichiRows : sheetRows} expanded />}
+          {expanded.id === "pivots"          && <PivotPanelBody      rows={sheetRows} expanded />}
           {expanded.id === "cci"             && <CciPanelBody        pair={selectedPair} indicatorTf={indicatorTf} expanded />}
           {expanded.id === "wr"              && <WrPanelBody         pair={selectedPair} indicatorTf={indicatorTf} expanded />}
           {expanded.id === "volatility"      && <VolatilityPanelBody pair={selectedPair} indicatorTf={indicatorTf} expanded />}
