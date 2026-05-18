@@ -2684,9 +2684,7 @@ function IchiPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolea
                 );
               }}
             />
-            {/* Senkou spans — dashed */}
-            {showSenkouB && <Line dataKey="senkouB" name="Senkou B" type="linear" dot={false} strokeWidth={expanded ? 1.5 : 1} stroke="#a78bfa" strokeDasharray="3 2" isAnimationActive={false} connectNulls={false} />}
-            {showSenkouA && <Line dataKey="senkouA" name="Senkou A" type="linear" dot={false} strokeWidth={expanded ? 1.5 : 1} stroke="#60a5fa" strokeDasharray="3 2" isAnimationActive={false} connectNulls={false} />}
+            {/* Senkou spans drawn in the overlay SVG below so they share exact coords with the cloud fill */}
             {/* Chikou — close plotted 26 bars back */}
             {showChikou  && <Line dataKey="chikou"  name="Chikou"  type="monotone" dot={false} strokeWidth={expanded ? 1.5 : 1} stroke="#a78bfa" strokeDasharray="2 3" isAnimationActive={false} connectNulls={false} />}
             {/* Current-bar lines */}
@@ -2715,21 +2713,54 @@ function IchiPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolea
           let curBull: Pt[] = [];
           let curBear: Pt[] = [];
           if (showSenkouA || showSenkouB) {
+            const valid = (d: typeof data[number]) =>
+              d.senkouA != null && d.senkouB != null && !d.senkouExtended;
+            let prev: typeof data[number] | null = null;
             data.forEach(d => {
-              if (d.senkouA == null || d.senkouB == null || d.senkouExtended) {
+              if (!valid(d)) {
                 if (curBull.length) { bullSegs.push(curBull); curBull = []; }
                 if (curBear.length) { bearSegs.push(curBear); curBear = []; }
+                prev = null;
                 return;
               }
-              const top = Math.max(d.senkouA, d.senkouB);
-              const bot = Math.min(d.senkouA, d.senkouB);
-              if (d.senkouA >= d.senkouB) {
-                if (curBear.length) { bearSegs.push(curBear); curBear = []; }
-                curBull.push({ idx: d.idx, top, bot });
-              } else {
-                if (curBull.length) { bullSegs.push(curBull); curBull = []; }
-                curBear.push({ idx: d.idx, top, bot });
+              const a  = d.senkouA as number;
+              const b  = d.senkouB as number;
+              const isBull = a >= b;
+
+              // Detect crossing with previous point; if found, inject the
+              // crossing point as a shared "tip" so the fill ends exactly at
+              // the Senkou A/B intersection rather than at a data-point edge.
+              if (prev) {
+                const pa = prev.senkouA as number;
+                const pb = prev.senkouB as number;
+                const wasBull = pa >= pb;
+                if (wasBull !== isBull) {
+                  const denom = (a - b) - (pa - pb);
+                  if (denom !== 0) {
+                    const t = (pb - pa) / denom; // 0..1 between prev and d
+                    if (t >= 0 && t <= 1) {
+                      const xIdx = prev.idx + t * (d.idx - prev.idx);
+                      const yVal = pa + t * (a - pa);
+                      const tip: Pt = { idx: xIdx, top: yVal, bot: yVal };
+                      if (wasBull) {
+                        curBull.push(tip);
+                        bullSegs.push(curBull); curBull = [];
+                        curBear.push(tip);
+                      } else {
+                        curBear.push(tip);
+                        bearSegs.push(curBear); curBear = [];
+                        curBull.push(tip);
+                      }
+                    }
+                  }
+                }
               }
+
+              const top = Math.max(a, b);
+              const bot = Math.min(a, b);
+              if (isBull) curBull.push({ idx: d.idx, top, bot });
+              else        curBear.push({ idx: d.idx, top, bot });
+              prev = d;
             });
             if (curBull.length) bullSegs.push(curBull);
             if (curBear.length) bearSegs.push(curBear);
@@ -2741,12 +2772,32 @@ function IchiPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolea
             return `M ${top} L ${bot} Z`;
           };
 
+          const buildLine = (key: "senkouA" | "senkouB") => {
+            const segs: string[] = [];
+            let cur: string[] = [];
+            data.forEach(d => {
+              const v = d[key];
+              if (v == null) {
+                if (cur.length) { segs.push("M " + cur.join(" L ")); cur = []; }
+                return;
+              }
+              cur.push(`${xPx(d.idx).toFixed(1)},${yPx(v as number).toFixed(1)}`);
+            });
+            if (cur.length) segs.push("M " + cur.join(" L "));
+            return segs.join(" ");
+          };
+          const senkouAPath = showSenkouA ? buildLine("senkouA") : "";
+          const senkouBPath = showSenkouB ? buildLine("senkouB") : "";
+
           const candleW = Math.max(2, Math.floor(bandW * 0.6));
+          const senkouW = expanded ? 1.5 : 1;
 
           return (
             <svg style={{ position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none", overflow: "hidden" }}>
               {bullSegs.map((seg, i) => <path key={`bull${i}`} d={makePath(seg)} fill="rgba(96,165,250,0.22)"  stroke="none" />)}
               {bearSegs.map((seg, i) => <path key={`bear${i}`} d={makePath(seg)} fill="rgba(167,139,250,0.22)" stroke="none" />)}
+              {senkouBPath && <path d={senkouBPath} fill="none" stroke="#a78bfa" strokeWidth={senkouW} strokeDasharray="3 2" />}
+              {senkouAPath && <path d={senkouAPath} fill="none" stroke="#60a5fa" strokeWidth={senkouW} strokeDasharray="3 2" /> }
               {showClose && showCandles && data.map(d => {
                 if (d.open == null || d.high == null || d.low == null || d.close == null) return null;
                 const bull    = d.close >= d.open;

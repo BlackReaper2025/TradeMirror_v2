@@ -72,7 +72,10 @@
       "Bash(mkdir -p /c/tmp)",
       "Read(//c/tmp/**)",
       "Bash(sed -n '7504,7562p' /c/tmp/orig.tsx > /c/tmp/ichi_badge.txt && cat /c/tmp/ichi_badge.txt)",
-      "Bash(taskkill //F //IM node.exe //FI \"WINDOWTITLE eq npm*\")"
+      "Bash(taskkill //F //IM node.exe //FI \"WINDOWTITLE eq npm*\")",
+      "Bash(git fetch *)",
+      "Bash(cd \"D:/Dev/TradeMirror_v2/TradeMirror\" *)",
+      "Bash(taskkill //F //IM node.exe)"
     ]
   }
 }
