@@ -9013,7 +9013,13 @@ export function AnalyticsV3() {
             </div>
           )}
           <div style={{ height: 2, background: "rgba(255,255,255,0.12)", margin: "10px 0 10px" }} />
-          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
+          <div style={{
+            display: "flex", alignItems: "center", gap: 10,
+            position: "sticky", top: 0, zIndex: 20,
+            background: "var(--bg-base)",
+            paddingTop: 6, paddingBottom: 10, marginBottom: 6,
+            borderBottom: "1px solid var(--border-subtle)",
+          }}>
             <span style={{ fontSize: 9, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.1em", color: "var(--text-muted)", whiteSpace: "nowrap" }}>Indicator Timeframe</span>
             <div style={{ display: "flex", gap: 4 }}>
               {(["1W","1D","4H","1H","15M","5M","1M"] as const).map(tf => (
