@@ -10,7 +10,7 @@ import {
   ComposedChart, Bar, Line, Area, XAxis, YAxis, ReferenceLine, ReferenceArea,
   ResponsiveContainer, Cell, Tooltip,
 } from "recharts";
-import { Maximize2, X, GripVertical, ChevronDown } from "lucide-react";
+import { Maximize2, X, GripVertical } from "lucide-react";
 import { VerdictPanel }          from "../components/analytics/VerdictPanel";
 import { EvidenceCards }         from "../components/analytics/EvidenceCards";
 import { EntryExitPanel }        from "../components/analytics/EntryExitPanel";
@@ -6626,77 +6626,126 @@ const _bull = (r: CandleCtxRow) => r.close >= r.open;
 const _bear = (r: CandleCtxRow) => r.close <  r.open;
 const _isDojiBody  = (r: CandleCtxRow) => { const b = Math.abs(r.close - r.open); const rng = r.high - r.low; return rng > 0 && b / rng < 0.10; };
 const _isSmallBody = (r: CandleCtxRow) => { const b = Math.abs(r.close - r.open); const rng = r.high - r.low; return rng > 0 && b / rng < 0.30; };
+const _priorTrendDown = (cs: CandleCtxRow[], endIdx: number, lookback: number): boolean => {
+  const startIdx = endIdx - lookback;
+  if (startIdx < 0 || endIdx < 0 || endIdx >= cs.length) return false;
+  return cs[endIdx].close < cs[startIdx].close;
+};
+const _priorTrendUp = (cs: CandleCtxRow[], endIdx: number, lookback: number): boolean => {
+  const startIdx = endIdx - lookback;
+  if (startIdx < 0 || endIdx < 0 || endIdx >= cs.length) return false;
+  return cs[endIdx].close > cs[startIdx].close;
+};
+const _bodyInUpperThird = (r: CandleCtxRow): boolean => {
+  const rng = r.high - r.low;
+  if (rng <= 0) return false;
+  return (_bBot(r) - r.low) >= rng * 0.6;
+};
+const _bodyInLowerThird = (r: CandleCtxRow): boolean => {
+  const rng = r.high - r.low;
+  if (rng <= 0) return false;
+  return (r.high - _bTop(r)) >= rng * 0.6;
+};
 
 function detectCandlePatterns(candles: CandleCtxRow[]): CandlePattern[] {
   if (candles.length < 2) return [];
   const out: CandlePattern[] = [];
-  const c0 = candles[candles.length - 1];
-  const c1 = candles[candles.length - 2];
-  const c2 = candles.length >= 3 ? candles[candles.length - 3] : null;
+  const n  = candles.length;
+  const i0 = n - 1, i1 = n - 2, i2 = n - 3;
+  const c0 = candles[i0];
+  const c1 = candles[i1];
+  const c2 = n >= 3 ? candles[i2] : null;
+  const c0Body = Math.abs(c0.close - c0.open);
+  const c1Body = Math.abs(c1.close - c1.open);
 
   // ── Tier 1: multi-candle ──────────────────────────────────────────────────
-  if (_bear(c1) && _bull(c0) && _bBot(c0) <= _bBot(c1) && _bTop(c0) >= _bTop(c1))
+  // Engulfing requires strict body engulf AND c0 body materially larger than c1
+  const bullEngulf = _bear(c1) && _bull(c0)
+                  && c0.open < c1.close && c0.close > c1.open
+                  && c0Body > c1Body * 1.2;
+  if (bullEngulf)
     out.push({ name: "Bullish Engulfing", bias: "bullish", tier: 1, description: "A large bullish candle fully engulfs the prior bearish body. Sellers lost control — buyers absorbed all selling pressure and closed near the high. Strong reversal signal at support." });
 
-  if (_bull(c1) && _bear(c0) && _bBot(c0) <= _bBot(c1) && _bTop(c0) >= _bTop(c1))
+  const bearEngulf = _bull(c1) && _bear(c0)
+                  && c0.open > c1.close && c0.close < c1.open
+                  && c0Body > c1Body * 1.2;
+  if (bearEngulf)
     out.push({ name: "Bearish Engulfing", bias: "bearish", tier: 1, description: "A large bearish candle fully engulfs the prior bullish body. Buyers exhausted — sellers took complete control and closed the session near the low." });
 
-  if (_bear(c1) && _bull(c0) && c0.low < c1.low && c0.close > c1.open && !(_bBot(c0) <= _bBot(c1) && _bTop(c0) >= _bTop(c1)))
+  // Engulfing Variants — wick breaks beyond prior, body closes past prior body, but not a clean full engulf
+  if (!bullEngulf && _bear(c1) && _bull(c0) && c0.low < c1.low && c0.close > c1.open)
     out.push({ name: "Bullish Engulfing Variant", bias: "bullish", tier: 1, description: "The market probed below the prior session's low then closed higher. Failed bearish pressure with bullish close — watch for follow-through confirmation." });
 
-  if (_bull(c1) && _bear(c0) && c0.high > c1.high && c0.close < c1.open && !(_bBot(c0) <= _bBot(c1) && _bTop(c0) >= _bTop(c1)))
+  if (!bearEngulf && _bull(c1) && _bear(c0) && c0.high > c1.high && c0.close < c1.open)
     out.push({ name: "Bearish Engulfing Variant", bias: "bearish", tier: 1, description: "The session spiked above the prior high but sellers drove price back below the prior open. Buyers were absorbed — sellers now in control." });
 
-  if (_bear(c1) && _bull(c0) && c0.open < c1.low && c0.close > _bMid(c1) && c0.close < _bTop(c1))
-    out.push({ name: "Piercing Line", bias: "bullish", tier: 1, description: "Price gapped below the prior low then rallied to close above the midpoint of the prior bearish candle. Strong demand below — potential bottom forming." });
+  // Piercing Line — body-relative gap (relaxed from prior-low gap for FX)
+  if (_bear(c1) && _bull(c0) && c0.open < c1.close && c0.close > _bMid(c1) && c0.close < _bTop(c1))
+    out.push({ name: "Piercing Line", bias: "bullish", tier: 1, description: "Price gapped below the prior body then rallied to close above the midpoint of the prior bearish candle. Strong demand below — potential bottom forming." });
 
-  if (_bull(c1) && _bear(c0) && c0.open > c1.high && c0.close < _bMid(c1) && c0.close > _bBot(c1))
-    out.push({ name: "Dark Cloud Cover", bias: "bearish", tier: 1, description: "Price gapped above the prior high then reversed to close below the midpoint of the prior bullish candle. Distribution at the top — potential decline ahead." });
+  // Dark Cloud Cover — body-relative gap
+  if (_bull(c1) && _bear(c0) && c0.open > c1.close && c0.close < _bMid(c1) && c0.close > _bBot(c1))
+    out.push({ name: "Dark Cloud Cover", bias: "bearish", tier: 1, description: "Price gapped above the prior body then reversed to close below the midpoint of the prior bullish candle. Distribution at the top — potential decline ahead." });
 
   if (c2) {
-    if (_bear(c2) && _isSmallBody(c1) && _bull(c0) && c1.open < c2.close && c0.open > c1.close && c0.close > _bMid(c2))
+    const c2Body   = Math.abs(c2.close - c2.open);
+    const c0Strong = c0Body >= c2Body * 0.5;
+
+    if (_bear(c2) && _isSmallBody(c1) && _bull(c0) && c0Strong
+        && c1.open < c2.close && c0.open > c1.close && c0.close > _bMid(c2))
       out.push({ name: "Morning Star", bias: "bullish", tier: 1, description: "A three-candle reversal: bearish session, small-body pause gapping lower, then strong bullish recovery above the prior midpoint. Classic bottom formation." });
 
-    if (_bear(c2) && _isDojiBody(c1) && _bull(c0) && c1.open < c2.close && c0.open > c1.close && c0.close > _bMid(c2))
+    if (_bear(c2) && _isDojiBody(c1) && _bull(c0) && c0Strong
+        && c1.open < c2.close && c0.open > c1.close && c0.close > _bMid(c2))
       out.push({ name: "Doji Morning Star", bias: "bullish", tier: 1, description: "A doji-gapped-down followed by a bullish recovery. The doji's indecision is confirmed by buyers seizing control on the third candle — strong reversal signal." });
 
-    if (_bull(c2) && _isSmallBody(c1) && _bear(c0) && c1.open > c2.close && c0.open < c1.close && c0.close < _bMid(c2))
+    if (_bull(c2) && _isSmallBody(c1) && _bear(c0) && c0Strong
+        && c1.open > c2.close && c0.open < c1.close && c0.close < _bMid(c2))
       out.push({ name: "Evening Star", bias: "bearish", tier: 1, description: "A three-candle top: bullish session, small-body pause gapping higher, then strong bearish reversal below the prior midpoint. Buyers lost control." });
 
-    if (_bull(c2) && _isDojiBody(c1) && _bear(c0) && c1.open > c2.close && c0.open < c1.close && c0.close < _bMid(c2))
+    if (_bull(c2) && _isDojiBody(c1) && _bear(c0) && c0Strong
+        && c1.open > c2.close && c0.open < c1.close && c0.close < _bMid(c2))
       out.push({ name: "Doji Evening Star", bias: "bearish", tier: 1, description: "A doji-gapped-up followed by bearish follow-through. Failed upside and doji indecision confirmed by sellers — reliable top formation." });
   }
 
-  // ── Tier 2: single-candle ─────────────────────────────────────────────────
-  const c0Body = Math.abs(c0.close - c0.open);
-  const c0UW   = c0.high - _bTop(c0);
-  const c0LW   = _bBot(c0) - c0.low;
+  // ── Tier 2: single-candle (requires prior trend + body position) ──────────
+  const c0UW = c0.high - _bTop(c0);
+  const c0LW = _bBot(c0) - c0.low;
+  const trendDownBeforeC0 = _priorTrendDown(candles, i1, 3);
+  const trendUpBeforeC0   = _priorTrendUp(candles,   i1, 3);
 
-  if (c0Body > 0 && c0LW >= 2 * c0Body && c0UW <= c0Body) {
-    if (_bear(c1))
-      out.push({ name: "Hammer", bias: "bullish", tier: 2, description: "Long lower wick after a bearish session — sellers pushed price far down but buyers aggressively rejected lower levels. A bullish reversal signal awaiting confirmation." });
-    else if (_bull(c1))
-      out.push({ name: "Hanging Man", bias: "bearish", tier: 2, description: "Same shape as a hammer but after a bullish session. Sellers briefly overwhelmed buyers intraday — a warning the rally may be losing steam." });
+  // Hammer / Hanging Man — long lower wick, body pinned to upper third
+  if (c0Body > 0 && c0LW >= 2 * c0Body && c0UW <= c0Body && _bodyInUpperThird(c0)) {
+    if (trendDownBeforeC0)
+      out.push({ name: "Hammer", bias: "bullish", tier: 2, description: "Long lower wick after a downtrend — sellers pushed price far down but buyers aggressively rejected lower levels. A bullish reversal signal awaiting confirmation." });
+    else if (trendUpBeforeC0)
+      out.push({ name: "Hanging Man", bias: "bearish", tier: 2, description: "Same shape as a hammer but after an uptrend. Sellers briefly overwhelmed buyers intraday — a warning the rally may be losing steam." });
   }
 
-  if (c0Body > 0 && c0UW >= 2 * c0Body && c0LW <= c0Body) {
-    if (_bear(c1))
-      out.push({ name: "Inverted Hammer", bias: "bullish", tier: 2, description: "A spike above the open with a close near the low. Buyers made a push — if the next session confirms with a bullish open, a reversal may be developing." });
-    else if (_bull(c1))
-      out.push({ name: "Shooting Star", bias: "bearish", tier: 2, description: "Buyers drove price sharply higher intraday but sellers took control and closed near the low. A bearish reversal warning at the top of an advance." });
+  // Inverted Hammer / Shooting Star — long upper wick, body pinned to lower third
+  if (c0Body > 0 && c0UW >= 2 * c0Body && c0LW <= c0Body && _bodyInLowerThird(c0)) {
+    if (trendDownBeforeC0)
+      out.push({ name: "Inverted Hammer", bias: "bullish", tier: 2, description: "A spike above the open with a close near the low after a downtrend. Buyers made a push — if the next session confirms with a bullish open, a reversal may be developing." });
+    else if (trendUpBeforeC0)
+      out.push({ name: "Shooting Star", bias: "bearish", tier: 2, description: "Buyers drove price sharply higher intraday but sellers took control and closed near the low after an uptrend. A bearish reversal warning at the top of an advance." });
   }
 
   // ── Tier 3: needs confirmation ────────────────────────────────────────────
-  const TOL      = 0.00020; // ~2 pips
-  const prevBody = Math.abs(c1.close - c1.open);
+  // Instrument-agnostic tolerance — fraction of the candles' own ranges (works for JPY, gold, BTC)
+  const TOL      = Math.max(c0.high - c0.low, c1.high - c1.low) * 0.08;
+  const prevBody = c1Body;
+  const trendDownBeforeTw = _priorTrendDown(candles, i2, 2);
+  const trendUpBeforeTw   = _priorTrendUp(candles,   i2, 2);
 
-  if (Math.abs(c0.low - c1.low) <= TOL)
-    out.push({ name: "Tweezers Bottom", bias: "bullish", tier: 3, description: "Two sessions defending the same low — buyers absorbed selling pressure at this level twice. Strong support zone confirmed, but a bullish close on the next bar is needed." });
+  // Tweezers Bottom — bear→bull, matching lows, after a downtrend
+  if (_bear(c1) && _bull(c0) && Math.abs(c0.low - c1.low) <= TOL && trendDownBeforeTw)
+    out.push({ name: "Tweezers Bottom", bias: "bullish", tier: 3, description: "Two sessions defending the same low after a downtrend — buyers absorbed selling pressure at this level twice. Strong support zone confirmed, but a bullish close on the next bar is needed." });
 
-  if (Math.abs(c0.high - c1.high) <= TOL)
-    out.push({ name: "Tweezers Top", bias: "bearish", tier: 3, description: "Two sessions rejecting the same high — sellers absorbed buying pressure twice. Strong resistance confirmed, but bearish follow-through on the next bar is required." });
+  // Tweezers Top — bull→bear, matching highs, after an uptrend
+  if (_bull(c1) && _bear(c0) && Math.abs(c0.high - c1.high) <= TOL && trendUpBeforeTw)
+    out.push({ name: "Tweezers Top", bias: "bearish", tier: 3, description: "Two sessions rejecting the same high after an uptrend — sellers absorbed buying pressure twice. Strong resistance confirmed, but bearish follow-through on the next bar is required." });
 
-  if (prevBody > 0 && c0Body < prevBody * 0.70 && _bTop(c0) < _bTop(c1) && _bBot(c0) > _bBot(c1)) {
+  if (prevBody > 0 && c0Body < prevBody * 0.50 && _bTop(c0) < _bTop(c1) && _bBot(c0) > _bBot(c1)) {
     if (_bear(c1)) {
       if (_isDojiBody(c0))
         out.push({ name: "Bullish Harami Cross", bias: "bullish", tier: 3, description: "A doji nested inside a large bearish candle — perfect indecision after a down move. Buy pressure matching sell pressure. Needs a bullish close to confirm." });
@@ -7103,6 +7152,7 @@ function RegimePanelBody({ pair, indicatorTf, expanded, showCandles, onToggleCan
 function CandleContextPanelBody({ pair, indicatorTf, expanded }: { pair: string; indicatorTf: string; expanded?: boolean }) {
   const [liveRows, setLiveRows] = useState<CandleCtxRow[]>([]);
   const [loading,  setLoading]  = useState(false);
+  const [ohlcOpen, setOhlcOpen] = useState(false);
 
   useEffect(() => {
     setLoading(true);
@@ -7120,8 +7170,9 @@ function CandleContextPanelBody({ pair, indicatorTf, expanded }: { pair: string;
   );
 
   const rows = liveRows;
-  const candles = rows.slice(-12);
-  const patterns = detectCandlePatterns(candles);
+  const candles = rows.slice(-5);
+  const patterns = detectCandlePatterns(rows.slice(-12));
+  const pipFactor = pair.includes("JPY") ? 100 : 10000;
 
   const BULL = "#60a5fa";
   const BEAR = "#a78bfa";
@@ -7168,12 +7219,65 @@ function CandleContextPanelBody({ pair, indicatorTf, expanded }: { pair: string;
     </svg>
   );
 
+  const pipOverlay = (
+    <div style={{ position: "absolute", inset: 0, pointerEvents: "none" }}>
+      {candles.map((c, i) => {
+        const bodyTop = Math.min(c.open, c.close);
+        const bodyBot = Math.max(c.open, c.close);
+        const upper   = Math.round((c.high   - bodyBot) * pipFactor);
+        const lower   = Math.round((bodyTop  - c.low ) * pipFactor);
+        const body    = Math.round(Math.abs(c.close - c.open) * pipFactor);
+        const leftPct = ((SLOT * i + SLOT / 2) / VB_W) * 100;
+        const hPct    = (yPx(c.high) / VB_H) * 100;
+        const lPct    = (yPx(c.low ) / VB_H) * 100;
+        const bMidPct = ((yPx(c.open) + yPx(c.close)) / 2 / VB_H) * 100;
+        const fs      = expanded ? 11 : 8;
+        const base: React.CSSProperties = {
+          position:   "absolute",
+          left:       `${leftPct}%`,
+          fontSize:   fs,
+          fontWeight: 700,
+          whiteSpace: "nowrap",
+          lineHeight: 1,
+          textShadow: "0 0 3px rgba(0,0,0,0.95), 0 0 3px rgba(0,0,0,0.95)",
+          color:      "var(--text-secondary)",
+        };
+        return (
+          <div key={`pip-${i}`} style={{ display: "contents" }}>
+            {upper > 0 && (
+              <div style={{ ...base, top: `${hPct}%`, transform: "translate(-50%, -115%)" }}>
+                {upper}
+              </div>
+            )}
+            {body > 0 && (
+              <div style={{ ...base, top: `${bMidPct}%`, transform: "translate(-50%, -50%)", color: "#ffffff" }}>
+                {body}
+              </div>
+            )}
+            {lower > 0 && (
+              <div style={{ ...base, top: `${lPct}%`, transform: "translate(-50%, 15%)" }}>
+                {lower}
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+
+  const candleVisual = (
+    <div style={{ position: "relative", width: "100%", height: "100%" }}>
+      {candleSvg}
+      {pipOverlay}
+    </div>
+  );
+
   if (!expanded) {
     return (
       <div className="h-full flex overflow-hidden">
         {/* Candles */}
         <div className="flex flex-col" style={{ flex: 1, minWidth: 0, position: "relative" }}>
-          <div className="flex-1 min-h-0 px-1 py-1">{candleSvg}</div>
+          <div className="flex-1 min-h-0 px-1 py-1" style={{ position: "relative" }}>{candleVisual}</div>
           <div style={{ position: "absolute", top: 6, left: 8, display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 3 }}>
             {patterns.slice(0, 3).map((p, i) => {
               const bc = p.bias === "bullish"
@@ -7196,7 +7300,6 @@ function CandleContextPanelBody({ pair, indicatorTf, expanded }: { pair: string;
   }
 
   // ── Expanded ────────────────────────────────────────────────────────────────
-  const [ohlcOpen, setOhlcOpen] = useState(false);
   return (
     <div className="flex flex-col h-full overflow-hidden">
       {/* Top: candles + pattern list */}
@@ -7210,7 +7313,7 @@ function CandleContextPanelBody({ pair, indicatorTf, expanded }: { pair: string;
               </div>
             ))}
           </div>
-          <div className="flex-1 min-h-0">{candleSvg}</div>
+          <div className="flex-1 min-h-0" style={{ position: "relative" }}>{candleVisual}</div>
         </div>
         {/* Pattern list */}
         <div className="flex-1 flex flex-col gap-3 px-5 py-4 overflow-y-auto">
@@ -7733,8 +7836,6 @@ export function AnalyticsV3() {
   const [expanded, setExpanded] = useState<PanelMeta | null>(null);
   const [chartTf, setChartTf] = useState<"1W" | "1D" | "4H" | "1H" | "15M" | "5M" | "1M">("1D");
   const [indicatorTf, setIndicatorTf] = useState<"1W" | "1D" | "4H" | "1H" | "15M" | "5M" | "1M">("1D");
-  const [timeframe, setTimeframe] = useState("1D");
-  const [tfOpen, setTfOpen]       = useState(false);
   const close = useCallback(() => setExpanded(null), []);
 
   // ── Panel drag-and-drop (mouse-event based — avoids HTML5 DnD cursor issues) ─
@@ -8591,81 +8692,6 @@ export function AnalyticsV3() {
       {/* ── Top bar: Pair Selector + Timeframe + Data date ─────────── */}
       <div className="flex items-center gap-3 shrink-0" style={{ height: "40px" }}>
         <PairSelector onPairChange={(pair) => setSelectedPair(pair)} />
-        <div className="relative h-full" style={{ zIndex: tfOpen ? 20 : "auto" }}>
-          <div
-            className="h-full flex items-center rounded-[14px] overflow-hidden"
-            style={{ background: "var(--bg-panel)", border: "1px solid var(--border-subtle)", position: "relative", zIndex: 1 }}
-          >
-            {/* Trigger */}
-            <button
-              onClick={() => setTfOpen((o) => !o)}
-              className="h-full flex items-center gap-2 px-4 shrink-0"
-            >
-              <span className="text-[13px] font-bold tracking-wide" style={{ color: "var(--text-primary)" }}>
-                {timeframe}
-              </span>
-              <ChevronDown
-                size={13}
-                style={{
-                  color:     "var(--text-muted)",
-                  transform:  tfOpen ? "rotate(180deg)" : "rotate(0deg)",
-                  transition: "transform 0.18s",
-                }}
-              />
-            </button>
-
-            {/* Expanded options */}
-            <div
-              className="flex items-center overflow-hidden"
-              style={{
-                maxWidth:      tfOpen ? "300px" : "0px",
-                opacity:       tfOpen ? 1 : 0,
-                transition:    "max-width 0.3s cubic-bezier(0.4,0,0.2,1), opacity 0.2s ease",
-                pointerEvents: tfOpen ? "auto" : "none",
-              }}
-            >
-              <div className="h-5 w-px shrink-0" style={{ background: "var(--border-medium)" }} />
-              <div className="flex items-center gap-1 px-2.5">
-                {(["1W","1D","4H","1H","15M"] as const).map((tf) => {
-                  const active   = tf === timeframe;
-                  const disabled = tf !== "1D";
-                  return (
-                    <button
-                      key={tf}
-                      disabled={disabled}
-                      onClick={() => { if (!disabled) { setTimeframe(tf); setTfOpen(false); } }}
-                      className="px-2.5 py-1 rounded-[8px] text-[10px] font-semibold uppercase tracking-widest transition-all"
-                      style={{
-                        background: active   ? "var(--accent-dim)"          : "transparent",
-                        border:     active   ? "1px solid var(--accent-border)" : "1px solid transparent",
-                        color:      active   ? "var(--accent-text)"
-                                  : disabled ? "var(--text-muted)"
-                                  :            "var(--text-secondary)",
-                        opacity:    disabled ? 0.45 : 1,
-                        cursor:     disabled ? "default" : "pointer",
-                      }}
-                    >
-                      {tf}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-          </div>
-        </div>
-        <div className="flex items-center gap-4 px-4 h-full rounded-[14px]"
-          style={{
-            background: "var(--bg-panel)",
-            border:     "1px solid var(--border-subtle)",
-          }}
-        >
-          <span className="text-[10px] uppercase tracking-widest" style={{ color: "var(--text-secondary)" }}>
-            Data for
-          </span>
-          <span className="text-[11px] font-semibold" style={{ color: "var(--text-primary)" }}>
-            {formatDataDate(eurusdSnapshot.date)}
-          </span>
-        </div>
       </div>
 
       {/* ── Panels ────────────────────────────────────────────────── */}
