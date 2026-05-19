@@ -150,6 +150,7 @@ mod analytics_v3_demo;
 mod candle_store;
 mod oanda_client;
 mod indicators;
+mod scoring;
 use analytics_v3_demo::CandleV3;
 
 #[tauri::command]
@@ -399,6 +400,47 @@ fn get_live_candles_computed(pair: String, tf: String) -> Result<Vec<CandleV3>, 
     Ok(indicators::compute(raw))
 }
 
+// ─── Synthesis: regime-weighted multi-timeframe scoring ──────────────────────
+
+#[tauri::command]
+fn get_synthesis(pair: String, tf: String) -> Result<scoring::Synthesis, String> {
+    let contents = std::fs::read_to_string(OANDA_KEY_PATH)
+        .map_err(|e| format!("key file: {}", e))?;
+    let api_key = contents.lines().next().unwrap_or("").trim().to_string();
+    if api_key.is_empty() { return Err("OANDA key file is empty".into()); }
+
+    let instrument = if pair.contains('_') {
+        pair.clone()
+    } else if pair.contains('/') {
+        pair.replace('/', "_")
+    } else {
+        format!("{}_{}", &pair[..3], &pair[3..])
+    };
+
+    let primary_tf = match tf.as_str() {
+        "1D" | "D"  => "D",
+        "4H" | "H4" => "H4",
+        "1H" | "H1" => "H1",
+        other       => return Err(format!("Unsupported primary timeframe for synthesis: {}", other)),
+    };
+
+    let fetch = |gran: &str, n: u32| -> Result<Vec<CandleV3>, String> {
+        let raw = oanda_client::fetch_raw_candles_tf(&api_key, &instrument, gran, n)?;
+        Ok(indicators::compute(raw))
+    };
+
+    // 250 bars give all indicator series ample warm-up (incl. EMA200, ADX 2x period seed).
+    let candles_d  = fetch("D",  250)?;
+    let candles_h4 = fetch("H4", 250)?;
+    let candles_h1 = fetch("H1", 250)?;
+
+    Ok(scoring::build_synthesis(
+        primary_tf,
+        &pair,
+        &candles_d, &candles_h4, &candles_h1,
+    ))
+}
+
 // ─── App entry point ──────────────────────────────────────────────────────────
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -466,7 +508,7 @@ pub fn run() {
 
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![list_images, read_credentials_file, write_text_file, get_candles_v3, get_ichi_rows_v3, sync_oanda_candles_v3, send_test_notification, send_telegram_message, get_forex_news, get_live_price, get_live_candles, get_live_candles_computed])
+        .invoke_handler(tauri::generate_handler![list_images, read_credentials_file, write_text_file, get_candles_v3, get_ichi_rows_v3, sync_oanda_candles_v3, send_test_notification, send_telegram_message, get_forex_news, get_live_price, get_live_candles, get_live_candles_computed, get_synthesis])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

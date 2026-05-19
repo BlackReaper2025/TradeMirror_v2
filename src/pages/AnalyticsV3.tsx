@@ -22,7 +22,8 @@ import { useAnalytics, setLiveAnalytics, hasLiveAnalytics, signalHistory, histor
 } from "../data/analyticsDataV3";
 import type { AnalysisResult } from "../data/analyticsDataV3";
 import type { SheetRow }         from "../lib/googleSheets";
-import { analyze }               from "../lib/brain/analyzer";
+import { fetchSynthesis, synthesisToAnalysisResult } from "../lib/brain/synthesis";
+import type { Synthesis }        from "../lib/brain/synthesis";
 import { getAnalyticsPanelOrder, setAnalyticsPanelOrder } from "../lib/preferences";
 import { playAlertSound } from "../lib/alertSound";
 import type { AlertSound } from "../lib/alertSound";
@@ -7533,6 +7534,7 @@ function ForexNewsPanel({ news, loading }: { news: NewsArticle[]; loading: boole
 export function AnalyticsV3() {
   const { analysisResult, eurusdSnapshot, sheetRows } = useAnalytics();
   const [error, setError]       = useState<string | null>(null);
+  const [synthesis, setSynthesis] = useState<Synthesis | null>(null);
   const [selectedPair, setSelectedPair] = useState("EUR/USD");
   const [alerts, setAlerts] = useState<Alert[]>([]);
   const [toasts, setToasts] = useState<AlertToast[]>([]);
@@ -7902,16 +7904,31 @@ export function AnalyticsV3() {
   useEffect(() => {
     const loadCandles = () =>
       invoke<RawCandleV3[]>("get_candles_v3")
-        .then(candles => {
+        .then(async candles => {
           if (!candles.length) return;
-          const last = candles[candles.length - 1];
+          const last      = candles[candles.length - 1];
+          const sheetRows = candles.map(mapToSheetRow);
+          const lastRow   = sheetRows[sheetRows.length - 1];
+
+          // Composite scoring drives the AI Synthesis panel. Fall back to the
+          // static result if the backend isn't reachable (e.g. no OANDA key).
+          let analysisResult = defaultAnalysisResult;
+          try {
+            const synth = await fetchSynthesis(selectedPair, "1D");
+            setSynthesis(synth);
+            analysisResult = synthesisToAnalysisResult(synth, lastRow);
+          } catch (err) {
+            setSynthesis(null);
+            console.warn("Synthesis fetch failed, using fallback:", err);
+          }
+
           setLiveAnalytics({
             eurusdSnapshot: mapToSnapshot(last),
-            analysisResult: defaultAnalysisResult,
+            analysisResult,
             signalTags, signalHistory, historicalAccuracy,
             evidenceCards, emaStackData, macdChartData,
             momentumChartData, volatilityChartData, directionalChartData,
-            sheetRows: candles.map(mapToSheetRow),
+            sheetRows,
           });
         })
         .catch(err => setError(String(err)));
@@ -7920,7 +7937,7 @@ export function AnalyticsV3() {
     invoke<number>("sync_oanda_candles_v3")
       .then(() => loadCandles())
       .catch(() => loadCandles());
-  }, []);
+  }, [selectedPair]);
 
 
 
@@ -8657,8 +8674,16 @@ export function AnalyticsV3() {
   const aisVerdictColor = analysisResult.direction === "LONG" ? "#60a5fa" : "#a78bfa";
   const aisVerdictBg    = analysisResult.direction === "LONG" ? "rgba(96,165,250,0.12)"  : "rgba(167,139,250,0.12)";
   const aisVerdictBd    = analysisResult.direction === "LONG" ? "rgba(96,165,250,0.30)"  : "rgba(167,139,250,0.30)";
+  const aisTooltip      = synthesis
+    ? `AI verdict: ${analysisResult.direction} ${analysisResult.confidence}% · Composite ${synthesis.composite.toFixed(0)}. `
+      + `Regime: ${synthesis.context.regime} · Volatility: ${synthesis.context.volatility}. `
+      + `MTF — D ${synthesis.multi_timeframe.daily.direction}/${Math.round(synthesis.multi_timeframe.daily.confidence)}%, `
+      + `H4 ${synthesis.multi_timeframe.h4.direction}/${Math.round(synthesis.multi_timeframe.h4.confidence)}%, `
+      + `H1 ${synthesis.multi_timeframe.h1.direction}/${Math.round(synthesis.multi_timeframe.h1.confidence)}% · `
+      + `Alignment ${Math.round(synthesis.multi_timeframe.alignment_score)}%.`
+    : `AI verdict: ${analysisResult.direction} with ${analysisResult.confidence}% confidence. Long score ${analysisResult.longScore} vs Short score ${analysisResult.shortScore}.`;
   const makeAisBadge = (large?: boolean) => (
-    <HoverTooltip tip={`AI verdict: ${analysisResult.direction} with ${analysisResult.confidence}% confidence. Long score ${analysisResult.longScore} vs Short score ${analysisResult.shortScore}.`}>
+    <HoverTooltip tip={aisTooltip}>
       <span
         className={`${large ? "text-[11px]" : "text-[8px]"} font-black uppercase rounded-full`}
         style={{
