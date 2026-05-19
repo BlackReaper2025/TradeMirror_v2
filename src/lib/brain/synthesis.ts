@@ -173,14 +173,17 @@ export function synthesisToAnalysisResult(synth: Synthesis, current: SheetRow): 
   const longScore  = direction === 'LONG'  ? mag : 0;
   const shortScore = direction === 'SHORT' ? mag : 0;
 
-  // Indicator chips: every contributing signal, grouped by its own bias.
-  const allContribs = [
-    ...synth.trend.components,
-    ...synth.momentum.components,
-    ...synth.structure.components,
-  ];
-  const longIndicators  = allContribs.filter(c => c.bias === 'bullish').map(c => c.name);
-  const shortIndicators = allContribs.filter(c => c.bias === 'bearish').map(c => c.name);
+  // Indicator chips: top-magnitude contributors only — the compact panel row
+  // can't grow beyond its grid height, so we cap to the most influential signals
+  // (|value| >= 5) and limit each side to 4 chips. Full list remains in
+  // synth.rationale for the expanded view / RAG.
+  const CHIP_MIN_MAG = 5;
+  const CHIP_PER_SIDE_MAX = 4;
+  const ranked = [...synth.trend.components, ...synth.momentum.components, ...synth.structure.components]
+    .filter(c => Math.abs(c.value) >= CHIP_MIN_MAG)
+    .sort((a, b) => Math.abs(b.value) - Math.abs(a.value));
+  const longIndicators  = ranked.filter(c => c.bias === 'bullish').slice(0, CHIP_PER_SIDE_MAX).map(c => c.name);
+  const shortIndicators = ranked.filter(c => c.bias === 'bearish').slice(0, CHIP_PER_SIDE_MAX).map(c => c.name);
 
   const trendGroup: SignalGroup = {
     bias:       biasFromBlock(synth.trend),
