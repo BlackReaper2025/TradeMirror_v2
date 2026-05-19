@@ -1,0 +1,100 @@
+1. **Stabilize the data pipeline**
+
+* Verify OANDA candles are accurate
+* Detect missing/duplicate candles
+* Standardize timestamps/session handling
+* Ensure replay data matches live data
+
+2. **Build the “truth layer”**
+
+* Centralize RSI, EMA, MACD, ATR, ADX calculations
+* Remove duplicate indicator logic everywhere
+* Create indicator validation/audit tests
+* Freeze indicator formulas once verified
+
+3. **Reduce Analytics V3 to a validation tool**
+
+* Charts display backend truth only
+* No hidden UI-side calculations
+* Use Analytics V3 primarily for debugging and verification
+* Avoid adding cosmetic intelligence layers
+
+4. **Limit intelligence systems**
+
+* Keep only:
+
+  * basic Market Structure
+  * minimal Regime Detection
+  * core indicator states
+* Delay:
+
+  * utility scoring
+  * advanced confidence scoring
+  * liquidity systems
+  * ML
+  * advanced automation
+
+5. **Build one reliable alert system**
+
+* Start with:
+
+  * price alerts
+  * 1–2 indicator alerts only
+* Validate alerts against live charts
+* Ensure no alert drift or timing inconsistencies
+
+6. **Choose ONE strategy**
+
+* EURUSD only
+* One timeframe stack only
+
+  * example: Daily bias + 4H execution
+* Define:
+
+  * entry
+  * stop
+  * TP
+  * invalidation
+  * no-trade conditions
+
+7. **Build replay + backtest validation**
+
+* Replay candles exactly as they existed historically
+* Replay indicator snapshots
+* Compare replay vs live behavior
+* Validate expectancy honestly
+
+8. **Paper trade before automation**
+
+* Minimum meaningful sample size
+* Log every signal
+* Log skipped trades
+* Measure:
+
+  * expectancy
+  * drawdown
+  * regime performance
+  * emotional behavior
+
+9. **Only then consider execution**
+
+* Tiny size
+* Manual confirmation first
+* Kill switch mandatory
+* No fully autonomous trading early
+
+10. **Expand only after proof**
+    Only add:
+
+* more indicators
+* more timeframes
+* more symbols
+* ML
+* advanced intelligence
+
+AFTER:
+
+* stable expectancy
+* stable infrastructure
+* stable psychology
+* stable debugging workflow

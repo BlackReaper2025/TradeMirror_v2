@@ -15,6 +15,7 @@ export const accounts = sqliteTable("accounts", {
   }).notNull(),
   brokerUrl: text("broker_url"),
   isActive: integer("is_active", { mode: "boolean" }).notNull().default(true),
+  isArchived: integer("is_archived", { mode: "boolean" }).notNull().default(false),
 });
 
 // ─── trades ──────────────────────────────────────────────────────────────────

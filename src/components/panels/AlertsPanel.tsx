@@ -8,7 +8,7 @@ export interface Alert {
   id: string;
   name: string;
   instrument: string;
-  direction: "above" | "below" | "crosses";
+  direction: "above" | "below" | "crosses" | "rsi_macd_cross" | "rsi";
   price: number;
   active: boolean;
   status: "watching" | "triggered" | "paused" | "deleted";
@@ -20,7 +20,31 @@ export interface Alert {
   created_at_utc: string;
   triggered_at_utc: string | null;
   last_hit_price: number | null;
+  rsiMacdConfig?: {
+    directionBias: "bullish" | "bearish" | "both";
+    timeframes: string[];
+  };
+  rsiConfig?: {
+    condition: "cross_above_70" | "cross_below_30" | "hit_50";
+    timeframes: string[];
+  };
 }
+
+const DIRECTION_LABEL: Record<string, string> = {
+  above: "above",
+  below: "below",
+  crosses: "crosses",
+  rsi_macd_cross: "RSI×MACD",
+  rsi: "RSI",
+};
+
+const RSI_CONDITION_LABEL: Record<string, string> = {
+  cross_above_70: "Cross > 70",
+  cross_below_30: "Cross < 30",
+  hit_50: "Hit 50",
+};
+
+const ALL_TFS = ["1W", "1D", "4H", "1H", "15M", "5M", "1M"] as const;
 
 const STATUS_COLORS: Record<Alert["status"], string> = {
   watching:  "#fbbf24",
@@ -94,6 +118,135 @@ function SettingsPopup({ alert, anchorRef, onUpdate, onClose }: SettingsPopupPro
         minWidth: 164,
       }}
     >
+      {/* RSI/MACD Cross config */}
+      {alert.direction === "rsi_macd_cross" && alert.rsiMacdConfig && (
+        <>
+          <span style={{ fontSize: 9, fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.08em" }}>
+            Direction
+          </span>
+          <div style={{ display: "flex", gap: 4 }}>
+            {(["bullish", "bearish", "both"] as const).map(b => {
+              const sel = alert.rsiMacdConfig!.directionBias === b;
+              return (
+                <button
+                  key={b}
+                  onClick={() => onUpdate(alert.id, { rsiMacdConfig: { ...alert.rsiMacdConfig!, directionBias: b } })}
+                  style={{
+                    flex: 1, fontSize: 10, padding: "4px 0", borderRadius: 6, fontWeight: 600,
+                    cursor: "pointer", textTransform: "capitalize",
+                    background: sel
+                      ? b === "bullish" ? "rgba(74,222,128,0.18)" : b === "bearish" ? "rgba(248,113,113,0.18)" : "rgba(167,139,250,0.18)"
+                      : "rgba(255,255,255,0.04)",
+                    border: sel
+                      ? b === "bullish" ? "1px solid rgba(74,222,128,0.45)" : b === "bearish" ? "1px solid rgba(248,113,113,0.45)" : "1px solid rgba(167,139,250,0.45)"
+                      : "1px solid var(--border-subtle)",
+                    color: sel
+                      ? b === "bullish" ? "#4ade80" : b === "bearish" ? "#f87171" : "#c4b5fd"
+                      : "var(--text-muted)",
+                  }}
+                >
+                  {b}
+                </button>
+              );
+            })}
+          </div>
+
+          <span style={{ fontSize: 9, fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.08em" }}>
+            Timeframes
+          </span>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 4 }}>
+            {ALL_TFS.map(tf => {
+              const sel = alert.rsiMacdConfig!.timeframes.includes(tf);
+              return (
+                <button
+                  key={tf}
+                  onClick={() => {
+                    const tfs = sel
+                      ? alert.rsiMacdConfig!.timeframes.filter(t => t !== tf)
+                      : [...alert.rsiMacdConfig!.timeframes, tf];
+                    if (tfs.length === 0) return; // require at least one
+                    onUpdate(alert.id, { rsiMacdConfig: { ...alert.rsiMacdConfig!, timeframes: tfs } });
+                  }}
+                  style={{
+                    fontSize: 10, padding: "4px 0", borderRadius: 6, fontWeight: 600,
+                    cursor: "pointer", textAlign: "center",
+                    background: sel ? "rgba(167,139,250,0.18)" : "rgba(255,255,255,0.04)",
+                    border: `1px solid ${sel ? "rgba(167,139,250,0.45)" : "var(--border-subtle)"}`,
+                    color: sel ? "#c4b5fd" : "var(--text-muted)",
+                  }}
+                >
+                  {tf}
+                </button>
+              );
+            })}
+          </div>
+
+          <div style={{ height: 1, background: "rgba(255,255,255,0.07)", margin: "0 -2px" }} />
+        </>
+      )}
+
+      {/* RSI config */}
+      {alert.direction === "rsi" && alert.rsiConfig && (
+        <>
+          <span style={{ fontSize: 9, fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.08em" }}>
+            Condition
+          </span>
+          <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+            {(["cross_above_70", "cross_below_30", "hit_50"] as const).map(c => {
+              const sel = alert.rsiConfig!.condition === c;
+              const color = c === "cross_above_70" ? "248,113,113" : c === "cross_below_30" ? "74,222,128" : "167,139,250";
+              return (
+                <button
+                  key={c}
+                  onClick={() => onUpdate(alert.id, { rsiConfig: { ...alert.rsiConfig!, condition: c } })}
+                  style={{
+                    fontSize: 10, padding: "5px 8px", borderRadius: 6, fontWeight: 600, cursor: "pointer",
+                    background: sel ? `rgba(${color},0.18)` : "rgba(255,255,255,0.04)",
+                    border: `1px solid ${sel ? `rgba(${color},0.45)` : "var(--border-subtle)"}`,
+                    color: sel ? `rgb(${color})` : "var(--text-muted)",
+                    textAlign: "left",
+                  }}
+                >
+                  {RSI_CONDITION_LABEL[c]}
+                </button>
+              );
+            })}
+          </div>
+
+          <span style={{ fontSize: 9, fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.08em" }}>
+            Timeframes
+          </span>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 4 }}>
+            {ALL_TFS.map(tf => {
+              const sel = alert.rsiConfig!.timeframes.includes(tf);
+              return (
+                <button
+                  key={tf}
+                  onClick={() => {
+                    const tfs = sel
+                      ? alert.rsiConfig!.timeframes.filter(t => t !== tf)
+                      : [...alert.rsiConfig!.timeframes, tf];
+                    if (tfs.length === 0) return;
+                    onUpdate(alert.id, { rsiConfig: { ...alert.rsiConfig!, timeframes: tfs } });
+                  }}
+                  style={{
+                    fontSize: 10, padding: "4px 0", borderRadius: 6, fontWeight: 600,
+                    cursor: "pointer", textAlign: "center",
+                    background: sel ? "rgba(167,139,250,0.18)" : "rgba(255,255,255,0.04)",
+                    border: `1px solid ${sel ? "rgba(167,139,250,0.45)" : "var(--border-subtle)"}`,
+                    color: sel ? "#c4b5fd" : "var(--text-muted)",
+                  }}
+                >
+                  {tf}
+                </button>
+              );
+            })}
+          </div>
+
+          <div style={{ height: 1, background: "rgba(255,255,255,0.07)", margin: "0 -2px" }} />
+        </>
+      )}
+
       {/* Notifications */}
       <span style={{ fontSize: 9, fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.08em" }}>
         Notifications
@@ -214,18 +367,33 @@ function DirectionPopup({ alert, anchorRef, onUpdate, onClose }: DirectionPopupP
         display: "flex", flexDirection: "column", gap: 4,
       }}
     >
-      {(["above", "below", "crosses"] as const).map(dir => (
+      {(["above", "below", "crosses", "rsi_macd_cross", "rsi"] as const).map(dir => (
         <label key={dir} style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", padding: "2px 0" }}>
           <input
             type="radio"
             name={`dir-portal-${alert.id}`}
             value={dir}
             checked={alert.direction === dir}
-            onChange={() => { onUpdate(alert.id, { direction: dir }); onClose(); }}
+            onChange={() => {
+              if (dir === "rsi_macd_cross") {
+                onUpdate(alert.id, {
+                  direction: dir,
+                  rsiMacdConfig: alert.rsiMacdConfig ?? { directionBias: "both", timeframes: ["1D"] },
+                });
+              } else if (dir === "rsi") {
+                onUpdate(alert.id, {
+                  direction: dir,
+                  rsiConfig: alert.rsiConfig ?? { condition: "cross_above_70", timeframes: ["1D"] },
+                });
+              } else {
+                onUpdate(alert.id, { direction: dir });
+              }
+              onClose();
+            }}
             style={{ accentColor: "#a78bfa", width: 10, height: 10, cursor: "pointer" }}
           />
           <span style={{ fontSize: 10, color: alert.direction === dir ? "#c4b5fd" : "var(--text-muted)", fontWeight: alert.direction === dir ? 600 : 400 }}>
-            {dir}
+            {dir === "rsi_macd_cross" ? "RSI/MACD Cross" : dir === "rsi" ? "RSI" : dir}
           </span>
         </label>
       ))}
@@ -305,7 +473,7 @@ export function AlertsPanel({ instrument, alerts, onUpdate, onDelete }: AlertsPa
                   display: "flex", alignItems: "center",
                 }}
               >
-                {alert.direction}
+                {DIRECTION_LABEL[alert.direction] ?? alert.direction}
               </div>
 
               {/* Direction portal */}
@@ -318,16 +486,26 @@ export function AlertsPanel({ instrument, alerts, onUpdate, onDelete }: AlertsPa
                 />
               )}
 
-              {/* Price */}
-              <input
-                type="text"
-                inputMode="decimal"
-                value={draftPrices[alert.id] ?? alert.price.toFixed(5)}
-                onChange={e => setDraftPrices(d => ({ ...d, [alert.id]: e.target.value }))}
-                onBlur={e => commitPrice(alert.id, e.target.value)}
-                onKeyDown={e => { if (e.key === "Enter") { commitPrice(alert.id, (e.target as HTMLInputElement).value); (e.target as HTMLInputElement).blur(); } }}
-                style={{ ...inputStyle, width: 76 }}
-              />
+              {/* Price (price alerts only) */}
+              {alert.direction === "rsi_macd_cross" ? (
+                <span style={{ fontSize: 10, color: "var(--text-muted)", flexShrink: 0 }}>
+                  {alert.rsiMacdConfig ? alert.rsiMacdConfig.directionBias : "configure →"}
+                </span>
+              ) : alert.direction === "rsi" ? (
+                <span style={{ fontSize: 10, color: "var(--text-muted)", flexShrink: 0 }}>
+                  {alert.rsiConfig ? RSI_CONDITION_LABEL[alert.rsiConfig.condition] : "configure →"}
+                </span>
+              ) : (
+                <input
+                  type="text"
+                  inputMode="decimal"
+                  value={draftPrices[alert.id] ?? alert.price.toFixed(5)}
+                  onChange={e => setDraftPrices(d => ({ ...d, [alert.id]: e.target.value }))}
+                  onBlur={e => commitPrice(alert.id, e.target.value)}
+                  onKeyDown={e => { if (e.key === "Enter") { commitPrice(alert.id, (e.target as HTMLInputElement).value); (e.target as HTMLInputElement).blur(); } }}
+                  style={{ ...inputStyle, width: 76 }}
+                />
+              )}
 
               {/* Status */}
               <span style={{ fontSize: 10, fontWeight: 600, color: STATUS_COLORS[alert.status], flex: 1, textAlign: "center" }}>

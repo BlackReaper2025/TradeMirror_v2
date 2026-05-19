@@ -13,6 +13,8 @@ const MIGRATIONS: string[] = [
   `ALTER TABLE trades ADD COLUMN exit_price REAL`,
   // v3b — copy existing target_price values into exit_price (idempotent)
   `UPDATE trades SET exit_price = target_price WHERE exit_price IS NULL AND target_price IS NOT NULL`,
+  // v4 — account archiving (soft archive, preserves trade data)
+  `ALTER TABLE accounts ADD COLUMN is_archived INTEGER NOT NULL DEFAULT 0`,
 ];
 
 export async function runMigrations(): Promise<void> {

@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { Plus, Check, Trash2, FolderOpen, Pencil } from "lucide-react";
+import { Plus, Check, Trash2, FolderOpen, Pencil, Archive, ArchiveRestore } from "lucide-react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { Panel, PanelHeader } from "../components/ui/Panel";
 import { getTimeFormat, setTimeFormat, type TimeFormat } from "../lib/preferences";
@@ -7,6 +7,9 @@ import { getBrokerageUrl, setBrokerageUrl, getMusicUrl, setMusicUrl, getSlidesho
 import {
   getSettings,
   getActiveAccounts,
+  getArchivedAccounts,
+  archiveAccount,
+  unarchiveAccount,
   createAccount,
   upsertSelectedAccount,
   clearAllTradesForAccount,
@@ -218,6 +221,12 @@ export function Settings() {
   const [acctSaving,     setAcctSaving]     = useState(false);
   const [acctSaved,      setAcctSaved]      = useState(false);
 
+  // ── Archived accounts ──
+  const [archivedAccounts, setArchivedAccounts] = useState<Account[]>([]);
+  const [archiveConfirm,   setArchiveConfirm]   = useState(false);
+  const [archiving,        setArchiving]        = useState(false);
+  const [unarchiving,      setUnarchiving]      = useState<string | null>(null);
+
   // ── New account form ──
   const [showNewForm,    setShowNewForm]    = useState(false);
   const [newName,        setNewName]        = useState("");
@@ -229,8 +238,9 @@ export function Settings() {
 
   async function loadAccounts() {
     if (!ready) return;
-    const [all, settings] = await Promise.all([getActiveAccounts(), getSettings()]);
+    const [all, archived, settings] = await Promise.all([getActiveAccounts(), getArchivedAccounts(), getSettings()]);
     setAllAccounts(all);
+    setArchivedAccounts(archived);
     const selId = settings?.selectedAccountId ?? all[0]?.id ?? "";
     setSelectedId(selId);
     const acc = all.find(a => a.id === selId) ?? all[0] ?? null;
@@ -329,6 +339,43 @@ export function Settings() {
       await loadAccounts();
     } catch (err) {
       console.error("[Settings] delete account failed:", err);
+    }
+  }
+
+  // ── Archive account ──
+  async function handleArchiveAccount() {
+    if (!archiveConfirm) {
+      setArchiveConfirm(true);
+      setTimeout(() => setArchiveConfirm(false), 6000);
+      return;
+    }
+    if (!account || !ready) return;
+    setArchiving(true);
+    try {
+      await archiveAccount(account.id);
+      const remaining = allAccounts.filter(a => a.id !== account.id);
+      if (remaining.length > 0) await upsertSelectedAccount(remaining[0].id);
+      tradeEvents.notify();
+      setArchiveConfirm(false);
+      await loadAccounts();
+    } catch (err) {
+      console.error("[Settings] archive account failed:", err);
+    } finally {
+      setArchiving(false);
+    }
+  }
+
+  async function handleUnarchiveAccount(id: string) {
+    if (!ready) return;
+    setUnarchiving(id);
+    try {
+      await unarchiveAccount(id);
+      tradeEvents.notify();
+      await loadAccounts();
+    } catch (err) {
+      console.error("[Settings] unarchive account failed:", err);
+    } finally {
+      setUnarchiving(null);
     }
   }
 
@@ -650,6 +697,78 @@ export function Settings() {
             <p className="text-[13px]" style={{ color: "var(--text-muted)" }}>Loading account…</p>
           )}
         </Panel>
+
+        {/* ── Archive Account ── */}
+        <Panel>
+          <PanelHeader label="Archive Account" />
+          <div className="flex items-center justify-between">
+            <div>
+              <div className="text-[13px]" style={{ color: "var(--text-secondary)" }}>
+                Remove this account from your portfolio without losing trade data.
+              </div>
+              <div className="text-[11px] mt-0.5" style={{ color: "var(--text-muted)" }}>
+                Archived accounts are hidden from the dashboard and portfolio. All trades are preserved for analytics.
+              </div>
+            </div>
+            <button
+              onClick={handleArchiveAccount}
+              disabled={archiving || !ready || !account}
+              className="ml-4 shrink-0 flex items-center gap-1.5 px-4 py-2 rounded-lg text-[12px] font-semibold transition-all disabled:opacity-50"
+              style={{
+                background: archiveConfirm ? "rgba(251,191,36,0.15)" : "rgba(251,191,36,0.08)",
+                border:     archiveConfirm ? "1px solid rgba(251,191,36,0.5)" : "1px solid rgba(251,191,36,0.25)",
+                color:      "#fbbf24",
+              }}
+            >
+              <Archive size={13} />
+              {archiving ? "Archiving…" : archiveConfirm ? "Confirm archive?" : "Archive Account"}
+            </button>
+          </div>
+        </Panel>
+
+        {/* ── Archived Accounts ── */}
+        {archivedAccounts.length > 0 && (
+          <>
+            <SectionTitle>Archived Accounts</SectionTitle>
+            <Panel>
+              <PanelHeader label="Archived Accounts" />
+              <div className="text-[12px] mb-3" style={{ color: "var(--text-muted)" }}>
+                These accounts are hidden from the dashboard. Trade data is fully preserved.
+              </div>
+              <div className="flex flex-col gap-2">
+                {archivedAccounts.map(acc => (
+                  <div
+                    key={acc.id}
+                    className="flex items-center justify-between px-4 py-3 rounded-lg"
+                    style={{ background: "var(--bg-panel-alt)", border: "1px solid var(--border-subtle)" }}
+                  >
+                    <div>
+                      <div className="text-[13px] font-semibold" style={{ color: "var(--text-muted)" }}>
+                        {acc.name}
+                      </div>
+                      <div className="text-[11px] mt-0.5" style={{ color: "var(--text-muted)", opacity: 0.7 }}>
+                        {acc.brokerOrFirm} · {acc.accountType} · ${acc.currentBalance.toLocaleString("en-US", { minimumFractionDigits: 2 })}
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => handleUnarchiveAccount(acc.id)}
+                      disabled={unarchiving === acc.id || !ready}
+                      className="ml-4 shrink-0 flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12px] font-semibold transition-all disabled:opacity-50"
+                      style={{
+                        background: "rgba(255,255,255,0.06)",
+                        border: "1px solid rgba(255,255,255,0.12)",
+                        color: "var(--text-secondary)",
+                      }}
+                    >
+                      <ArchiveRestore size={12} />
+                      {unarchiving === acc.id ? "Restoring…" : "Restore"}
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </Panel>
+          </>
+        )}
 
         {/* ── Display ── */}
         <SectionTitle>Display</SectionTitle>

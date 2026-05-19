@@ -116,6 +116,7 @@ interface AlertToast {
   instrument: string;
   direction: string;
   price: number;
+  subtitle?: string;
 }
 
 interface NewsArticle {
@@ -556,6 +557,7 @@ function computeBB(closes: number[], period = 20, mult = 2) {
   return { upper, middle, lower };
 }
 
+
 function computeIchimoku(highs: number[], lows: number[]) {
   const n = highs.length;
   const hh = (from: number, to: number) => { let m = -Infinity; for (let i = from; i <= to; i++) if (highs[i] > m) m = highs[i]; return m; };
@@ -699,6 +701,82 @@ class IchiCloudPrimitive {
 }
 
 
+// Bollinger Band fill primitive — paints the band between upper/lower as a polygon
+// at zOrder 'bottom' so candles always render on top (AreaSeries would clip them).
+class BBFillPaneView {
+  _p: BBFillPrimitive;
+  constructor(p: BBFillPrimitive) { this._p = p; }
+  update() {}
+  zOrder() { return "bottom" as const; }
+  renderer() { return new BBFillRenderer(this._p); }
+}
+
+class BBFillRenderer {
+  _p: BBFillPrimitive;
+  constructor(p: BBFillPrimitive) { this._p = p; }
+  draw(target: any) {
+    const chart  = this._p._chart;
+    const series = this._p._series;
+    const upper  = this._p._upper;
+    const lower  = this._p._lower;
+    if (!chart || !series || upper.length === 0 || lower.length === 0) return;
+    target.useBitmapCoordinateSpace((scope: any) => {
+      const ctx = scope.context;
+      const ts  = chart.timeScale();
+      const hr  = scope.horizontalPixelRatio;
+      const vr  = scope.verticalPixelRatio;
+
+      const up: { x: number; y: number }[] = [];
+      for (const pt of upper) {
+        const x = ts.timeToCoordinate(pt.time);
+        const y = series.priceToCoordinate(pt.value);
+        if (x !== null && y !== null) up.push({ x, y });
+      }
+      const lo: { x: number; y: number }[] = [];
+      for (const pt of lower) {
+        const x = ts.timeToCoordinate(pt.time);
+        const y = series.priceToCoordinate(pt.value);
+        if (x !== null && y !== null) lo.push({ x, y });
+      }
+      if (up.length === 0 || lo.length === 0) return;
+
+      ctx.beginPath();
+      ctx.moveTo(up[0].x * hr, up[0].y * vr);
+      for (let i = 1; i < up.length; i++) ctx.lineTo(up[i].x * hr, up[i].y * vr);
+      for (let i = lo.length - 1; i >= 0; i--) ctx.lineTo(lo[i].x * hr, lo[i].y * vr);
+      ctx.closePath();
+      ctx.fillStyle = "rgba(100,181,246,0.15)";
+      ctx.fill();
+    });
+  }
+}
+
+class BBFillPrimitive {
+  _chart: any = null;
+  _series: any = null;
+  _upper: { time: any; value: number }[];
+  _lower: { time: any; value: number }[];
+  _views: BBFillPaneView[] = [];
+
+  constructor(upper: { time: any; value: number }[], lower: { time: any; value: number }[]) {
+    this._upper = upper;
+    this._lower = lower;
+  }
+  attached({ chart, series }: any) {
+    this._chart  = chart;
+    this._series = series;
+    this._views  = [new BBFillPaneView(this)];
+  }
+  detached() {
+    this._chart  = null;
+    this._series = null;
+    this._views  = [];
+  }
+  updateAllViews() { this._views.forEach(v => v.update()); }
+  paneViews()      { return this._views; }
+}
+
+
 // ─── Price history chart ────────────────────────────────────────────────────────
 
 function PriceHistoryChart({ pair, chartTf, setChartTf }: { rows: SheetRow[]; pair: string; chartTf: "1W" | "1D" | "4H" | "1H" | "15M" | "5M" | "1M"; setChartTf: (tf: "1W" | "1D" | "4H" | "1H" | "15M" | "5M" | "1M") => void }) {
@@ -758,23 +836,8 @@ function PriceHistoryChart({ pair, chartTf, setChartTf }: { rows: SheetRow[]; pa
 
     if (key === "bb") {
       const { upper, middle, lower } = computeBB(closes);
-
-      // Fill layer: blue tint from upper band to chart bottom (15% opacity)
-      const fillArea = chart.addSeries(AreaSeries, {
-        lineColor: "rgba(0,0,0,0)", lineWidth: 1,
-        topColor: "rgba(100,181,246,0.15)", bottomColor: "rgba(100,181,246,0.15)",
-      });
-      fillArea.applyOptions({ lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false });
-      fillArea.setData(toData(upper));
-
-      // Mask layer: background colour from lower band to chart bottom (85% opacity)
-      // Cancels the fill below the lower band while keeping candles ~visible
-      const maskArea = chart.addSeries(AreaSeries, {
-        lineColor: "rgba(0,0,0,0)", lineWidth: 1,
-        topColor: "rgba(15,17,23,0.85)", bottomColor: "rgba(15,17,23,0.85)",
-      });
-      maskArea.applyOptions({ lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false });
-      maskArea.setData(toData(lower));
+      const upperData = toData(upper);
+      const lowerData = toData(lower);
 
       // Border lines
       const mk = (color: string, style: LineStyle) => {
@@ -784,8 +847,13 @@ function PriceHistoryChart({ pair, chartTf, setChartTf }: { rows: SheetRow[]; pa
       const uS = mk("rgba(100,181,246,0.85)", LineStyle.Solid);
       const mS = mk("rgba(100,181,246,0.5)",  LineStyle.Dashed);
       const lS = mk("rgba(100,181,246,0.85)", LineStyle.Solid);
-      uS.setData(toData(upper)); mS.setData(toData(middle)); lS.setData(toData(lower));
-      indSeriesRef.current.bb = [fillArea, maskArea, uS, mS, lS];
+      uS.setData(upperData); mS.setData(toData(middle)); lS.setData(lowerData);
+
+      // Light-blue fill between upper and lower bands — drawn behind candles
+      const fillPrim = new BBFillPrimitive(upperData, lowerData);
+      (uS as any).attachPrimitive(fillPrim);
+
+      indSeriesRef.current.bb = [uS, mS, lS];
 
     } else if (key === "ichi") {
       const highs = candles.map(r => r.high);
@@ -804,11 +872,13 @@ function PriceHistoryChart({ pair, chartTf, setChartTf }: { rows: SheetRow[]; pa
         return s;
       };
 
+      // Tenkan & Kijun — current bar
       const tenkanS = mkLine("#60a5fa", 1, LineStyle.Solid);
       const kijunS  = mkLine("#f472b6", 1, LineStyle.Solid);
       tenkanS.setData(toData(tenkan));
       kijunS.setData(toData(kijun));
 
+      // Senkou A & B — shifted +26 bars forward (project future cloud past last bar)
       const spanAData: { time: UTCTimestamp; value: number }[] = [];
       const spanBData: { time: UTCTimestamp; value: number }[] = [];
       for (let i = 0; i < n; i++) {
@@ -826,6 +896,7 @@ function PriceHistoryChart({ pair, chartTf, setChartTf }: { rows: SheetRow[]; pa
       const cloudPrim = new IchiCloudPrimitive(spanAData, spanBData);
       (spanAS as any).attachPrimitive(cloudPrim);
 
+      // Chikou — close shifted -26 bars backward
       const chikouData: { time: UTCTimestamp; value: number }[] = [];
       for (let i = OFFSET; i < n; i++)
         chikouData.push({ time: times[i - OFFSET], value: closes[i] });
@@ -913,11 +984,14 @@ function PriceHistoryChart({ pair, chartTf, setChartTf }: { rows: SheetRow[]; pa
     });
     chartRef.current = chart;
     createSeries(chart, viewModeRef.current);
+    let prevWidth = 0;
     const ro = new ResizeObserver(() => {
-      if (containerRef.current) {
-        chart.applyOptions({ width: containerRef.current.clientWidth, height: 480 });
-        if (containerRef.current.clientWidth > 0) chart.timeScale().fitContent();
-      }
+      if (!containerRef.current) return;
+      const w = containerRef.current.clientWidth;
+      if (w === 0) return;
+      chart.applyOptions({ width: w, height: 480 });
+      if (prevWidth === 0) chart.timeScale().fitContent();
+      prevWidth = w;
     });
     ro.observe(containerRef.current);
     return () => {
@@ -2904,7 +2978,7 @@ function IchiPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolea
           let curBear: Pt[] = [];
           if (showSenkouA || showSenkouB) {
             const valid = (d: typeof data[number]) =>
-              d.senkouA != null && d.senkouB != null && !d.senkouExtended;
+              d.senkouA != null && d.senkouB != null;
             let prev: typeof data[number] | null = null;
             data.forEach(d => {
               if (!valid(d)) {
@@ -2917,9 +2991,6 @@ function IchiPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolea
               const b  = d.senkouB as number;
               const isBull = a >= b;
 
-              // Detect crossing with previous point; if found, inject the
-              // crossing point as a shared "tip" so the fill ends exactly at
-              // the Senkou A/B intersection rather than at a data-point edge.
               if (prev) {
                 const pa = prev.senkouA as number;
                 const pb = prev.senkouB as number;
@@ -2927,7 +2998,7 @@ function IchiPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolea
                 if (wasBull !== isBull) {
                   const denom = (a - b) - (pa - pb);
                   if (denom !== 0) {
-                    const t = (pb - pa) / denom; // 0..1 between prev and d
+                    const t = (pb - pa) / denom;
                     if (t >= 0 && t <= 1) {
                       const xIdx = prev.idx + t * (d.idx - prev.idx);
                       const yVal = pa + t * (a - pa);
@@ -2962,6 +3033,8 @@ function IchiPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolea
             return `M ${top} L ${bot} Z`;
           };
 
+          // Build polyline paths for Senkou A and Senkou B using the same
+          // coordinate math as the fill, so the lines and fill cannot drift.
           const buildLine = (key: "senkouA" | "senkouB") => {
             const segs: string[] = [];
             let cur: string[] = [];
@@ -7446,6 +7519,161 @@ export function AnalyticsV3() {
     return () => clearInterval(id);
   }, []);
 
+  // Keep a ref to alerts so the evaluation interval always reads current state
+  const alertsRef = useRef<Alert[]>([]);
+  useEffect(() => { alertsRef.current = alerts; }, [alerts]);
+
+  // Evaluate RSI/MACD Cross alerts every 60 s against computed candle data
+  useEffect(() => {
+    const evaluate = async () => {
+      const activeRsiMacd = alertsRef.current.filter(
+        a => a.direction === "rsi_macd_cross" && a.status === "watching" && a.active && a.rsiMacdConfig
+      );
+      const activeRsi = alertsRef.current.filter(
+        a => a.direction === "rsi" && a.status === "watching" && a.active && a.rsiConfig
+      );
+      const active = activeRsiMacd; // existing variable kept for downstream RSI/MACD loop
+      if (activeRsiMacd.length === 0 && activeRsi.length === 0) return;
+
+      // Collect unique timeframes across all active alerts (both types)
+      const allTfs = new Set<string>();
+      activeRsiMacd.forEach(a => a.rsiMacdConfig!.timeframes.forEach(tf => allTfs.add(tf)));
+      activeRsi.forEach(a => a.rsiConfig!.timeframes.forEach(tf => allTfs.add(tf)));
+
+      // Fetch last 3 computed candles per timeframe
+      const tfData: Record<string, RawCandleV3[]> = {};
+      await Promise.all([...allTfs].map(async tf => {
+        try {
+          const candles = await invoke<RawCandleV3[]>("get_live_candles_computed", { pair: selectedPair, tf });
+          if (candles.length >= 2) tfData[tf] = candles.slice(-3);
+        } catch { /* ignore fetch errors */ }
+      }));
+
+      const triggered: { id: string; direction: "bullish" | "bearish"; tf: string; kind?: "rsi"; condition?: "cross_above_70" | "cross_below_30" | "hit_50" }[] = [];
+
+      // RSI alerts evaluation
+      activeRsi.forEach(alert => {
+        const config = alert.rsiConfig!;
+        for (const tf of config.timeframes) {
+          const candles = tfData[tf];
+          if (!candles || candles.length < 2) continue;
+          const prev = candles[candles.length - 2];
+          const curr = candles[candles.length - 1];
+
+          let fires = false;
+          let direction: "bullish" | "bearish" = "bullish";
+
+          if (config.condition === "cross_above_70") {
+            fires = prev.rsi14 <= 70 && curr.rsi14 > 70;
+            direction = "bearish"; // overbought
+          } else if (config.condition === "cross_below_30") {
+            fires = prev.rsi14 >= 30 && curr.rsi14 < 30;
+            direction = "bullish"; // oversold
+          } else if (config.condition === "hit_50") {
+            fires =
+              (prev.rsi14 < 50 && curr.rsi14 >= 50) ||
+              (prev.rsi14 > 50 && curr.rsi14 <= 50);
+            direction = curr.rsi14 >= 50 ? "bullish" : "bearish";
+          }
+
+          if (fires) {
+            triggered.push({ id: alert.id, direction, tf, kind: "rsi", condition: config.condition });
+            break;
+          }
+        }
+      });
+
+      active.forEach(alert => {
+        const config = alert.rsiMacdConfig!;
+        for (const tf of config.timeframes) {
+          const candles = tfData[tf];
+          if (!candles || candles.length < 2) continue;
+          const prev = candles[candles.length - 2];
+          const curr = candles[candles.length - 1];
+
+          // MACD cross: histogram changes sign between prev and current candle
+          const macdBullishCross = prev.macd_histogram <= 0 && curr.macd_histogram > 0;
+          const macdBearishCross = prev.macd_histogram >= 0 && curr.macd_histogram < 0;
+
+          const isBullish = macdBullishCross && curr.rsi14 < 30;
+          const isBearish = macdBearishCross && curr.rsi14 > 70;
+
+          const fires =
+            (config.directionBias === "bullish" && isBullish) ||
+            (config.directionBias === "bearish" && isBearish) ||
+            (config.directionBias === "both" && (isBullish || isBearish));
+
+          if (fires) {
+            triggered.push({ id: alert.id, direction: isBullish ? "bullish" : "bearish", tf });
+            break; // first matching TF per alert is enough
+          }
+        }
+      });
+
+      if (triggered.length === 0) return;
+
+      const now = new Date().toISOString();
+
+      setAlerts(prev => {
+        const next = prev.map(a => {
+          const t = triggered.find(x => x.id === a.id);
+          return t ? { ...a, status: "triggered" as const, triggered_at_utc: now } : a;
+        });
+        invoke("write_text_file", { path: ALERTS_JSON_PATH, content: JSON.stringify(next, null, 2) }).catch(console.error);
+        return next;
+      });
+
+      // Prevent the JSON polling loop from double-firing a toast for the same trigger
+      triggered.forEach(t => { seenStatuses.current[t.id] = "triggered"; });
+
+      // Fire Telegram notifications for any triggered alerts
+      const rsiCondLabel: Record<string, string> = {
+        cross_above_70: "RSI crossed above 70",
+        cross_below_30: "RSI crossed below 30",
+        hit_50: "RSI hit 50",
+      };
+      triggered.forEach(t => {
+        const alert = alertsRef.current.find(a => a.id === t.id);
+        if (!alert || !alert.notifications.telegram) return;
+        const dirLabel = t.direction === "bullish" ? "Bullish" : "Bearish";
+        const body = t.kind === "rsi"
+          ? `${alert.instrument.replace("_", "/")} · ${rsiCondLabel[t.condition!]}\nTimeframe: ${t.tf}`
+          : `${alert.instrument.replace("_", "/")} · ${dirLabel} MACD×RSI cross\nTimeframe: ${t.tf}`;
+        invoke("send_telegram_message", { text: `🚨 ${alert.name}\n${body}` }).catch(console.error);
+      });
+
+      // Fire in-app toasts + sound
+      const newToasts: AlertToast[] = triggered
+        .map(t => {
+          const alert = alertsRef.current.find(a => a.id === t.id);
+          if (!alert || !alert.notifications.in_app) return null;
+          const dirLabel = t.direction === "bullish" ? "Bullish" : "Bearish";
+          const subtitle = t.kind === "rsi"
+            ? `${alert.instrument.replace("_", "/")} · ${rsiCondLabel[t.condition!]} · ${t.tf}`
+            : `${alert.instrument.replace("_", "/")} · ${dirLabel} MACD×RSI · ${t.tf}`;
+          return {
+            toastId: crypto.randomUUID(),
+            name: alert.name,
+            instrument: alert.instrument,
+            direction: alert.direction,
+            price: 0,
+            subtitle,
+          };
+        })
+        .filter(Boolean) as AlertToast[];
+
+      if (newToasts.length > 0) {
+        const firstAlert = alertsRef.current.find(a => a.id === triggered[0].id);
+        playAlertSound((firstAlert?.sound as AlertSound) ?? "chime");
+        setToasts(prev => [...prev, ...newToasts]);
+      }
+    };
+
+    evaluate();
+    const id = setInterval(evaluate, 60_000);
+    return () => clearInterval(id);
+  }, [selectedPair]); // eslint-disable-line react-hooks/exhaustive-deps
+
   function createAlert() {
     const next: Alert = {
       id:              crypto.randomUUID(),
@@ -8797,7 +9025,7 @@ function AlertToastCard({ toast, onDismiss }: { toast: AlertToast; onDismiss: ()
         {toast.name}
       </div>
       <div style={{ fontSize: 11, color: "var(--text-secondary)", textAlign: "center" }}>
-        {toast.instrument.replace("_", "/")} · {toast.direction} {toast.price.toFixed(5)}
+        {toast.subtitle ?? `${toast.instrument.replace("_", "/")} · ${toast.direction} ${toast.price.toFixed(5)}`}
       </div>
     </div>
   );

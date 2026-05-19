@@ -96,7 +96,26 @@ export async function createAccount(data: {
 
 export async function getActiveAccounts(): Promise<Account[]> {
   const db = getDb();
-  return db.select().from(accounts).where(eq(accounts.isActive, true));
+  return db.select().from(accounts).where(
+    and(eq(accounts.isActive, true), eq(accounts.isArchived, false))
+  );
+}
+
+export async function getArchivedAccounts(): Promise<Account[]> {
+  const db = getDb();
+  return db.select().from(accounts).where(
+    and(eq(accounts.isActive, true), eq(accounts.isArchived, true))
+  );
+}
+
+export async function archiveAccount(id: string): Promise<void> {
+  const db = getDb();
+  await db.update(accounts).set({ isArchived: true }).where(eq(accounts.id, id));
+}
+
+export async function unarchiveAccount(id: string): Promise<void> {
+  const db = getDb();
+  await db.update(accounts).set({ isArchived: false }).where(eq(accounts.id, id));
 }
 
 export async function getAccount(id: string): Promise<Account | null> {
@@ -538,7 +557,9 @@ const ACCOUNT_COLORS = ["#8fd63e", "#3b82f6", "#8b5cf6", "#f59e0b", "#ec4899"];
 
 export async function getPortfolio() {
   const db = getDb();
-  const rows = await db.select().from(accounts).where(eq(accounts.isActive, true));
+  const rows = await db.select().from(accounts).where(
+    and(eq(accounts.isActive, true), eq(accounts.isArchived, false))
+  );
   return rows.map((acc, i) => ({
     name: acc.name,
     value: acc.currentBalance,

@@ -1,0 +1,124 @@
+[
+  {
+    "triggered_at_utc": "2026-05-03T07:06:09.467389+00:00",
+    "name": "EURUSD immediate logging test",
+    "instrument": "EUR_USD",
+    "direction": "above",
+    "alert_price": 1.17,
+    "hit_price": 1.17212,
+    "telegram": true,
+    "in_app": true
+  },
+  {
+    "event_id": "eurusd_immediate_trigger_test_20260503T071640Z",
+    "alert_id": "eurusd_immediate_trigger_test",
+    "triggered_at_utc": "2026-05-03T07:16:40.432948+00:00",
+    "name": "EURUSD immediate trigger test",
+    "instrument": "EUR_USD",
+    "direction": "above",
+    "alert_price": 1.17,
+    "hit_price": 1.17212,
+    "notifications": {
+      "in_app": true,
+      "telegram": true
+    }
+  },
+  {
+    "event_id": "gbpusd_above_13000_20260503T072213Z",
+    "alert_id": "gbpusd_above_13000",
+    "triggered_at_utc": "2026-05-03T07:22:13.572404+00:00",
+    "name": "GBPUSD above 1.3000",
+    "instrument": "GBP_USD",
+    "direction": "above",
+    "alert_price": 1.3,
+    "hit_price": 1.3575,
+    "notifications": {
+      "in_app": true,
+      "telegram": true
+    }
+  },
+  {
+    "event_id": "11feddfb-4dd5-4396-8eb5-82686c057c3c_20260518T191638Z",
+    "alert_id": "11feddfb-4dd5-4396-8eb5-82686c057c3c",
+    "triggered_at_utc": "2026-05-18T19:16:38.510455+00:00",
+    "name": "New Alert",
+    "instrument": "EUR_USD",
+    "direction": "above",
+    "alert_price": 1.163,
+    "hit_price": 1.16471,
+    "notifications": {
+      "in_app": true,
+      "telegram": true
+    }
+  },
+  {
+    "event_id": "e1712087-b6a4-4372-86ff-f524f7bccea1_20260518T191740Z",
+    "alert_id": "e1712087-b6a4-4372-86ff-f524f7bccea1",
+    "triggered_at_utc": "2026-05-18T19:17:40.405242+00:00",
+    "name": "New Alert",
+    "instrument": "EUR_USD",
+    "direction": "above",
+    "alert_price": 0,
+    "hit_price": 1.16473,
+    "notifications": {
+      "in_app": true,
+      "telegram": true
+    }
+  },
+  {
+    "event_id": "968b8477-d9e0-437f-aa4c-2c3c7f594bb3_20260518T191801Z",
+    "alert_id": "968b8477-d9e0-437f-aa4c-2c3c7f594bb3",
+    "triggered_at_utc": "2026-05-18T19:18:01.637786+00:00",
+    "name": "New Alert",
+    "instrument": "EUR_USD",
+    "direction": "above",
+    "alert_price": 0,
+    "hit_price": 1.16468,
+    "notifications": {
+      "in_app": true,
+      "telegram": true
+    }
+  },
+  {
+    "event_id": "968b8477-d9e0-437f-aa4c-2c3c7f594bb3_20260518T192040Z",
+    "alert_id": "968b8477-d9e0-437f-aa4c-2c3c7f594bb3",
+    "triggered_at_utc": "2026-05-18T19:20:40.185027+00:00",
+    "name": "New Alert",
+    "instrument": "EUR_USD",
+    "direction": "above",
+    "alert_price": 1.165,
+    "hit_price": 1.16501,
+    "notifications": {
+      "in_app": true,
+      "telegram": true
+    }
+  },
+  {
+    "event_id": "30631439-d5a5-493f-90a6-2c246314eb74_20260518T192133Z",
+    "alert_id": "30631439-d5a5-493f-90a6-2c246314eb74",
+    "triggered_at_utc": "2026-05-18T19:21:33.412112+00:00",
+    "name": "New Alert",
+    "instrument": "EUR_USD",
+    "direction": "above",
+    "alert_price": 0,
+    "hit_price": 1.16486,
+    "notifications": {
+      "in_app": true,
+      "telegram": true
+    }
+  },
+  {
+    "event_id": "a1287a9c-cbf1-4000-ad15-048f10161f00_20260518T192211Z",
+    "alert_id": "a1287a9c-cbf1-4000-ad15-048f10161f00",
+    "triggered_at_utc": "2026-05-18T19:22:11.142906+00:00",
+    "name": "New Alert",
+    "instrument": "EUR_USD",
+    "direction": "above",
+    "alert_price": 0,
+    "hit_price": 1.16495,
+    "notifications": {
+      "in_app": true,
+      "telegram": true
+    }
+  }
+]

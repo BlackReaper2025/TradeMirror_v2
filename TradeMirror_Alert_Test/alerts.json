@@ -1,0 +1,46 @@
+[
+  {
+    "id": "gbpusd_above_13700",
+    "name": "GBPUSD above 1.3700",
+    "instrument": "GBP_USD",
+    "direction": "above",
+    "price": 1.37,
+    "active": true,
+    "status": "watching",
+    "notifications": {
+      "in_app": true,
+      "telegram": true
+    },
+    "created_at_utc": "2026-05-03T00:00:00+00:00",
+    "triggered_at_utc": null,
+    "last_hit_price": null
+  },
+  {
+    "id": "69eefe08-14e0-4101-b988-21bb4866bd75",
+    "name": "New Alert",
+    "instrument": "EUR_USD",
+    "direction": "rsi_macd_cross",
+    "price": 0,
+    "active": true,
+    "status": "watching",
+    "notifications": {
+      "in_app": true,
+      "telegram": true
+    },
+    "sound": "chime",
+    "created_at_utc": "2026-05-18T19:24:51.076Z",
+    "triggered_at_utc": null,
+    "last_hit_price": null,
+    "rsiMacdConfig": {
+      "directionBias": "both",
+      "timeframes": [
+        "1D",
+        "1M",
+        "5M",
+        "15M",
+        "4H",
+        "1H"
+      ]
+    }
+  }
+]

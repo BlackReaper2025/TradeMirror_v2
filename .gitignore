@@ -22,3 +22,11 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Secrets — never commit
+docs/Oanda-API-Key.txt
+TradeMirror_Alert_Test/.env
+.env
+
+# Claude Code worktrees (local-only)
+.claude/worktrees/
