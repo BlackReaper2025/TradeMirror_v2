@@ -3319,7 +3319,7 @@ function computeMom10(rows: CciRow[], idx: number): number {
 
 interface AvgPriceRow { date: string; high: number; low: number; close: number; }
 interface MsRow { date: string; open: number; high: number; low: number; close: number; atr14: number; }
-interface RegimeRow { date: string; open: number; high: number; low: number; close: number; adx: number; atr14: number; bbUpper: number; bbLower: number; }
+interface RegimeRow { date: string; open: number; high: number; low: number; close: number; adx: number; diPlus: number; diMinus: number; atr14: number; bbUpper: number; bbLower: number; }
 
 function buildAvgPriceAnalysis(rows: AvgPriceRow[]): { headline: string; bullets: string[]; description: string } {
   if (rows.length < 6) return { headline: "—", bullets: [], description: "—" };
@@ -6856,18 +6856,47 @@ function detectCandlePatterns(candles: CandleCtxRow[]): CandlePattern[] {
 // ─── Regime Detection Panel ───────────────────────────────────────────────────
 const REGIME_WINDOW = 20;
 
-type RegimeState     = "Trending" | "Ranging" | "Compression";
+// Algorithm mirrors src-tauri/src/scoring/volatility.rs. Keep both in sync.
+//
+// Priority:
+//   1. StrongTrending (ADX >= 40 AND DI dominance)
+//   2. Trending       (ADX >= 25 AND DI dominance)
+//   3. Compression    (joint BB+ATR contraction AND no trend)
+//   4. Expansion      (joint BB+ATR expansion AND no trend)
+//   5. Ranging        (default)
+type RegimeState     = "StrongTrending" | "Trending" | "Expansion" | "Ranging" | "Compression";
 type VolatilityState = "Expanding" | "Contracting" | "Neutral";
+
+const REGIME_ADX_TRENDING   = 25.0;
+const REGIME_ADX_STRONG     = 40.0;
+const REGIME_DI_DOMINANCE   = 5.0;
+const REGIME_BB_COMPRESSION = 0.65;
+const REGIME_BB_EXPANSION   = 1.50;
+const REGIME_VOL_EXPANDING  = 1.20;
+const REGIME_VOL_CONTRACT   = 0.85;
 
 function computeRegime(rows: RegimeRow[], idx: number): RegimeState {
   if (idx < 0 || idx >= rows.length) return "Ranging";
   const r       = rows[idx];
   const adx     = r.adx ?? 0;
+  const diDiff  = Math.abs((r.diPlus ?? 0) - (r.diMinus ?? 0));
+  const diConf  = diDiff >= REGIME_DI_DOMINANCE;
   const bbWidth = ((r.bbUpper ?? 0) - (r.bbLower ?? 0)) * 10000;
   const slice   = rows.slice(Math.max(0, idx - 19), idx + 1);
   const bbAvg   = slice.reduce((s, rr) => s + ((rr.bbUpper ?? 0) - (rr.bbLower ?? 0)) * 10000, 0) / (slice.length || 1);
-  if (bbWidth > 0 && bbAvg > 0 && bbWidth < bbAvg * 0.75) return "Compression";
-  if (adx > 25) return "Trending";
+  const atr     = r.atr14 ?? 0;
+  const atrAvg  = slice.reduce((s, rr) => s + (rr.atr14 ?? 0), 0) / (slice.length || 1);
+  const bbRatio = bbAvg > 0 ? bbWidth / bbAvg : 1;
+  const atrRatio = atrAvg > 0 ? atr / atrAvg : 1;
+
+  if (adx >= REGIME_ADX_STRONG   && diConf) return "StrongTrending";
+  if (adx >= REGIME_ADX_TRENDING && diConf) return "Trending";
+  if (bbAvg > 0 && bbRatio < REGIME_BB_COMPRESSION
+      && atrRatio < REGIME_VOL_CONTRACT
+      && adx < REGIME_ADX_TRENDING) return "Compression";
+  if (bbAvg > 0 && bbRatio > REGIME_BB_EXPANSION
+      && atrRatio > REGIME_VOL_EXPANDING
+      && adx < REGIME_ADX_TRENDING) return "Expansion";
   return "Ranging";
 }
 
@@ -6910,13 +6939,13 @@ function computeRegimeSequence(rows: RegimeRow[]): RegimeState[] {
 }
 
 function computeRegimeVolatility(rows: RegimeRow[], idx: number): VolatilityState {
-  if (idx < 0 || idx >= rows.length) return "Normal";
+  if (idx < 0 || idx >= rows.length) return "Neutral";
   const slice = rows.slice(Math.max(0, idx - 19), idx + 1);
   const sma   = slice.reduce((s, r) => s + (r.atr14 ?? 0), 0) / (slice.length || 1);
   const atr   = rows[idx].atr14 ?? 0;
   if (sma === 0) return "Neutral";
-  if (atr > sma * 1.1) return "Expanding";
-  if (atr < sma * 0.9) return "Contracting";
+  if (atr > sma * REGIME_VOL_EXPANDING) return "Expanding";
+  if (atr < sma * REGIME_VOL_CONTRACT)  return "Contracting";
   return "Neutral";
 }
 
@@ -6929,33 +6958,55 @@ function buildRegimeAnalysis(rows: RegimeRow[]): { headline: string; bullets: st
   const slice20  = rows.slice(-20);
   const bbAvg    = slice20.reduce((s, r) => s + ((r.bbUpper ?? 0) - (r.bbLower ?? 0)) * 10000, 0) / slice20.length;
   const atrSma   = slice20.reduce((s, r) => s + (r.atr14 ?? 0), 0) / slice20.length;
-  const regime: RegimeState = bbWidth > 0 && bbAvg > 0 && bbWidth < bbAvg * 0.75 ? "Compression" : adx > 25 ? "Trending" : "Ranging";
-  const volatility: VolatilityState = atrSma === 0 ? "Neutral" : atr14 > atrSma * 1.1 ? "Expanding" : atr14 < atrSma * 0.9 ? "Contracting" : "Neutral";
+  // Use the canonical classifier so badge and bullets agree.
+  const regime: RegimeState     = computeRegime(rows, rows.length - 1);
+  const volatility: VolatilityState = computeRegimeVolatility(rows, rows.length - 1);
+  const diDiff   = Math.abs((cur.diPlus ?? 0) - (cur.diMinus ?? 0));
   const adxR     = Math.round(adx * 10) / 10;
   const bwPips   = Math.round(bbWidth);
   const bwAvgP   = Math.round(bbAvg);
   const atrPips  = Math.round(atr14 * 10000);
   const atrSmaP  = Math.round(atrSma * 10000);
-  const adxLabel = adx >= 40 ? "Strong trend" : adx >= 25 ? "Trend confirmed" : adx >= 15 ? "Weak momentum" : "No trend";
+  const adxLabel = adx >= 40 ? "Strong trend"
+                : adx >= 25 ? "Trend confirmed"
+                : adx >= 15 ? "Weak momentum"
+                : "No trend";
   const bullets = [
     `Regime: ${regime} · Volatility: ${volatility}`,
-    `ADX: ${adxR} · ${adxLabel}`,
-    `BB Width: ${bwPips} pips · 20-bar avg: ${bwAvgP} pips`,
-    `ATR(14): ${atrPips} pips · Avg: ${atrSmaP} pips`,
+    `ADX: ${adxR} · ${adxLabel} · |+DI − −DI| = ${diDiff.toFixed(1)}`,
+    `BB Width: ${bwPips} pips · 20-bar avg: ${bwAvgP} pips (ratio ${(bbWidth / Math.max(bbAvg, 1)).toFixed(2)})`,
+    `ATR(14): ${atrPips} pips · Avg: ${atrSmaP} pips (ratio ${(atr14 / Math.max(atrSma, 1e-6)).toFixed(2)})`,
   ];
+  const dir = (cur.diPlus ?? 0) > (cur.diMinus ?? 0) ? "bullish" : "bearish";
   let description = "";
-  if (regime === "Compression") {
-    const pctBelow = Math.round((1 - bbWidth / bbAvg) * 100);
-    description = `Bollinger Band width has contracted to ${bwPips} pips — ${pctBelow}% below the 20-bar average. Compression signals low momentum and reduced edge for trend-following strategies. Watch for a volatility expansion as bands widen; the initial breakout direction often sets the short-term bias.`;
+  if (regime === "StrongTrending") {
+    description = `ADX at ${adxR} confirms a strong ${dir} trend with directional pressure dominating (|+DI − −DI| = ${diDiff.toFixed(1)}). Trend-following strategies carry the highest edge; counter-trend trades are low-probability in this environment.`;
   } else if (regime === "Trending") {
-    const dir = (cur.diPlus ?? 0) > (cur.diMinus ?? 0) ? "bullish" : "bearish";
-    const volNote = volatility === "Expanding" ? "Volatility is expanding — the trend may be accelerating." : volatility === "Contracting" ? "Volatility is contracting despite the trend — watch for momentum fatigue." : "Volatility is neutral — trend conditions remain stable.";
-    description = `ADX at ${adxR} confirms an active trend with directional pressure favouring ${dir} momentum. Trend-following strategies carry higher edge in this environment. ${volNote}`;
+    const volNote = volatility === "Expanding" ? "Volatility is expanding — the trend may be accelerating."
+                  : volatility === "Contracting" ? "Volatility is contracting despite the trend — watch for momentum fatigue."
+                  : "Volatility is neutral — trend conditions remain stable.";
+    description = `ADX at ${adxR} confirms an active ${dir} trend (|+DI − −DI| = ${diDiff.toFixed(1)} > 5). Trend-following strategies carry higher edge in this environment. ${volNote}`;
+  } else if (regime === "Compression") {
+    const pctBelow = Math.round((1 - bbWidth / bbAvg) * 100);
+    description = `Joint compression: Bollinger Band width is ${pctBelow}% below its 20-bar average AND ATR is ${Math.round((1 - atr14 / Math.max(atrSma, 1e-6)) * 100)}% below its average, with ADX (${adxR}) below trend threshold. True squeeze. Watch for volatility expansion — the initial breakout direction often sets the short-term bias.`;
+  } else if (regime === "Expansion") {
+    description = `Volatility expansion: BB width is ${Math.round((bbWidth / bbAvg - 1) * 100)}% above its 20-bar average AND ATR ${Math.round((atr14 / Math.max(atrSma, 1e-6) - 1) * 100)}% above its average — but ADX (${adxR}) hasn't confirmed a trend yet. High-volatility post-breakout phase; momentum strategies have edge, trend strategies require confirmation.`;
   } else {
-    const volNote = volatility === "Expanding" ? " Expanding volatility may signal an emerging breakout." : volatility === "Contracting" ? " Contracting volatility suggests continued consolidation." : "";
-    description = `ADX at ${adxR} indicates a directionless, ranging market. Price is oscillating without sustained momentum and mean reversion strategies are favoured. Avoid trend entries until ADX rises above 25.${volNote}`;
+    // Ranging — ADX below 25 OR DI not dominant.
+    const diReason = adx >= 25 && diDiff < 5
+      ? ` ADX is above 25 but +DI and −DI are too close (|diff| = ${diDiff.toFixed(1)}) — directionless volatility, not a real trend.`
+      : "";
+    const volNote = volatility === "Expanding" ? " Expanding volatility may signal an emerging breakout."
+                  : volatility === "Contracting" ? " Contracting volatility suggests continued consolidation."
+                  : "";
+    description = `ADX at ${adxR} indicates a directionless, ranging market.${diReason} Price is oscillating without sustained momentum and mean reversion strategies are favoured. Avoid trend entries until ADX rises above 25 with directional confirmation.${volNote}`;
   }
-  const headline = regime === "Compression" ? "Compression — Breakout Watch" : regime === "Trending" ? (adx >= 40 ? "Strong Trend Active" : "Trend Confirmed") : "Ranging — Low Edge Environment";
+  const headline =
+      regime === "StrongTrending" ? `Strong ${dir.charAt(0).toUpperCase() + dir.slice(1)} Trend`
+    : regime === "Trending"       ? `${dir.charAt(0).toUpperCase() + dir.slice(1)} Trend Confirmed`
+    : regime === "Compression"    ? "Compression — Breakout Watch"
+    : regime === "Expansion"      ? "Expansion — Volatility Up, Direction Pending"
+    :                                "Ranging — Low Edge Environment";
   return { headline, bullets, description };
 }
 
@@ -6969,7 +7020,8 @@ function RegimePanelBody({ pair, indicatorTf, expanded, showCandles, onToggleCan
     invoke<RawCandleV3[]>("get_live_candles_computed", { pair, tf: indicatorTf })
       .then(candles => setLiveRows(candles.map(c => ({
         date: c.date, open: c.open, high: c.high, low: c.low, close: c.close,
-        adx: c.adx, atr14: c.atr14, bbUpper: c.bb_upper, bbLower: c.bb_lower,
+        adx: c.adx, diPlus: c.di_plus, diMinus: c.di_minus,
+        atr14: c.atr14, bbUpper: c.bb_upper, bbLower: c.bb_lower,
       }))))
       .catch(() => {})
       .finally(() => setLoading(false));
@@ -7025,8 +7077,10 @@ function RegimePanelBody({ pair, indicatorTf, expanded, showCandles, onToggleCan
   const curRegime = latest?.regime     ?? "Ranging";
   const curVol    = latest?.volatility ?? "Neutral";
 
-  const regimeColor = curRegime === "Trending"    ? "#60a5fa"
-                    : curRegime === "Compression" ? "#f59e0b"
+  const regimeColor = curRegime === "StrongTrending" ? "#34d399"
+                    : curRegime === "Trending"       ? "#60a5fa"
+                    : curRegime === "Compression"    ? "#f59e0b"
+                    : curRegime === "Expansion"      ? "#f87171"
                     : "#94a3b8";
   const volColor    = curVol === "Expanding"   ? "#f87171"
                     : curVol === "Contracting" ? "#34d399"
@@ -7129,7 +7183,11 @@ function RegimePanelBody({ pair, indicatorTf, expanded, showCandles, onToggleCan
               content={({ active, payload }) => {
                 if (!active || !payload?.length) return null;
                 const d = payload[0]?.payload as typeof data[0];
-                const rc = d.regime === "Trending" ? "#60a5fa" : d.regime === "Compression" ? "#f59e0b" : "#94a3b8";
+                const rc = d.regime === "StrongTrending" ? "#34d399"
+                         : d.regime === "Trending"       ? "#60a5fa"
+                         : d.regime === "Compression"    ? "#f59e0b"
+                         : d.regime === "Expansion"      ? "#f87171"
+                         : "#94a3b8";
                 const vc = d.volatility === "Expanding" ? "#f87171" : d.volatility === "Contracting" ? "#34d399" : "#94a3b8";
                 return (
                   <div style={{ background: "var(--bg-sidebar)", border: "1px solid var(--border-medium)", borderRadius: 8, padding: "7px 10px", fontSize: 11, boxShadow: "0 4px 16px rgba(0,0,0,0.6)" }}>
@@ -7148,8 +7206,10 @@ function RegimePanelBody({ pair, indicatorTf, expanded, showCandles, onToggleCan
                 x1={seg.x1}
                 x2={seg.x2}
                 fill={
-                  seg.regime === "Trending"    ? "rgba(96,165,250,0.10)"  :
-                  seg.regime === "Compression" ? "rgba(245,158,11,0.10)"  :
+                  seg.regime === "StrongTrending" ? "rgba(52,211,153,0.10)" :
+                  seg.regime === "Trending"       ? "rgba(96,165,250,0.10)" :
+                  seg.regime === "Compression"    ? "rgba(245,158,11,0.10)" :
+                  seg.regime === "Expansion"      ? "rgba(248,113,113,0.10)" :
                   "rgba(148,163,184,0.05)"
                 }
                 ifOverflow="hidden"
@@ -8465,46 +8525,58 @@ export function AnalyticsV3() {
     return iRows.length ? computeRegimeVolatility(iRows, iRows.length - 1) : "Neutral";
   }, [iRows]);
   const regimeAdx = iRows.length ? (iRows[iRows.length - 1]?.adx ?? 0) : 0;
-  const trendStrength = curRegimeState === "Trending"
-    ? regimeAdx >= 35 ? "Strong"
-    : regimeAdx >= 25 ? "Normal"
+  const isTrending = curRegimeState === "Trending" || curRegimeState === "StrongTrending";
+  const trendStrength = isTrending
+    ? curRegimeState === "StrongTrending" ? "Strong"
+    : regimeAdx >= 30 ? "Normal"
     : "Weak"
     : null;
   const trendStrengthColor = trendStrength === "Strong" ? "#34d399"
                            : trendStrength === "Normal" ? "#60a5fa"
                            : "#94a3b8";
 
-  const regimeInsight  = curRegimeState === "Trending"    ? "Momentum strategies favored"
-                       : curRegimeState === "Compression" ? "Breakout conditions building"
-                       : "Mean reversion environment";
+  const regimeInsight  = isTrending                          ? "Momentum strategies favored"
+                       : curRegimeState === "Compression"    ? "Breakout conditions building"
+                       : curRegimeState === "Expansion"      ? "Volatility expansion — direction pending"
+                       :                                       "Mean reversion environment";
   const regimeHeadline = trendStrength
     ? `${trendStrength} Trend · ${regimeInsight}`
     : regimeInsight;
+  const msBullishLike = msState === "Bullish" || msState === "Strong Bullish";
+  const msBearishLike = msState === "Bearish" || msState === "Strong Bearish";
   const regimeAlignmentInsight: string =
     curRegimeState === "Compression"
       ? "Breakout setup forming"
-      : curRegimeState === "Trending" && msState === "Bullish"
+      : curRegimeState === "Expansion"
+      ? "Volatile expansion — wait for direction"
+      : isTrending && msBullishLike
       ? "High confidence bullish conditions"
-      : curRegimeState === "Trending" && msState === "Bearish"
+      : isTrending && msBearishLike
       ? "High confidence bearish conditions"
-      : curRegimeState === "Trending"
+      : isTrending
       ? "Trend / structure mismatch — mixed signals"
       : curRegimeState === "Ranging" && msState === "Range"
       ? "Choppy / low edge environment"
-      : curRegimeState === "Ranging" && msState === "Bullish"
+      : curRegimeState === "Ranging" && msBullishLike
       ? "Ranging into bullish structure"
-      : curRegimeState === "Ranging" && msState === "Bearish"
+      : curRegimeState === "Ranging" && msBearishLike
       ? "Ranging into bearish structure"
       : "Mixed conditions";
   const makeRegimeBadge = (large?: boolean) => {
-    const color = curRegimeState === "Trending"    ? "#60a5fa"
-                : curRegimeState === "Compression" ? "#f59e0b"
+    const color = curRegimeState === "StrongTrending" ? "#34d399"
+                : curRegimeState === "Trending"       ? "#60a5fa"
+                : curRegimeState === "Compression"    ? "#f59e0b"
+                : curRegimeState === "Expansion"      ? "#f87171"
                 : "#94a3b8";
-    const bg    = curRegimeState === "Trending"    ? "rgba(96,165,250,0.12)"
-                : curRegimeState === "Compression" ? "rgba(245,158,11,0.12)"
+    const bg    = curRegimeState === "StrongTrending" ? "rgba(52,211,153,0.12)"
+                : curRegimeState === "Trending"       ? "rgba(96,165,250,0.12)"
+                : curRegimeState === "Compression"    ? "rgba(245,158,11,0.12)"
+                : curRegimeState === "Expansion"      ? "rgba(248,113,113,0.12)"
                 : "rgba(148,163,184,0.10)";
-    const border = curRegimeState === "Trending"    ? "rgba(96,165,250,0.35)"
-                 : curRegimeState === "Compression" ? "rgba(245,158,11,0.35)"
+    const border = curRegimeState === "StrongTrending" ? "rgba(52,211,153,0.35)"
+                 : curRegimeState === "Trending"       ? "rgba(96,165,250,0.35)"
+                 : curRegimeState === "Compression"    ? "rgba(245,158,11,0.35)"
+                 : curRegimeState === "Expansion"      ? "rgba(248,113,113,0.35)"
                  : "rgba(148,163,184,0.25)";
     return (
       <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>

@@ -23,7 +23,7 @@ pub enum Bias { Bullish, Bearish, Neutral }
 
 #[derive(Serialize, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "PascalCase")]
-pub enum RegimeState { Trending, Ranging, Compression }
+pub enum RegimeState { StrongTrending, Trending, Expansion, Ranging, Compression }
 
 #[derive(Serialize, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "PascalCase")]
@@ -131,9 +131,11 @@ pub(crate) fn sum_components(components: &[SignalContribution]) -> f64 {
 /// Per-regime weights applied to the trend / momentum / structure sub-scores.
 fn regime_weights(regime: &RegimeState) -> (f64, f64, f64) {
     match regime {
-        RegimeState::Trending    => (1.2, 1.0, 1.0),  // trend dominates
-        RegimeState::Ranging     => (0.5, 1.2, 0.9),  // mean-reversion favoured
-        RegimeState::Compression => (0.3, 0.3, 0.5),  // breakout-watch, low conviction
+        RegimeState::StrongTrending => (1.4, 1.0, 1.0),  // trend dominance amplified
+        RegimeState::Trending       => (1.2, 1.0, 1.0),  // trend dominates
+        RegimeState::Expansion      => (1.0, 1.1, 0.9),  // volatility-up, no clean trend yet
+        RegimeState::Ranging        => (0.5, 1.2, 0.9),  // mean-reversion favoured
+        RegimeState::Compression    => (0.3, 0.3, 0.5),  // breakout-watch, low conviction
     }
 }
 

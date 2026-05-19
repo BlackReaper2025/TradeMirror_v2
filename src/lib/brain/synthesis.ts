@@ -16,7 +16,7 @@ import type { SheetRow } from '../googleSheets';
 // ─── TS types mirroring src-tauri/src/scoring ────────────────────────────────
 
 export type Bias = 'bullish' | 'bearish' | 'neutral';
-export type RegimeState = 'Trending' | 'Ranging' | 'Compression';
+export type RegimeState = 'StrongTrending' | 'Trending' | 'Expansion' | 'Ranging' | 'Compression';
 export type VolatilityState = 'Expanding' | 'Neutral' | 'Contracting';
 export type Direction = 'LONG' | 'SHORT' | 'NEUTRAL';
 
