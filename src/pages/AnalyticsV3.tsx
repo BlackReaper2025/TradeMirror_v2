@@ -522,10 +522,11 @@ function CandleShape({ x, width, payload, background, yDomain }: any) {
 
 // ─── Indicator helpers ─────────────────────────────────────────────────────────
 
-type IndKey = "bb" | "ema9" | "ema20" | "ema50" | "ema200";
+type IndKey = "bb" | "ichi" | "ema9" | "ema20" | "ema50" | "ema200";
 
 const IND_DEFS: { key: IndKey; label: string; color: string }[] = [
   { key: "bb",    label: "BB(20,2)", color: "#64b5f6" },
+  { key: "ichi",  label: "Ichimoku", color: "#60a5fa" },
   { key: "ema9",  label: "EMA 9",   color: "#ff9f0a" },
   { key: "ema20", label: "EMA 20",  color: "#30d158" },
   { key: "ema50", label: "EMA 50",  color: "#ff6b6b" },
@@ -553,6 +554,148 @@ function computeBB(closes: number[], period = 20, mult = 2) {
     middle[i] = sma; upper[i] = sma + mult * std; lower[i] = sma - mult * std;
   }
   return { upper, middle, lower };
+}
+
+function computeIchimoku(highs: number[], lows: number[]) {
+  const n = highs.length;
+  const hh = (from: number, to: number) => { let m = -Infinity; for (let i = from; i <= to; i++) if (highs[i] > m) m = highs[i]; return m; };
+  const ll = (from: number, to: number) => { let m =  Infinity; for (let i = from; i <= to; i++) if (lows[i]  < m) m = lows[i];  return m; };
+  const tenkan: (number | null)[] = Array(n).fill(null);
+  const kijun:  (number | null)[] = Array(n).fill(null);
+  const spanA:  (number | null)[] = Array(n).fill(null);
+  const spanB:  (number | null)[] = Array(n).fill(null);
+  for (let i = 8;  i < n; i++) tenkan[i] = (hh(i - 8,  i) + ll(i - 8,  i)) / 2;
+  for (let i = 25; i < n; i++) kijun[i]  = (hh(i - 25, i) + ll(i - 25, i)) / 2;
+  for (let i = 25; i < n; i++) {
+    if (tenkan[i] !== null && kijun[i] !== null)
+      spanA[i] = (tenkan[i]! + kijun[i]!) / 2;
+  }
+  for (let i = 51; i < n; i++) spanB[i] = (hh(i - 51, i) + ll(i - 51, i)) / 2;
+  return { tenkan, kijun, spanA, spanB };
+}
+
+
+// Ichimoku cloud fill primitive — paints the area between Senkou A and Senkou B
+// directly in canvas using the chart's coordinate system, so the fill always
+// tracks the dashed lines exactly. Bullish (A >= B) and bearish (B > A) regions
+// are split at the exact crossover so the cloud comes to a clean point.
+class IchiCloudPaneView {
+  _p: IchiCloudPrimitive;
+  constructor(p: IchiCloudPrimitive) { this._p = p; }
+  update() {}
+  zOrder() { return "bottom" as const; }
+  renderer() { return new IchiCloudRenderer(this._p); }
+}
+
+class IchiCloudRenderer {
+  _p: IchiCloudPrimitive;
+  constructor(p: IchiCloudPrimitive) { this._p = p; }
+  draw(target: any) {
+    const chart  = this._p._chart;
+    const series = this._p._series;
+    const A = this._p._spanA;
+    const B = this._p._spanB;
+    if (!chart || !series || A.length === 0 || A.length !== B.length) return;
+    target.useBitmapCoordinateSpace((scope: any) => {
+      const ctx = scope.context;
+      const ts  = chart.timeScale();
+      const hr  = scope.horizontalPixelRatio;
+      const vr  = scope.verticalPixelRatio;
+
+      type Pt = { x: number; topY: number; botY: number };
+      const bullSegs: Pt[][] = [];
+      const bearSegs: Pt[][] = [];
+      let curBull: Pt[] = [];
+      let curBear: Pt[] = [];
+      let prev: { a: number; b: number; x: number; yA: number; yB: number } | null = null;
+
+      for (let i = 0; i < A.length; i++) {
+        const a = A[i].value;
+        const b = B[i].value;
+        const xRaw  = ts.timeToCoordinate(A[i].time);
+        const yARaw = series.priceToCoordinate(a);
+        const yBRaw = series.priceToCoordinate(b);
+        if (xRaw === null || yARaw === null || yBRaw === null) {
+          if (curBull.length) { bullSegs.push(curBull); curBull = []; }
+          if (curBear.length) { bearSegs.push(curBear); curBear = []; }
+          prev = null;
+          continue;
+        }
+        const x  = xRaw  * hr;
+        const yA = yARaw * vr;
+        const yB = yBRaw * vr;
+        const isBull = a >= b;
+
+        if (prev && (prev.a >= prev.b) !== isBull) {
+          const denom = (a - b) - (prev.a - prev.b);
+          if (denom !== 0) {
+            const t = (prev.b - prev.a) / denom;
+            if (t >= 0 && t <= 1) {
+              const cx = prev.x  + t * (x  - prev.x);
+              const cy = prev.yA + t * (yA - prev.yA);
+              const tip: Pt = { x: cx, topY: cy, botY: cy };
+              if (prev.a >= prev.b) {
+                curBull.push(tip);
+                bullSegs.push(curBull); curBull = [];
+                curBear.push(tip);
+              } else {
+                curBear.push(tip);
+                bearSegs.push(curBear); curBear = [];
+                curBull.push(tip);
+              }
+            }
+          }
+        }
+
+        const topY = a >= b ? yA : yB;
+        const botY = a >= b ? yB : yA;
+        if (isBull) curBull.push({ x, topY, botY });
+        else        curBear.push({ x, topY, botY });
+        prev = { a, b, x, yA, yB };
+      }
+      if (curBull.length) bullSegs.push(curBull);
+      if (curBear.length) bearSegs.push(curBear);
+
+      const paint = (segs: Pt[][], fill: string) => {
+        ctx.fillStyle = fill;
+        for (const seg of segs) {
+          if (seg.length < 1) continue;
+          ctx.beginPath();
+          ctx.moveTo(seg[0].x, seg[0].topY);
+          for (let i = 1; i < seg.length; i++) ctx.lineTo(seg[i].x, seg[i].topY);
+          for (let i = seg.length - 1; i >= 0; i--) ctx.lineTo(seg[i].x, seg[i].botY);
+          ctx.closePath();
+          ctx.fill();
+        }
+      };
+      paint(bullSegs, "rgba(96,165,250,0.22)");
+      paint(bearSegs, "rgba(167,139,250,0.22)");
+    });
+  }
+}
+
+class IchiCloudPrimitive {
+  _chart: any = null;
+  _series: any = null;
+  _spanA: { time: any; value: number }[];
+  _spanB: { time: any; value: number }[];
+  _views: IchiCloudPaneView[] = [];
+  constructor(a: { time: any; value: number }[], b: { time: any; value: number }[]) {
+    this._spanA = a;
+    this._spanB = b;
+  }
+  attached({ chart, series }: any) {
+    this._chart  = chart;
+    this._series = series;
+    this._views  = [new IchiCloudPaneView(this)];
+  }
+  detached() {
+    this._chart  = null;
+    this._series = null;
+    this._views  = [];
+  }
+  updateAllViews() { this._views.forEach(v => v.update()); }
+  paneViews()      { return this._views; }
 }
 
 
@@ -643,6 +786,53 @@ function PriceHistoryChart({ pair, chartTf, setChartTf }: { rows: SheetRow[]; pa
       const lS = mk("rgba(100,181,246,0.85)", LineStyle.Solid);
       uS.setData(toData(upper)); mS.setData(toData(middle)); lS.setData(toData(lower));
       indSeriesRef.current.bb = [fillArea, maskArea, uS, mS, lS];
+
+    } else if (key === "ichi") {
+      const highs = candles.map(r => r.high);
+      const lows  = candles.map(r => r.low);
+      const { tenkan, kijun, spanA, spanB } = computeIchimoku(highs, lows);
+      const OFFSET = 26;
+      const n = candles.length;
+      const candleDur = n > 1
+        ? (Math.floor(new Date(candles[n - 1].timestamp).getTime() / 1000)
+         - Math.floor(new Date(candles[n - 2].timestamp).getTime() / 1000))
+        : 86400;
+
+      const mkLine = (color: string, width: 1 | 2, style: LineStyle) => {
+        const s = chart.addSeries(LineSeries, { color, lineWidth: width, lineStyle: style });
+        s.applyOptions(indOpts);
+        return s;
+      };
+
+      const tenkanS = mkLine("#60a5fa", 1, LineStyle.Solid);
+      const kijunS  = mkLine("#f472b6", 1, LineStyle.Solid);
+      tenkanS.setData(toData(tenkan));
+      kijunS.setData(toData(kijun));
+
+      const spanAData: { time: UTCTimestamp; value: number }[] = [];
+      const spanBData: { time: UTCTimestamp; value: number }[] = [];
+      for (let i = 0; i < n; i++) {
+        if (spanA[i] === null || spanB[i] === null) continue;
+        const t = (i + OFFSET < n
+          ? times[i + OFFSET]
+          : (times[n - 1] + (i + OFFSET - n + 1) * candleDur)) as UTCTimestamp;
+        spanAData.push({ time: t, value: spanA[i]! });
+        spanBData.push({ time: t, value: spanB[i]! });
+      }
+      const spanAS = mkLine("#60a5fa", 1, LineStyle.Dashed);
+      const spanBS = mkLine("#a78bfa", 1, LineStyle.Dashed);
+      spanAS.setData(spanAData);
+      spanBS.setData(spanBData);
+      const cloudPrim = new IchiCloudPrimitive(spanAData, spanBData);
+      (spanAS as any).attachPrimitive(cloudPrim);
+
+      const chikouData: { time: UTCTimestamp; value: number }[] = [];
+      for (let i = OFFSET; i < n; i++)
+        chikouData.push({ time: times[i - OFFSET], value: closes[i] });
+      const chikouS = mkLine("#a78bfa", 1, LineStyle.Dashed);
+      chikouS.setData(chikouData);
+
+      indSeriesRef.current.ichi = [tenkanS, kijunS, spanAS, spanBS, chikouS];
 
     } else {
       const period = ({ ema9: 9, ema20: 20, ema50: 50, ema200: 200 } as Record<string, number>)[key]!;
