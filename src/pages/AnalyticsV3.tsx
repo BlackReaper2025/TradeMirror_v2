@@ -3318,7 +3318,7 @@ function computeMom10(rows: CciRow[], idx: number): number {
 }
 
 interface AvgPriceRow { date: string; high: number; low: number; close: number; }
-interface MsRow { date: string; open: number; high: number; low: number; close: number; }
+interface MsRow { date: string; open: number; high: number; low: number; close: number; atr14: number; }
 interface RegimeRow { date: string; open: number; high: number; low: number; close: number; adx: number; atr14: number; bbUpper: number; bbLower: number; }
 
 function buildAvgPriceAnalysis(rows: AvgPriceRow[]): { headline: string; bullets: string[]; description: string } {
@@ -4457,71 +4457,148 @@ function FailureSwingPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?
 }
 
 // ─── Market Structure ─────────────────────────────────────────────────────────
+//
+// Algorithm mirrors src-tauri/src/scoring/structure.rs. Keep both in sync.
+//
+// Key behaviours:
+//   • ATR displacement filter (0.25×ATR) for HH/HL/LH/LL classification — micro
+//     swings classify as Equal and do not trigger events.
+//   • All fractal swings are kept; no same-type collapsing. Each swing is
+//     classified relative to the prior same-type swing.
+//   • Real-time event detection on the current bar's close vs the highest
+//     unbroken SH / lowest unbroken SL — events fire on the break bar, not N
+//     bars later.
+//   • Six state tiers: Strong Bullish, Bullish, Shifting, Range, Bearish,
+//     Strong Bearish.
+//   • Break confirmation uses CLOSE, not wick.
+
 const MS_WINDOW   = 20;
 const MS_LOOKBACK = 3;
+const MS_DISPLACEMENT_ATR_MULT = 0.25;
 
-type MsSwing = { idx: number; type: "SH" | "SL"; price: number };
-type MsEvent = { idx: number; type: "BOS" | "CHOCH"; direction: "bull" | "bear" };
+type MsRelative = "HH" | "HL" | "LH" | "LL" | "Equal" | "FirstOfKind";
+type MsState    = "Strong Bullish" | "Bullish" | "Shifting" | "Range" | "Bearish" | "Strong Bearish";
+
+type MsSwing = { idx: number; type: "SH" | "SL"; price: number; relative: MsRelative };
+type MsEvent = { idx: number; type: "BOS" | "CHOCH"; direction: "bull" | "bear"; isLive?: boolean };
 
 function computeMarketStructure(rows: MsRow[], N = MS_LOOKBACK): {
-  swings: MsSwing[]; events: MsEvent[]; state: "Bullish" | "Bearish" | "Range";
+  swings: MsSwing[]; events: MsEvent[]; state: MsState;
 } {
   if (rows.length < N * 2 + 1) return { swings: [], events: [], state: "Range" };
-  const swings: MsSwing[] = [];
+
+  // 1. Fractal swing detection (strict).
+  const raw: { idx: number; type: "SH" | "SL"; price: number }[] = [];
   for (let i = N; i < rows.length - N; i++) {
     let sh = true, sl = true;
     for (let k = 1; k <= N; k++) {
       if (rows[i - k].high >= rows[i].high || rows[i + k].high >= rows[i].high) sh = false;
       if (rows[i - k].low  <= rows[i].low  || rows[i + k].low  <= rows[i].low)  sl = false;
     }
-    if (sh) swings.push({ idx: i, type: "SH", price: rows[i].high });
-    if (sl) swings.push({ idx: i, type: "SL", price: rows[i].low  });
+    if (sh) raw.push({ idx: i, type: "SH", price: rows[i].high });
+    if (sl) raw.push({ idx: i, type: "SL", price: rows[i].low  });
   }
-  swings.sort((a, b) => a.idx - b.idx);
+  raw.sort((a, b) => a.idx - b.idx);
 
-  // Enforce alternation: collapse consecutive same-type swings, keeping highest SH / lowest SL
-  const alternating: MsSwing[] = [];
-  for (const s of swings) {
-    const prev = alternating[alternating.length - 1];
-    if (prev && prev.type === s.type) {
-      if (s.type === "SH" && s.price > prev.price) alternating[alternating.length - 1] = s;
-      if (s.type === "SL" && s.price < prev.price) alternating[alternating.length - 1] = s;
+  // 2. Classify each swing relative to the prior same-type swing, with ATR filter.
+  const swings: MsSwing[] = [];
+  for (const s of raw) {
+    const atr = Math.max(rows[s.idx]?.atr14 ?? 0.0005, 0.0001);
+    const minDisp = MS_DISPLACEMENT_ATR_MULT * atr;
+    const prior = [...swings].reverse().find(p => p.type === s.type);
+    let relative: MsRelative;
+    if (!prior) {
+      relative = "FirstOfKind";
+    } else if (s.type === "SH") {
+      if      (s.price > prior.price + minDisp) relative = "HH";
+      else if (s.price < prior.price - minDisp) relative = "LH";
+      else                                       relative = "Equal";
     } else {
-      alternating.push(s);
+      if      (s.price > prior.price + minDisp) relative = "HL";
+      else if (s.price < prior.price - minDisp) relative = "LL";
+      else                                       relative = "Equal";
     }
+    swings.push({ ...s, relative });
   }
 
-  const SHs = alternating.filter(s => s.type === "SH");
-  const SLs = alternating.filter(s => s.type === "SL");
-  let state: "Bullish" | "Bearish" | "Range" = "Range";
-  if (SHs.length >= 2 && SLs.length >= 2) {
-    const hh = SHs[SHs.length - 1].price > SHs[SHs.length - 2].price;
-    const hl = SLs[SLs.length - 1].price > SLs[SLs.length - 2].price;
-    const lh = SHs[SHs.length - 1].price < SHs[SHs.length - 2].price;
-    const ll = SLs[SLs.length - 1].price < SLs[SLs.length - 2].price;
-    if (hh && hl)      state = "Bullish";
-    else if (lh && ll) state = "Bearish";
+  // 3. State determination from the most recent classifications.
+  const highs = swings.filter(s => s.type === "SH");
+  const lows  = swings.filter(s => s.type === "SL");
+  let state: MsState = "Range";
+  if (highs.length >= 1 && lows.length >= 1) {
+    const lastH = highs[highs.length - 1].relative;
+    const lastL = lows [lows.length  - 1].relative;
+    const prevH = highs.length >= 2 ? highs[highs.length - 2].relative : "FirstOfKind";
+    const prevL = lows.length  >= 2 ? lows [lows.length  - 2].relative : "FirstOfKind";
+
+    const isBullPair = (h: MsRelative, l: MsRelative) => h === "HH" && l === "HL";
+    const isBearPair = (h: MsRelative, l: MsRelative) => h === "LH" && l === "LL";
+
+    if (isBullPair(lastH, lastL) && isBullPair(prevH, prevL)) state = "Strong Bullish";
+    else if (isBearPair(lastH, lastL) && isBearPair(prevH, prevL)) state = "Strong Bearish";
+    else if (isBullPair(lastH, lastL)) state = "Bullish";
+    else if (isBearPair(lastH, lastL)) state = "Bearish";
+    else if ((isBullPair(prevH, prevL) || prevL === "HL")
+             && (lastL === "LL" || lastH === "LH")) state = "Shifting";
+    else if ((isBearPair(prevH, prevL) || prevH === "LH")
+             && (lastH === "HH" || lastL === "HL")) state = "Shifting";
   }
+
+  // 4. Historical events from HH (bullish) and LL (bearish) classifications.
   const events: MsEvent[] = [];
   let trend: "bull" | "bear" | null = null;
-  let lastSH: MsSwing | null = null;
-  let lastSL: MsSwing | null = null;
-  for (const s of alternating) {
-    if (s.type === "SH") {
-      if (lastSH !== null && s.price > lastSH.price) {
-        events.push({ idx: s.idx, type: trend === "bear" ? "CHOCH" : "BOS", direction: "bull" });
-        trend = "bull";
-      }
-      lastSH = s;
-    } else {
-      if (lastSL !== null && s.price < lastSL.price) {
-        events.push({ idx: s.idx, type: trend === "bull" ? "CHOCH" : "BOS", direction: "bear" });
-        trend = "bear";
-      }
-      lastSL = s;
+  for (const s of swings) {
+    if (s.relative === "HH") {
+      events.push({ idx: s.idx, type: trend === "bear" ? "CHOCH" : "BOS", direction: "bull" });
+      trend = "bull";
+    } else if (s.relative === "LL") {
+      events.push({ idx: s.idx, type: trend === "bull" ? "CHOCH" : "BOS", direction: "bear" });
+      trend = "bear";
     }
   }
-  return { swings: alternating, events, state };
+
+  // 5. Real-time event detection: check current close vs highest unbroken SH /
+  //    lowest unbroken SL using only the bars PRIOR to the current bar.
+  if (rows.length >= 2) {
+    const cur = rows[rows.length - 1];
+    const priorEnd = rows.length - 1; // exclusive
+
+    const unbrokenSH = swings
+      .filter(s => s.type === "SH" && s.idx < priorEnd)
+      .filter(s => rows.slice(s.idx + 1, priorEnd).every(r => r.close <= s.price));
+    const highestUnbroken = unbrokenSH.length > 0
+      ? unbrokenSH.reduce((a, b) => (a.price >= b.price ? a : b))
+      : null;
+    if (highestUnbroken && cur.close > highestUnbroken.price) {
+      const priorTrend = trend;
+      events.push({
+        idx: rows.length - 1,
+        type: priorTrend === "bear" ? "CHOCH" : "BOS",
+        direction: "bull",
+        isLive: true,
+      });
+      trend = "bull";
+    } else {
+      const unbrokenSL = swings
+        .filter(s => s.type === "SL" && s.idx < priorEnd)
+        .filter(s => rows.slice(s.idx + 1, priorEnd).every(r => r.close >= s.price));
+      const lowestUnbroken = unbrokenSL.length > 0
+        ? unbrokenSL.reduce((a, b) => (a.price <= b.price ? a : b))
+        : null;
+      if (lowestUnbroken && cur.close < lowestUnbroken.price) {
+        const priorTrend = trend;
+        events.push({
+          idx: rows.length - 1,
+          type: priorTrend === "bull" ? "CHOCH" : "BOS",
+          direction: "bear",
+          isLive: true,
+        });
+        trend = "bear";
+      }
+    }
+  }
+
+  return { swings, events, state };
 }
 
 function buildMarketStructureAnalysis(rows: MsRow[]): { bullets: string[]; description: string } {
@@ -4529,21 +4606,30 @@ function buildMarketStructureAnalysis(rows: MsRow[]): { bullets: string[]; descr
   const SHs      = swings.filter(s => s.type === "SH");
   const SLs      = swings.filter(s => s.type === "SL");
   const lastEv   = events[events.length - 1];
-  const hhhl     = SHs.length >= 2 && SLs.length >= 2
-    ? `HH: ${SHs[SHs.length-1].price > SHs[SHs.length-2].price ? "Yes" : "No"} · HL: ${SLs[SLs.length-1].price > SLs[SLs.length-2].price ? "Yes" : "No"}`
-    : "Insufficient swing data";
+
+  const lastH = SHs.length > 0 ? SHs[SHs.length - 1].relative : "—";
+  const lastL = SLs.length > 0 ? SLs[SLs.length - 1].relative : "—";
+  const liveTag = lastEv?.isLive ? " [live break on current bar]" : "";
   const bullets = [
     `State: ${state}`,
     `Swing Highs: ${SHs.length}  ·  Swing Lows: ${SLs.length}`,
-    hhhl,
-    lastEv ? `Last signal: ${lastEv.type} ${lastEv.direction === "bull" ? "↑ Bullish" : "↓ Bearish"}` : "No BOS / CHOCH detected",
+    `Latest SH: ${lastH}  ·  Latest SL: ${lastL}`,
+    lastEv
+      ? `Last signal: ${lastEv.type} ${lastEv.direction === "bull" ? "↑ Bullish" : "↓ Bearish"}${liveTag}`
+      : "No BOS / CHOCH detected",
   ];
   const description =
-    state === "Bullish"
-      ? "Price is forming higher highs and higher lows — classic bullish market structure. Smart money is accumulating at each pullback into support. Look for BOS signals to confirm continuation."
+    state === "Strong Bullish"
+      ? "Two consecutive HH+HL pairs — strong bullish structure. The path of least resistance is up; pullbacks to recent HLs are high-edge buy zones until structure shifts."
+      : state === "Bullish"
+      ? "Latest swing pair is HH+HL — bullish structure confirmed. Watch for a BOS above the most recent SH to confirm continuation, or a CHOCH below the most recent SL as the first reversal warning."
+      : state === "Shifting"
+      ? "The most recent swing contradicts the prior trend pair — earliest structural warning of a reversal. Reduce conviction in the prior direction until a fresh structural break confirms the new bias."
       : state === "Bearish"
-      ? "Price is forming lower highs and lower lows — classic bearish market structure. Distribution is occurring at each rally into resistance. BOS to the downside confirms continuation."
-      : "No consistent pattern of higher highs/lows or lower highs/lows. Market is in a ranging structure — avoid momentum bias and wait for a structural break before committing to a direction.";
+      ? "Latest swing pair is LH+LL — bearish structure confirmed. Distribution is dominating at each rally; a BOS to the downside continues the move, a CHOCH above the most recent SH flags reversal."
+      : state === "Strong Bearish"
+      ? "Two consecutive LH+LL pairs — strong bearish structure. The path of least resistance is down; rallies into recent LHs are high-edge sell zones until structure shifts."
+      : "No consistent HH/HL or LH/LL pattern in the recent swing sequence. Range conditions — avoid directional bias until a structural break establishes a new trend.";
   return { bullets, description };
 }
 
@@ -4556,7 +4642,7 @@ function MarketStructurePanelBody({ pair, indicatorTf, expanded }: { pair: strin
     setLiveRows([]);
     invoke<RawCandleV3[]>("get_live_candles_computed", { pair, tf: indicatorTf })
       .then(candles => setLiveRows(candles.map(c => ({
-        date: c.date, open: c.open, high: c.high, low: c.low, close: c.close,
+        date: c.date, open: c.open, high: c.high, low: c.low, close: c.close, atr14: c.atr14,
       }))))
       .catch(() => {})
       .finally(() => setLoading(false));
@@ -4621,7 +4707,10 @@ function MarketStructurePanelBody({ pair, indicatorTf, expanded }: { pair: strin
   }, [data]);
 
   const { state } = structure;
-  const stateColor = state === "Bullish" ? "#60a5fa" : state === "Bearish" ? "#a78bfa" : "#94a3b8";
+  const stateColor =
+    state === "Bullish" || state === "Strong Bullish" ? "#60a5fa" :
+    state === "Bearish" || state === "Strong Bearish" ? "#a78bfa" :
+    "#94a3b8";
   const analysis   = useMemo(() => expanded ? buildMarketStructureAnalysis(rows) : null, [rows, expanded]);
 
   const lastBos = useMemo(() => {
@@ -8345,7 +8434,10 @@ export function AnalyticsV3() {
   const msStructure = useMemo(() => computeMarketStructure(iRows), [iRows]);
   const msState     = msStructure.state;
   const msHeadline  = msState;
-  const msBias      = msState === "Bullish" ? "bullish" : msState === "Bearish" ? "bearish" : "neutral";
+  const msBias      =
+    msState === "Bullish" || msState === "Strong Bullish" ? "bullish" :
+    msState === "Bearish" || msState === "Strong Bearish" ? "bearish" :
+    "neutral";
   const makeMsBadge = (large?: boolean) => (
     <span
       className={`${large ? "text-[11px]" : "text-[8px]"} font-black uppercase rounded-full`}
