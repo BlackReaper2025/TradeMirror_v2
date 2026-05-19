@@ -134,19 +134,22 @@ function positioning(current: SheetRow, direction: Direction): {
   entry: number; stopLoss: number; tp1: number; tp2: number; tp3: number; riskReward: number;
 } {
   const entry    = current.close;
-  const atr      = current.atr14 > 0 ? current.atr14 : 0.0050;
+  // SheetRow.atr14 is stored in PIPS (mapToSheetRow multiplies by 10000 for display);
+  // convert to PRICE units before offsetting entry.
+  const atrPips  = current.atr14 > 0 ? current.atr14 : 50;
+  const atrPrice = atrPips / 10000;
   const isLong   = direction !== 'SHORT';
 
   const stopLoss = isLong
-    ? parseFloat((entry - 1.5 * atr).toFixed(5))
-    : parseFloat((entry + 1.5 * atr).toFixed(5));
+    ? parseFloat((entry - 1.5 * atrPrice).toFixed(5))
+    : parseFloat((entry + 1.5 * atrPrice).toFixed(5));
 
-  const r1 = current.r1 || entry + atr;
-  const r2 = current.r2 || entry + 2 * atr;
-  const r3 = current.r3 || entry + 3 * atr;
-  const s1 = current.s1 || entry - atr;
-  const s2 = current.s2 || entry - 2 * atr;
-  const s3 = current.s3 || entry - 3 * atr;
+  const r1 = current.r1 || entry + atrPrice;
+  const r2 = current.r2 || entry + 2 * atrPrice;
+  const r3 = current.r3 || entry + 3 * atrPrice;
+  const s1 = current.s1 || entry - atrPrice;
+  const s2 = current.s2 || entry - 2 * atrPrice;
+  const s3 = current.s3 || entry - 3 * atrPrice;
 
   const tp1 = isLong ? r1 : s1;
   const tp2 = isLong ? r2 : s2;
