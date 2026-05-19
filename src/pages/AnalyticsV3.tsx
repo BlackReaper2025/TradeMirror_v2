@@ -8947,10 +8947,13 @@ export function AnalyticsV3() {
         {/* ── Divider ── */}
         <div style={{ height: 1, background: "var(--border-medium)", flexShrink: 0 }} />
 
-        {/* ── Scrollable bottom rows — category container panels ── */}
-        <div className="flex-1 min-h-0" style={{ overflowY: "auto", paddingTop: "10px", paddingRight: "10px" }}>
+        {/* ── Scrollable bottom rows — category container panels ──
+            paddingTop intentionally 0 so the sticky Indicator Timeframe row
+            can rest flush with the container top edge; the first child
+            below carries the 10px of initial spacing instead. */}
+        <div className="flex-1 min-h-0" style={{ overflowY: "auto", paddingTop: "0", paddingRight: "10px" }}>
           {sheetRows.length > 0 && (
-            <div style={{ display: "flex", alignItems: "flex-start" }}>
+            <div style={{ display: "flex", alignItems: "flex-start", marginTop: 10 }}>
               <PriceHistoryChart rows={sheetRows} pair={selectedPair} chartTf={chartTf} setChartTf={setChartTf} />
               <div style={{ flex: 1, paddingLeft: 24, marginTop: 4, position: "relative" }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 32 }}>
@@ -9017,7 +9020,7 @@ export function AnalyticsV3() {
             display: "flex", alignItems: "center", gap: 10,
             position: "sticky", top: 0, zIndex: 20,
             background: "var(--bg-base)",
-            paddingTop: 6, paddingBottom: 10, marginBottom: 6,
+            paddingTop: 10, paddingBottom: 10, marginBottom: 6,
             borderBottom: "1px solid var(--border-subtle)",
           }}>
             <span style={{ fontSize: 9, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.1em", color: "var(--text-muted)", whiteSpace: "nowrap" }}>Indicator Timeframe</span>
