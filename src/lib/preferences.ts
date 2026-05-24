@@ -99,7 +99,7 @@ export function setQuotesIdx(idx: number): void {
 
 export function getAnalyticsPanelOrder(defaultOrder: string[]): string[] {
   try {
-    const raw = localStorage.getItem("tm_analytics_panel_order_v9");
+    const raw = localStorage.getItem("tm_analytics_panel_order_v10");
     if (!raw) return [...defaultOrder];
     const saved = JSON.parse(raw) as unknown;
     const ids = saved as unknown[];
@@ -117,5 +117,5 @@ export function getAnalyticsPanelOrder(defaultOrder: string[]): string[] {
   }
 }
 export function setAnalyticsPanelOrder(order: string[]): void {
-  localStorage.setItem("tm_analytics_panel_order_v9", JSON.stringify(order));
+  localStorage.setItem("tm_analytics_panel_order_v10", JSON.stringify(order));
 }

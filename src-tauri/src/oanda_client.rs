@@ -101,10 +101,37 @@ pub fn fetch_raw_candles_tf(
     granularity: &str,
     count:       u32,
 ) -> Result<Vec<RawCandle>, String> {
-    let url = format!(
+    fetch_tf_inner(api_key, instrument, granularity, count, None)
+}
+
+/// Same as `fetch_raw_candles_tf` but returns `count` candles ending at `to_iso`
+/// (RFC3339 UTC). Used for historical backfill (as-of synthesis) and resolving
+/// expired snapshots whose intraday window is no longer in the latest candles.
+pub fn fetch_raw_candles_tf_to(
+    api_key:     &str,
+    instrument:  &str,
+    granularity: &str,
+    count:       u32,
+    to_iso:      &str,
+) -> Result<Vec<RawCandle>, String> {
+    fetch_tf_inner(api_key, instrument, granularity, count, Some(to_iso))
+}
+
+fn fetch_tf_inner(
+    api_key:     &str,
+    instrument:  &str,
+    granularity: &str,
+    count:       u32,
+    to:          Option<&str>,
+) -> Result<Vec<RawCandle>, String> {
+    let mut url = format!(
         "{}/instruments/{}/candles?granularity={}&count={}&price=M",
         BASE_URL, instrument, granularity, count,
     );
+    if let Some(to_iso) = to {
+        // Percent-encode the colons in the RFC3339 timestamp for the query string.
+        url.push_str(&format!("&to={}", to_iso.replace(':', "%3A")));
+    }
 
     let response = reqwest::blocking::Client::new()
         .get(&url)

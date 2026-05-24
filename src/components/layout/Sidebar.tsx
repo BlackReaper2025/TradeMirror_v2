@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import {
   LayoutDashboard, ScrollText, CalendarDays, BarChart2,
-  Calculator, Settings,
+  Calculator, Settings, Crosshair,
   PanelLeftClose, PanelLeftOpen, ExternalLink, Music,
 } from "lucide-react";
 import { PieChart, Pie, Cell, ResponsiveContainer, Sector } from "recharts";
@@ -16,12 +16,13 @@ import { openUrl as openExternal } from "@tauri-apps/plugin-opener";
 
 export type Page =
   | "dashboard" | "trade-log" | "calendar" | "analytics-v3"
-  | "risk-calculator" | "settings";
+  | "ai-positioning" | "risk-calculator" | "settings";
 
 const NAV_ITEMS: { id: Page; label: string; icon: React.ElementType }[] = [
-  { id: "dashboard",       label: "Dashboard",   icon: LayoutDashboard },
-  { id: "trade-log",       label: "Trade Log",   icon: ScrollText      },
-  { id: "analytics-v3",   label: "Analytics V3", icon: BarChart2      },
+  { id: "dashboard",       label: "Dashboard",     icon: LayoutDashboard },
+  { id: "trade-log",       label: "Trade Log",     icon: ScrollText      },
+  { id: "analytics-v3",    label: "Analytics V3",  icon: BarChart2       },
+  { id: "ai-positioning",  label: "AI Positioning", icon: Crosshair      },
 ];
 
 interface SidebarProps {

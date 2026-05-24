@@ -29,8 +29,8 @@ export function AppShell({ children }: AppShellProps) {
         className="flex-1 overflow-hidden flex flex-col min-w-0"
         style={{ position: "relative", zIndex: 1 }}
       >
-        {activePage !== "analytics-v3" && activePage !== "trade-log" && <RadialGlowBackground />}
-        {(["dashboard", "trade-log", "calendar", "analytics-v3", "risk-calculator", "settings"] as Page[]).map(p => (
+        {activePage !== "analytics-v3" && activePage !== "trade-log" && activePage !== "ai-positioning" && <RadialGlowBackground />}
+        {(["dashboard", "trade-log", "calendar", "analytics-v3", "ai-positioning", "risk-calculator", "settings"] as Page[]).map(p => (
           <div key={p} style={{ display: p === activePage ? "contents" : "none" }}>
             {children(p)}
           </div>

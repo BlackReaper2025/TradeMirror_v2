@@ -209,6 +209,14 @@ const PANELS: { id: string; area: string; span?: number; label: string; sub: str
   { id: "candle-context",  area: "cctx",  label: "CANDLE\nCONTEXT",            sub: "Last 5 candles · Pattern recognition" },
   { id: "market-structure", area: "mstr", label: "MARKET\nSTRUCTURE",           sub: "" },
   { id: "regime",          area: "rgme",  label: "REGIME\nDETECTION",           sub: "Trending · Ranging · Compression" },
+  { id: "macd-stack",      area: "mstk",  label: "MACD STACK",                  sub: "Multi-timeframe MACD vs signal direction" },
+  { id: "ema-stack",       area: "estk",  label: "EMA 9/20 STACK",              sub: "EMA9 vs EMA20 direction · price trend vs consolidation" },
+  { id: "ema-stack-200",   area: "estk2", label: "EMA 50/200 STACK",            sub: "EMA50 vs EMA200 direction · price trend vs consolidation" },
+  { id: "adx-stack",       area: "astk",  label: "ADX STACK",                   sub: "+DI vs −DI direction · ADX trend strength" },
+  { id: "rsi-stack",       area: "rstk",  label: "RSI STACK",                   sub: "RSI-14 momentum direction · trending vs consolidating" },
+  { id: "squeeze-stack",   area: "sqstk", label: "SQUEEZE STACK",               sub: "Squeeze break direction · in-squeeze vs released" },
+  { id: "cci-stack",       area: "cstk",  label: "CCI STACK",                   sub: "CCI direction · trending vs ranging" },
+  { id: "ms-stack",        area: "msstk", label: "STRUCTURE STACK",             sub: "Swing-structure bias (HH/HL vs LH/LL) · trending vs range" },
 ];
 
 
@@ -220,6 +228,8 @@ const PINNED_SLOT_COUNT = 2;
 const SLOT_AREAS = [
   // ── Pinned ────────────────────────────────────────────────────────────────
   "ais", "aic",
+  // ── Strategies ────────────────────────────────────────────────────────────
+  "msstk", "estk2", "estk", "astk", "mstk", "rstk", "sqstk", "cstk",
   // ── Price Structure ───────────────────────────────────────────────────────
   "price", "avgp", "pvt",
   // ── Regime & Structure ────────────────────────────────────────────────────
@@ -235,6 +245,7 @@ const SLOT_AREAS = [
 ] as const;
 
 const CATEGORIES: { label: string; count: number; visibleCols?: number }[] = [
+  { label: "Strategies",             count: 8, visibleCols: 4 },
   { label: "Price Structure",        count: 3, visibleCols: 2 },
   { label: "Regime & Structure",     count: 2 },
   { label: "Context & Patterns",     count: 4 },
@@ -288,7 +299,7 @@ function HoverTooltip({ tip, children }: { tip: string; children: React.ReactNod
   );
 }
 
-const NO_SUB_IDS = new Set(["ai-synthesis", "price", "macd", "rsi9", "rsi14", "moving-averages", "keltner", "adx", "ichimoku", "session", "volume", "pivots", "cci", "wr", "volatility", "avg-price", "roc", "atr", "squeeze", "candle-context", "ai-chat", "regime"]);
+const NO_SUB_IDS = new Set(["ai-synthesis", "price", "macd", "rsi9", "rsi14", "moving-averages", "keltner", "adx", "ichimoku", "session", "volume", "pivots", "cci", "wr", "volatility", "avg-price", "roc", "atr", "squeeze", "candle-context", "ai-chat", "regime", "macd-stack", "ema-stack", "ema-stack-200", "adx-stack", "rsi-stack", "squeeze-stack", "cci-stack", "ms-stack"]);
 
 function PanelModal({ panel, onClose, badge, subtitle, subtitle2, headerActions, children }: { panel: PanelMeta; onClose: () => void; badge?: React.ReactNode; subtitle?: string; subtitle2?: string; headerActions?: React.ReactNode; children?: React.ReactNode }) {
   useEffect(() => {
@@ -7507,6 +7518,337 @@ function CandleContextPanelBody({ pair, indicatorTf, expanded }: { pair: string;
   );
 }
 
+const STACK_TFS = ["1W", "1D", "4H", "1H", "15M", "5M", "1M"] as const;
+
+// Deduplicated, briefly cached candle fetch shared by every strategy stack panel.
+// Each stack panel needs all 7 timeframes; without sharing, N panels fire N×7
+// concurrent backend (OANDA) calls on mount — enough to stall app boot on reload.
+// Collapsing identical (pair, tf) requests into one in-flight call keeps it to a
+// single fetch per timeframe — the "one candle source" rule.
+const stackCandleCache = new Map<string, { ts: number; promise: Promise<RawCandleV3[]> }>();
+const STACK_CANDLE_TTL_MS = 30_000;
+
+function getStackCandles(pair: string, tf: string): Promise<RawCandleV3[]> {
+  const key = `${pair}:${tf}`;
+  const hit = stackCandleCache.get(key);
+  if (hit && Date.now() - hit.ts < STACK_CANDLE_TTL_MS) return hit.promise;
+  const promise = invoke<RawCandleV3[]>("get_live_candles_computed", { pair, tf });
+  stackCandleCache.set(key, { ts: Date.now(), promise });
+  // Drop failed fetches so the next cycle can retry instead of caching the rejection.
+  promise.catch(() => {
+    const cur = stackCandleCache.get(key);
+    if (cur && cur.promise === promise) stackCandleCache.delete(key);
+  });
+  return promise;
+}
+
+// Shared status light for the strategy stack panels: a solid dot that pulses in
+// the given color when active, or sits static-grey when inactive.
+function StackLight({ color, pulsing, expanded }: { color: string; pulsing: boolean; expanded?: boolean }) {
+  const outer = expanded ? 11 : 9;
+  const inner = expanded ? 8 : 7;
+  return (
+    <span className="relative inline-flex items-center justify-center" style={{ width: outer, height: outer, flexShrink: 0 }}>
+      {pulsing && <span className="animate-ping absolute inline-flex rounded-full" style={{ width: outer, height: outer, background: color, opacity: 0.5 }} />}
+      <span className="relative inline-flex rounded-full" style={{ width: inner, height: inner, background: color }} />
+    </span>
+  );
+}
+
+// Legend explaining how to read a stack panel's lights and colors (expanded view only).
+function StackLegend({ bullRule, bearRule, trendRule, consolRule }: { bullRule: string; bearRule: string; trendRule: string; consolRule: string }) {
+  return (
+    <div style={{ flexShrink: 0, marginTop: 8, paddingTop: 10, borderTop: "1px solid var(--border-subtle)" }}>
+      <span style={{ display: "block", fontSize: 9, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.12em", color: "var(--text-muted)", marginBottom: 8 }}>How to read</span>
+      <div style={{ display: "grid", gridTemplateColumns: "auto 1fr", columnGap: 12, rowGap: 6, fontSize: 11, lineHeight: 1.4, alignItems: "baseline" }}>
+        <span style={{ color: "#60a5fa", fontWeight: 700, whiteSpace: "nowrap" }}>Bullish</span>
+        <span style={{ color: "var(--text-secondary)" }}>{bullRule}</span>
+        <span style={{ color: "#a78bfa", fontWeight: 700, whiteSpace: "nowrap" }}>Bearish</span>
+        <span style={{ color: "var(--text-secondary)" }}>{bearRule}</span>
+        <span style={{ color: "var(--text-primary)", fontWeight: 700, whiteSpace: "nowrap" }}>Trending</span>
+        <span style={{ color: "var(--text-secondary)" }}>{trendRule} <span style={{ color: "var(--text-muted)" }}>· pulsing light</span></span>
+        <span style={{ color: "var(--text-muted)", fontWeight: 700, whiteSpace: "nowrap" }}>Consolidating</span>
+        <span style={{ color: "var(--text-secondary)" }}>{consolRule} <span style={{ color: "var(--text-muted)" }}>· grey light</span></span>
+      </div>
+    </div>
+  );
+}
+
+// Direction + trend/consolidation state for one timeframe in a strategy stack panel.
+type StackTfState = { dir: "bullish" | "bearish" | "neutral"; cond: "trending" | "consolidating" };
+
+// Shared body for every strategy stack panel: a header tally, a per-timeframe light/label
+// row over STACK_TFS, and the expanded legend. Panels differ only in the header label, the
+// per-candle compute, and the four legend rules — all passed as props. Consumes the shared
+// indicator engine (get_live_candles_computed) via getStackCandles; no UI-side math.
+function StackPanelBody({ pair, expanded, headerLabel, compute, bullRule, bearRule, trendRule, consolRule, labelMinWidth }: {
+  pair: string;
+  expanded?: boolean;
+  headerLabel: string;
+  compute: (last: RawCandleV3) => StackTfState;
+  bullRule: string;
+  bearRule: string;
+  trendRule: string;
+  consolRule: string;
+  labelMinWidth?: boolean;
+}) {
+  const [states, setStates] = useState<Record<string, StackTfState>>({});
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    const load = async () => {
+      const next: Record<string, StackTfState> = {};
+      await Promise.all(STACK_TFS.map(async tf => {
+        try {
+          const candles = await getStackCandles(pair, tf);
+          const last = candles[candles.length - 1];
+          if (!last) return;
+          next[tf] = compute(last);
+        } catch { /* leave timeframe unset on fetch error */ }
+      }));
+      if (!cancelled) { setStates(next); setLoading(false); }
+    };
+    load();
+    const id = setInterval(load, 60_000);
+    return () => { cancelled = true; clearInterval(id); };
+  }, [pair, compute]);
+
+  const bulls = STACK_TFS.filter(tf => states[tf]?.dir === "bullish").length;
+  const bears = STACK_TFS.filter(tf => states[tf]?.dir === "bearish").length;
+
+  return (
+    <div className="flex flex-col h-full" style={{
+      padding: expanded ? 16 : 6, gap: expanded ? 8 : 4, minHeight: 0,
+      width: "100%", maxWidth: expanded ? 560 : undefined, marginLeft: expanded ? "auto" : undefined, marginRight: expanded ? "auto" : undefined,
+    }}>
+      <div style={{
+        display: "flex", alignItems: "center", justifyContent: "center", gap: 12, flexShrink: 0,
+        fontSize: expanded ? 12 : 9, fontWeight: 700,
+        paddingBottom: expanded ? 6 : 2, borderBottom: "1px solid var(--border-subtle)",
+      }}>
+        <span style={{ color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.08em" }}>{headerLabel}</span>
+        <span style={{ color: "#60a5fa" }}>● {bulls}</span>
+        <span style={{ color: "#a78bfa" }}>● {bears}</span>
+      </div>
+      <div style={{ display: "flex", flexDirection: "column", flex: 1, gap: expanded ? 6 : 2, minHeight: 0 }}>
+        {STACK_TFS.map(tf => {
+          const st       = states[tf];
+          const dir      = st?.dir;
+          const trending = st?.cond === "trending";
+          const isBull   = dir === "bullish";
+          const isBear   = dir === "bearish";
+          const dirColor = isBull ? "#60a5fa" : isBear ? "#a78bfa" : "var(--text-muted)";
+          const onColor  = trending ? dirColor : "var(--text-muted)";
+          const bg       = "rgba(255,255,255,0.04)";
+          const border   = "var(--border-subtle)";
+          const condWord = trending ? "Trending" : "Consolidating";
+          const label    = !dir ? (loading ? "…" : "—") : condWord;
+          return (
+            <div key={tf} style={{
+              flex: 1, minHeight: 0, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 4,
+              padding: expanded ? "0 14px" : "0 6px", borderRadius: 8, background: bg, border: `1px solid ${border}`,
+            }}>
+              <span style={{ fontSize: expanded ? 14 : 11, fontWeight: 800, letterSpacing: "0.06em", color: "var(--text-secondary)", flexShrink: 0 }}>{tf}</span>
+              <span style={{ display: "flex", alignItems: "center", gap: 5, flexShrink: 0 }}>
+                <StackLight color={onColor} pulsing={trending} expanded={expanded} />
+                <span style={{ fontSize: expanded ? 12 : 9, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.04em", color: onColor, ...(labelMinWidth ? { minWidth: expanded ? 54 : 44 } : null), textAlign: "right" }}>
+                  {label}
+                </span>
+              </span>
+            </div>
+          );
+        })}
+      </div>
+      {expanded && (
+        <StackLegend bullRule={bullRule} bearRule={bearRule} trendRule={trendRule} consolRule={consolRule} />
+      )}
+    </div>
+  );
+}
+
+// MACD Stack — live MACD-vs-signal direction across every timeframe.
+const macdStackCompute = (last: RawCandleV3): StackTfState => {
+  const dir: StackTfState["dir"] = last.macd > last.macd_signal ? "bullish" : last.macd < last.macd_signal ? "bearish" : "neutral";
+  // Trending when MACD and its signal line sit on the same side of the zero line.
+  const trending = (last.macd > 0 && last.macd_signal > 0) || (last.macd < 0 && last.macd_signal < 0);
+  return { dir, cond: trending ? "trending" : "consolidating" };
+};
+function MacdStackPanelBody({ pair, expanded }: { pair: string; expanded?: boolean }) {
+  return <StackPanelBody pair={pair} expanded={expanded} headerLabel="vs Signal" compute={macdStackCompute}
+    bullRule="MACD line above its signal line" bearRule="MACD line below its signal line"
+    trendRule="MACD and signal on the same side of zero" consolRule="MACD and signal straddle the zero line" labelMinWidth />;
+}
+
+// EMA 9/20 Stack — live EMA9-vs-EMA20 direction plus price-vs-EMA trend/consolidation, per timeframe.
+const emaStackCompute = (last: RawCandleV3): StackTfState => {
+  const dir: StackTfState["dir"] = last.ema9 > last.ema20 ? "bullish" : last.ema9 < last.ema20 ? "bearish" : "neutral";
+  // Trending when price sits clearly on one side of BOTH EMAs; consolidating when price is between them.
+  const trending = (last.close > last.ema9 && last.close > last.ema20) || (last.close < last.ema9 && last.close < last.ema20);
+  return { dir, cond: trending ? "trending" : "consolidating" };
+};
+function EmaStackPanelBody({ pair, expanded }: { pair: string; expanded?: boolean }) {
+  return <StackPanelBody pair={pair} expanded={expanded} headerLabel="9 vs 20" compute={emaStackCompute}
+    bullRule="EMA9 above EMA20" bearRule="EMA9 below EMA20"
+    trendRule="price above or below both EMAs" consolRule="price between the two EMAs" />;
+}
+
+// EMA 50/200 Stack — live EMA50-vs-EMA200 direction plus price-vs-EMA trend/consolidation, per timeframe.
+const ema200StackCompute = (last: RawCandleV3): StackTfState => {
+  const dir: StackTfState["dir"] = last.ema50 > last.ema200 ? "bullish" : last.ema50 < last.ema200 ? "bearish" : "neutral";
+  // Trending when price sits clearly on one side of BOTH EMAs; consolidating when price is between them.
+  const trending = (last.close > last.ema50 && last.close > last.ema200) || (last.close < last.ema50 && last.close < last.ema200);
+  return { dir, cond: trending ? "trending" : "consolidating" };
+};
+function Ema200StackPanelBody({ pair, expanded }: { pair: string; expanded?: boolean }) {
+  return <StackPanelBody pair={pair} expanded={expanded} headerLabel="50 vs 200" compute={ema200StackCompute}
+    bullRule="EMA50 above EMA200" bearRule="EMA50 below EMA200"
+    trendRule="price above or below both EMAs" consolRule="price between the two EMAs" />;
+}
+
+// ADX Stack — live +DI/−DI direction plus ADX trend-strength state, per timeframe.
+const adxStackCompute = (last: RawCandleV3): StackTfState => {
+  const dir: StackTfState["dir"] = last.di_plus > last.di_minus ? "bullish" : last.di_plus < last.di_minus ? "bearish" : "neutral";
+  // Trending when ADX confirms trend strength (>= 25); consolidating below that.
+  const trending = last.adx >= 25;
+  return { dir, cond: trending ? "trending" : "consolidating" };
+};
+function AdxStackPanelBody({ pair, expanded }: { pair: string; expanded?: boolean }) {
+  return <StackPanelBody pair={pair} expanded={expanded} headerLabel="DI / ADX" compute={adxStackCompute}
+    bullRule="+DI above −DI" bearRule="−DI above +DI"
+    trendRule="ADX at or above 25" consolRule="ADX below 25" />;
+}
+
+// RSI Stack — live RSI-14 momentum direction plus trending/consolidating state, per timeframe.
+const rsiStackCompute = (last: RawCandleV3): StackTfState => {
+  const dir: StackTfState["dir"] = last.rsi14 > 50 ? "bullish" : last.rsi14 < 50 ? "bearish" : "neutral";
+  // Trending when RSI holds a momentum band (>= 60 or <= 40); consolidating when it hugs the midline.
+  const trending = last.rsi14 >= 60 || last.rsi14 <= 40;
+  return { dir, cond: trending ? "trending" : "consolidating" };
+};
+function RsiStackPanelBody({ pair, expanded }: { pair: string; expanded?: boolean }) {
+  return <StackPanelBody pair={pair} expanded={expanded} headerLabel="RSI 14" compute={rsiStackCompute}
+    bullRule="RSI above 50" bearRule="RSI below 50"
+    trendRule="RSI at or beyond 60 / 40" consolRule="RSI between 40 and 60" />;
+}
+
+// Squeeze Stack — live volatility squeeze state (Bollinger inside Keltner) plus break direction, per timeframe.
+const squeezeStackCompute = (last: RawCandleV3): StackTfState => {
+  const dir: StackTfState["dir"] = last.close > last.bb_middle ? "bullish" : last.close < last.bb_middle ? "bearish" : "neutral";
+  // Squeeze ON (Bollinger inside Keltner) = consolidating; bands released outside KC = trending.
+  const squeezeOn = last.bb_upper <= last.keltner_upper && last.bb_lower >= last.keltner_lower;
+  return { dir, cond: squeezeOn ? "consolidating" : "trending" };
+};
+function SqueezeStackPanelBody({ pair, expanded }: { pair: string; expanded?: boolean }) {
+  return <StackPanelBody pair={pair} expanded={expanded} headerLabel="Squeeze" compute={squeezeStackCompute}
+    bullRule="price above Bollinger basis" bearRule="price below Bollinger basis"
+    trendRule="Bollinger bands outside Keltner (released)" consolRule="Bollinger bands inside Keltner (in squeeze)" />;
+}
+
+// CCI Stack — live CCI direction plus trending/ranging state, per timeframe.
+const cciStackCompute = (last: RawCandleV3): StackTfState => {
+  const dir: StackTfState["dir"] = last.cci > 0 ? "bullish" : last.cci < 0 ? "bearish" : "neutral";
+  // Trending when CCI is beyond ±100 (classic strong-trend reading); ranging within the band.
+  const trending = Math.abs(last.cci) > 100;
+  return { dir, cond: trending ? "trending" : "consolidating" };
+};
+function CciStackPanelBody({ pair, expanded }: { pair: string; expanded?: boolean }) {
+  return <StackPanelBody pair={pair} expanded={expanded} headerLabel="CCI" compute={cciStackCompute}
+    bullRule="CCI above 0" bearRule="CCI below 0"
+    trendRule="CCI beyond ±100" consolRule="CCI within ±100" />;
+}
+
+// Market Structure Stack — multi-timeframe swing-structure bias via the shared
+// computeMarketStructure engine: HH/HL = bullish, LH/LL = bearish, Range/Shifting = consolidating.
+// Reuses the deduped getStackCandles fetch and the shared structure engine; no UI-side math.
+function MarketStructureStackPanelBody({ pair, expanded }: { pair: string; expanded?: boolean }) {
+  type TfState = { dir: "bullish" | "bearish" | "neutral"; cond: "trending" | "consolidating" };
+  const [states, setStates] = useState<Record<string, TfState>>({});
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    const load = async () => {
+      const next: Record<string, TfState> = {};
+      await Promise.all(STACK_TFS.map(async tf => {
+        try {
+          const candles = await getStackCandles(pair, tf);
+          if (candles.length === 0) return;
+          const rows: MsRow[] = candles.map(c => ({ date: c.date, open: c.open, high: c.high, low: c.low, close: c.close, atr14: c.atr14 }));
+          const { state } = computeMarketStructure(rows);
+          if (state === "Strong Bullish" || state === "Bullish")      next[tf] = { dir: "bullish", cond: "trending" };
+          else if (state === "Strong Bearish" || state === "Bearish") next[tf] = { dir: "bearish", cond: "trending" };
+          else                                                        next[tf] = { dir: "neutral", cond: "consolidating" }; // Range / Shifting
+        } catch { /* leave timeframe unset on fetch error */ }
+      }));
+      if (!cancelled) { setStates(next); setLoading(false); }
+    };
+    load();
+    const id = setInterval(load, 60_000);
+    return () => { cancelled = true; clearInterval(id); };
+  }, [pair]);
+
+  const bulls = STACK_TFS.filter(tf => states[tf]?.dir === "bullish").length;
+  const bears = STACK_TFS.filter(tf => states[tf]?.dir === "bearish").length;
+
+  return (
+    <div className="flex flex-col h-full" style={{
+      padding: expanded ? 16 : 6, gap: expanded ? 8 : 4, minHeight: 0,
+      width: "100%", maxWidth: expanded ? 560 : undefined, marginLeft: expanded ? "auto" : undefined, marginRight: expanded ? "auto" : undefined,
+    }}>
+      <div style={{
+        display: "flex", alignItems: "center", justifyContent: "center", gap: 12, flexShrink: 0,
+        fontSize: expanded ? 12 : 9, fontWeight: 700,
+        paddingBottom: expanded ? 6 : 2, borderBottom: "1px solid var(--border-subtle)",
+      }}>
+        <span style={{ color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.08em" }}>Structure</span>
+        <span style={{ color: "#60a5fa" }}>● {bulls}</span>
+        <span style={{ color: "#a78bfa" }}>● {bears}</span>
+      </div>
+      <div style={{ display: "flex", flexDirection: "column", flex: 1, gap: expanded ? 6 : 2, minHeight: 0 }}>
+        {STACK_TFS.map(tf => {
+          const st       = states[tf];
+          const dir      = st?.dir;
+          const cond     = st?.cond;
+          const trending = cond === "trending";
+          const isBull   = dir === "bullish";
+          const isBear   = dir === "bearish";
+          const dirColor = isBull ? "#60a5fa" : isBear ? "#a78bfa" : "var(--text-muted)";
+          const onColor  = trending ? dirColor : "var(--text-muted)";
+          const bg       = "rgba(255,255,255,0.04)";
+          const border   = "var(--border-subtle)";
+          const condWord = cond === "trending" ? "Trending" : cond === "consolidating" ? "Consolidating" : "";
+          const label    = !dir ? (loading ? "…" : "—") : condWord;
+          return (
+            <div key={tf} style={{
+              flex: 1, minHeight: 0, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 4,
+              padding: expanded ? "0 14px" : "0 6px", borderRadius: 8, background: bg, border: `1px solid ${border}`,
+            }}>
+              <span style={{ fontSize: expanded ? 14 : 11, fontWeight: 800, letterSpacing: "0.06em", color: "var(--text-secondary)", flexShrink: 0 }}>{tf}</span>
+              <span style={{ display: "flex", alignItems: "center", gap: 5, flexShrink: 0 }}>
+                <StackLight color={onColor} pulsing={trending} expanded={expanded} />
+                <span style={{ fontSize: expanded ? 12 : 9, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.04em", color: onColor, textAlign: "right" }}>
+                  {label}
+                </span>
+              </span>
+            </div>
+          );
+        })}
+      </div>
+      {expanded && (
+        <StackLegend
+          bullRule="higher highs & higher lows (HH/HL)"
+          bearRule="lower highs & lower lows (LH/LL)"
+          trendRule="clean HH/HL or LH/LL structure"
+          consolRule="range or character shift (CHoCH)"
+        />
+      )}
+    </div>
+  );
+}
+
 function BlankPanel({ area, label, sub, style, onExpand, badge, subtitle, subtitle2, children,
   isDragging, isDragOver, containerRef, onHeaderMouseDown, pinned, headerActions,
 }: {
@@ -9016,27 +9358,6 @@ export function AnalyticsV3() {
             </div>
           )}
           <div style={{ height: 2, background: "rgba(255,255,255,0.12)", margin: "10px 0 10px" }} />
-          <div style={{
-            display: "flex", alignItems: "center", gap: 10,
-            position: "sticky", top: 0, zIndex: 20,
-            background: "var(--bg-base)",
-            paddingTop: 10, paddingBottom: 10, marginBottom: 6,
-            borderBottom: "1px solid var(--border-subtle)",
-          }}>
-            <span style={{ fontSize: 9, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.1em", color: "var(--text-muted)", whiteSpace: "nowrap" }}>Indicator Timeframe</span>
-            <div style={{ display: "flex", gap: 4 }}>
-              {(["1W","1D","4H","1H","15M","5M","1M"] as const).map(tf => (
-                <button key={tf} onClick={() => setIndicatorTf(tf)} style={{
-                  fontSize: 9, fontWeight: 700, padding: "4px 10px",
-                  textTransform: "uppercase", letterSpacing: "0.08em",
-                  background: indicatorTf === tf ? "var(--accent-dim)"    : "var(--bg-panel-alt)",
-                  border:     indicatorTf === tf ? "1px solid var(--accent-border)" : "1px solid var(--border-medium)",
-                  color:      indicatorTf === tf ? "var(--accent-text)"   : "var(--text-secondary)",
-                  borderRadius: 8, cursor: "pointer",
-                }}>{tf}</button>
-              ))}
-            </div>
-          </div>
           <div style={{ display: "flex", flexDirection: "row", flexWrap: "wrap", columnGap: 10, rowGap: 0, alignItems: "flex-start", paddingTop: 10 }}>
             {(() => {
               let offset = 0;
@@ -9048,7 +9369,7 @@ export function AnalyticsV3() {
 
                 const cols = cat.visibleCols ?? Math.min(cat.count, 4);
                 colsAccum += cols;
-                const scrollable = cat.count > cols;
+                const scrollable = cat.label !== "Strategies" && cat.count > cols;
                 const el = (
                   <div
                     key={cat.label}
@@ -9085,7 +9406,7 @@ export function AnalyticsV3() {
                     <div style={{ overflowX: scrollable ? "auto" : "visible" }}>
                     <div style={{
                       display: "grid",
-                      gridTemplateColumns: `repeat(${cat.count}, 1fr)`,
+                      gridTemplateColumns: `repeat(${cat.label === "Strategies" ? cols * 2 : cat.count}, 1fr)`,
                       gridAutoRows: "200px",
                       gap: "10px",
                       padding: "10px",
@@ -9128,6 +9449,14 @@ export function AnalyticsV3() {
                             {p.id === "candle-context"  && <CandleContextPanelBody    pair={selectedPair} indicatorTf={indicatorTf} />}
                             {p.id === "market-structure" && <MarketStructurePanelBody pair={selectedPair} indicatorTf={indicatorTf} />}
                             {p.id === "regime"          && <RegimePanelBody           pair={selectedPair} indicatorTf={indicatorTf} showCandles={regimeShowCandles} onToggleCandles={() => setRegimeShowCandles(v => !v)} />}
+                            {p.id === "macd-stack"      && <MacdStackPanelBody        pair={selectedPair} />}
+                            {p.id === "ema-stack"       && <EmaStackPanelBody         pair={selectedPair} />}
+                            {p.id === "ema-stack-200"   && <Ema200StackPanelBody      pair={selectedPair} />}
+                            {p.id === "adx-stack"       && <AdxStackPanelBody         pair={selectedPair} />}
+                            {p.id === "rsi-stack"       && <RsiStackPanelBody         pair={selectedPair} />}
+                            {p.id === "squeeze-stack"   && <SqueezeStackPanelBody     pair={selectedPair} />}
+                            {p.id === "cci-stack"       && <CciStackPanelBody         pair={selectedPair} />}
+                            {p.id === "ms-stack"        && <MarketStructureStackPanelBody pair={selectedPair} />}
                           </BlankPanel>
                         );
                       })}
@@ -9136,6 +9465,34 @@ export function AnalyticsV3() {
                   </div>
                 );
                 const isRowEnd = colsAccum % 4 === 0;
+                if (catIdx === 0) {
+                  // Indicator Timeframe selector lives directly below the Strategies row — it
+                  // controls the indicator panels below, not the timeframe-independent stacks.
+                  return [el, (
+                    <div key="indicator-tf" style={{
+                      width: "100%", flexShrink: 0,
+                      display: "flex", alignItems: "center", gap: 10,
+                      position: "sticky", top: 0, zIndex: 20,
+                      background: "var(--bg-base)",
+                      paddingTop: 10, paddingBottom: 10, marginTop: 8, marginBottom: 6,
+                      borderBottom: "1px solid var(--border-subtle)",
+                    }}>
+                      <span style={{ fontSize: 9, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.1em", color: "var(--text-muted)", whiteSpace: "nowrap" }}>Indicator Timeframe</span>
+                      <div style={{ display: "flex", gap: 4 }}>
+                        {(["1W","1D","4H","1H","15M","5M","1M"] as const).map(tf => (
+                          <button key={tf} onClick={() => setIndicatorTf(tf)} style={{
+                            fontSize: 9, fontWeight: 700, padding: "4px 10px",
+                            textTransform: "uppercase", letterSpacing: "0.08em",
+                            background: indicatorTf === tf ? "var(--accent-dim)"    : "var(--bg-panel-alt)",
+                            border:     indicatorTf === tf ? "1px solid var(--accent-border)" : "1px solid var(--border-medium)",
+                            color:      indicatorTf === tf ? "var(--accent-text)"   : "var(--text-secondary)",
+                            borderRadius: 8, cursor: "pointer",
+                          }}>{tf}</button>
+                        ))}
+                      </div>
+                    </div>
+                  )];
+                }
                 return catIdx < CATEGORIES.length - 1 && isRowEnd
                   ? [el, <div key={`sep-${catIdx}`} style={{ width: "100%", height: 26, display: "flex", alignItems: "center", pointerEvents: "none" }}><div style={{ flex: 1, height: 1, background: "rgba(255,255,255,0.07)" }} /></div>]
                   : [el];
@@ -9194,6 +9551,14 @@ export function AnalyticsV3() {
           {expanded.id === "candle-context"   && <CandleContextPanelBody    pair={selectedPair} indicatorTf={indicatorTf} expanded />}
           {expanded.id === "market-structure" && <MarketStructurePanelBody  pair={selectedPair} indicatorTf={indicatorTf} expanded />}
           {expanded.id === "regime"           && <RegimePanelBody           pair={selectedPair} indicatorTf={indicatorTf} expanded showCandles={regimeShowCandles} onToggleCandles={() => setRegimeShowCandles(v => !v)} />}
+          {expanded.id === "macd-stack"       && <MacdStackPanelBody        pair={selectedPair} expanded />}
+          {expanded.id === "ema-stack"        && <EmaStackPanelBody         pair={selectedPair} expanded />}
+          {expanded.id === "ema-stack-200"    && <Ema200StackPanelBody      pair={selectedPair} expanded />}
+          {expanded.id === "adx-stack"        && <AdxStackPanelBody         pair={selectedPair} expanded />}
+          {expanded.id === "rsi-stack"        && <RsiStackPanelBody         pair={selectedPair} expanded />}
+          {expanded.id === "squeeze-stack"    && <SqueezeStackPanelBody     pair={selectedPair} expanded />}
+          {expanded.id === "cci-stack"        && <CciStackPanelBody         pair={selectedPair} expanded />}
+          {expanded.id === "ms-stack"         && <MarketStructureStackPanelBody pair={selectedPair} expanded />}
         </PanelModal>
       )}
 

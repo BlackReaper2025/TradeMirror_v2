@@ -13,6 +13,8 @@
 - While actively working on a coding task, DO NOT stream progress updates
 - DO NOT describe steps, actions, or intermediate changes
 - Only respond when the task is complete OR blocked
+- Keep ALL responses as short and to the point as possible to conserve tokens
+- DO NOT show progress text or running commentary while executing a task
 
 Allowed responses:
 - "DONE"

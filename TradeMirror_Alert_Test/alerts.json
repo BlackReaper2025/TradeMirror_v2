@@ -22,14 +22,14 @@
     "direction": "rsi_macd_cross",
     "price": 0,
     "active": true,
-    "status": "watching",
+    "status": "triggered",
     "notifications": {
       "in_app": true,
       "telegram": true
     },
     "sound": "chime",
     "created_at_utc": "2026-05-18T19:24:51.076Z",
-    "triggered_at_utc": null,
+    "triggered_at_utc": "2026-05-21T18:30:28.438Z",
     "last_hit_price": null,
     "rsiMacdConfig": {
       "directionBias": "both",
@@ -42,5 +42,22 @@
         "1H"
       ]
     }
+  },
+  {
+    "id": "65fcbdb0-2464-4b26-8486-5d543d84be1b",
+    "name": "New Alert",
+    "instrument": "EUR_USD",
+    "direction": "below",
+    "price": 1.159,
+    "active": true,
+    "status": "watching",
+    "notifications": {
+      "in_app": true,
+      "telegram": true
+    },
+    "sound": "pulse",
+    "created_at_utc": "2026-05-21T07:31:48.133Z",
+    "triggered_at_utc": null,
+    "last_hit_price": null
   }
 ]

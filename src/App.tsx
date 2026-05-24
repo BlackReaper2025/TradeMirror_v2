@@ -6,6 +6,7 @@ import { TradeLog } from "./pages/TradeLog";
 import { Settings } from "./pages/Settings";
 import { Analytics } from "./pages/Analytics";
 import { AnalyticsV3 } from "./pages/AnalyticsV3";
+import { AIPositioning } from "./pages/AIPositioning";
 import { DatabaseProvider } from "./db/DatabaseProvider";
 import { SplashScreen } from "./components/SplashScreen";
 
@@ -27,6 +28,8 @@ function App() {
               return <Analytics />;
             case "analytics-v3":
               return <AnalyticsV3 />;
+            case "ai-positioning":
+              return <AIPositioning />;
             case "settings":
               return <Settings />;
             default:
