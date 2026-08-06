@@ -30,7 +30,7 @@ export function AppShell({ children }: AppShellProps) {
         style={{ position: "relative", zIndex: 1 }}
       >
         {activePage !== "analytics-v3" && activePage !== "trade-log" && <RadialGlowBackground />}
-        {(["dashboard", "trade-log", "calendar", "analytics-v3", "risk-calculator", "settings"] as Page[]).map(p => (
+        {(["dashboard", "trade-log", "calendar", "analytics-v3", "strategy", "risk-calculator", "settings"] as Page[]).map(p => (
           <div key={p} style={{ display: p === activePage ? "contents" : "none" }}>
             {children(p)}
           </div>
