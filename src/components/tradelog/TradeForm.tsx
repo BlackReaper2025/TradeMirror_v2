@@ -3,6 +3,7 @@ import { useState, useEffect, useRef, useCallback } from "react"; // useRef used
 import { X, ChevronRight, TrendingUp, TrendingDown, BookOpen, ChevronUp, ChevronDown } from "lucide-react";
 import { FormField, inputClass, inputStyle } from "../ui/FormField";
 import type { Account, TradeWithJournal } from "../../db/queries";
+import { ftmoTimeToLocal } from "../../lib/ftmoTime";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -44,20 +45,22 @@ const SETUP_SUGGESTIONS = [
 ];
 
 const MAJOR_PAIRS = [
-  "EUR/USD", "GBP/USD", "USD/JPY", "USD/CHF",
-  "AUD/USD", "USD/CAD", "NZD/USD",
-  "EUR/GBP", "EUR/JPY", "GBP/JPY",
-  "EUR/CHF", "EUR/AUD", "EUR/CAD",
-  "GBP/CHF", "GBP/AUD", "GBP/CAD",
-  "AUD/JPY", "CAD/JPY", "CHF/JPY",
-  "XAU/USD", "US100", "US500", "US30",
+  "AUD/CAD", "AUD/CHF", "AUD/JPY", "AUD/NZD", "AUD/USD",
+  "CAD/CHF", "CAD/JPY", "CHF/JPY",
+  "EUR/AUD", "EUR/CAD", "EUR/CHF", "EUR/GBP", "EUR/JPY", "EUR/NZD", "EUR/USD",
+  "GBP/AUD", "GBP/CAD", "GBP/CHF", "GBP/JPY", "GBP/NZD", "GBP/USD",
+  "NZD/CAD", "NZD/CHF", "NZD/JPY", "NZD/USD",
+  "US100", "US30", "US500",
+  "USD/CAD", "USD/CHF", "USD/JPY", "USD/MXN", "USD/SEK", "USD/ZAR",
+  "XAU/USD",
 ];
 
 const TAG_GROUPS = [
   { label: "Session",    tags: ["asia", "london", "new-york"] },
-  { label: "Setup",      tags: ["swing-low", "swing-high", "session-high", "session-low", "supply", "demand", "liquidity-sweep", "wyckoff", "break-retest", "fair-value-gap"] },
-  { label: "Type",       tags: ["scalp", "swing", "news-event"] },
-  { label: "Psychology", tags: ["patience", "impatience", "fomo", "revenge", "greedy", "scared", "no-setup", "bad-entry", "exit-early"] },
+  { label: "Setup",      tags: ["supply", "demand", "liquidity-sweep", "wyckoff"] },
+  { label: "Candle",     tags: ["engulfing", "pin"] },
+  { label: "Type",       tags: ["scalp", "day", "swing"] },
+  { label: "Psychology", tags: ["patience", "impatience", "fomo", "revenge", "greedy", "scared", "no-setup", "bad-entry", "exit-early", "early-entry"] },
 ];
 
 function todayLocal() {
@@ -420,6 +423,9 @@ export function TradeForm({ account, existingTrade, defaultDate, defaultValues, 
   const [tab, setTab]         = useState<Tab>("trade");
   const [saving, setSaving]   = useState(false);
   const [errors, setErrors]   = useState<Partial<Record<keyof TradeFormValues, string>>>({});
+  // New trades are logged straight from the FTMO/MetaTrader report (server time);
+  // edits load already-converted local timestamps, so default this off for edits.
+  const [ftmoTime, setFtmoTime] = useState(!isEdit);
   const historyRef            = useRef<TradeFormValues[]>([]);
   const isUndoRef             = useRef(false);
 
@@ -462,7 +468,10 @@ export function TradeForm({ account, existingTrade, defaultDate, defaultValues, 
     if (!validate()) return;
     setSaving(true);
     try {
-      await onSaved(values);
+      const toSave = ftmoTime
+        ? { ...values, openedAt: ftmoTimeToLocal(values.openedAt), closedAt: ftmoTimeToLocal(values.closedAt) }
+        : values;
+      await onSaved(toSave);
     } finally {
       setSaving(false);
     }
@@ -526,7 +535,7 @@ export function TradeForm({ account, existingTrade, defaultDate, defaultValues, 
         {/* ── Form body ── */}
         <form id="trade-form-inner" onSubmit={handleSubmit} className="flex-1 overflow-y-auto">
           <div className="px-6 py-2" style={{ display: tab === "trade" ? "block" : "none" }}>
-            <TradeTab values={values} set={set} rr={rr} errors={errors} />
+            <TradeTab values={values} set={set} rr={rr} errors={errors} ftmoTime={ftmoTime} setFtmoTime={setFtmoTime} />
           </div>
           <div className="px-6 py-2" style={{ display: tab === "journal" ? "block" : "none" }}>
             <JournalTab values={values} set={set} />
@@ -613,9 +622,11 @@ interface TabProps {
   set: <K extends keyof TradeFormValues>(key: K, val: TradeFormValues[K]) => void;
   rr?: string;
   errors?: Partial<Record<keyof TradeFormValues, string>>;
+  ftmoTime?: boolean;
+  setFtmoTime?: (v: boolean) => void;
 }
 
-function TradeTab({ values, set, rr, errors = {} }: TabProps) {
+function TradeTab({ values, set, rr, errors = {}, ftmoTime, setFtmoTime }: TabProps) {
   return (
     <div className="flex flex-col gap-2">
 
@@ -629,6 +640,20 @@ function TradeTab({ values, set, rr, errors = {} }: TabProps) {
           <DateTimeInput value={values.closedAt} onChange={(v) => set("closedAt", v)} />
         </FormField>
       </div>
+
+      {setFtmoTime && (
+        <label className="flex items-center gap-2 -mt-1 mb-1 cursor-pointer select-none">
+          <input
+            type="checkbox"
+            checked={!!ftmoTime}
+            onChange={(e) => setFtmoTime(e.target.checked)}
+            style={{ accentColor: "var(--accent)" }}
+          />
+          <span className="text-[11px] font-medium" style={{ color: "var(--text-muted)" }}>
+            Times above are FTMO server time — convert to local on save
+          </span>
+        </label>
+      )}
 
       {/* Instrument + Side */}
       <div className="grid grid-cols-2 gap-3">

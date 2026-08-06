@@ -13,6 +13,7 @@ import {
   updateAccountBalance,
   getSettings,
   getAccount,
+  getJournalByTradeId,
   type Trade,
   type Account,
   type TradeWithJournal,
@@ -95,7 +96,8 @@ export function TradeLogPreview({ trades, selectedDate, onTradeChanged }: Props)
   const handleEditClick = useCallback(async (trade: Trade) => {
     const acc = await loadAccount();
     if (!acc) return;
-    setEditTrade({ ...trade, journal: null });
+    const journal = await getJournalByTradeId(trade.id);
+    setEditTrade({ ...trade, journal });
     setShowForm(true);
   }, [loadAccount]);
 

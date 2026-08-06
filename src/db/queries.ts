@@ -232,8 +232,8 @@ export async function getTodayTrades(accountId: string): Promise<Trade[]> {
     .where(
       and(
         eq(trades.accountId, accountId),
-        gte(trades.openedAt, today + "T00:00:00"),
-        lte(trades.openedAt, today + "T23:59:59")
+        gte(trades.closedAt, today + "T00:00:00"),
+        lte(trades.closedAt, today + "T23:59:59")
       )
     )
     .orderBy(desc(trades.closedAt));
@@ -582,7 +582,7 @@ export async function getMonthlyStats(accountId: string): Promise<AllTimeStats> 
   const rows = await db
     .select({ pnl: trades.pnl })
     .from(trades)
-    .where(and(eq(trades.accountId, accountId), gte(trades.openedAt, start), lte(trades.openedAt, end)));
+    .where(and(eq(trades.accountId, accountId), gte(trades.closedAt, start), lte(trades.closedAt, end)));
 
   const wins   = rows.filter((t) => (t.pnl ?? 0) > 0);
   const losses = rows.filter((t) => (t.pnl ?? 0) < 0);
@@ -614,7 +614,7 @@ export async function getWeeklyStats(accountId: string): Promise<AllTimeStats> {
   const rows = await db
     .select({ pnl: trades.pnl })
     .from(trades)
-    .where(and(eq(trades.accountId, accountId), gte(trades.openedAt, fmt(mon)), lte(trades.openedAt, fmt(sun))));
+    .where(and(eq(trades.accountId, accountId), gte(trades.closedAt, fmt(mon)), lte(trades.closedAt, fmt(sun))));
 
   const wins   = rows.filter((t) => (t.pnl ?? 0) > 0);
   const losses = rows.filter((t) => (t.pnl ?? 0) < 0);
@@ -641,8 +641,8 @@ export async function getTodayFullStats(accountId: string): Promise<AllTimeStats
     .from(trades)
     .where(and(
       eq(trades.accountId, accountId),
-      gte(trades.openedAt, today + "T00:00:00"),
-      lte(trades.openedAt, today + "T23:59:59"),
+      gte(trades.closedAt, today + "T00:00:00"),
+      lte(trades.closedAt, today + "T23:59:59"),
     ));
 
   const wins   = rows.filter((t) => (t.pnl ?? 0) > 0);
@@ -761,6 +761,17 @@ export async function getAllTradesWithJournal(
     ...t,
     journal: journalByTradeId.get(t.id) ?? null,
   }));
+}
+
+// ─── Get the journal entry for a single trade (if any) ────────────────────────
+
+export async function getJournalByTradeId(tradeId: string): Promise<TradeJournal | null> {
+  const db = getDb();
+  const rows = await db
+    .select()
+    .from(tradeJournal)
+    .where(eq(tradeJournal.tradeId, tradeId));
+  return rows[0] ?? null;
 }
 
 // ─── Input types for create ───────────────────────────────────────────────────
