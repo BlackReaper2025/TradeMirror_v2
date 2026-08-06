@@ -5,13 +5,12 @@ type Category = "Forex" | "Stocks" | "ETFs" | "Crypto";
 
 const CATEGORIES: Record<Category, string[]> = {
   Forex:  [
-    "EUR/USD", "GBP/USD", "USD/JPY", "USD/CAD", "AUD/USD", "USD/CHF", "NZD/USD",
-    "EUR/GBP", "EUR/JPY", "EUR/CHF", "EUR/CAD", "EUR/AUD", "EUR/NZD",
-    "GBP/JPY", "GBP/CHF", "GBP/CAD", "GBP/AUD", "GBP/NZD",
-    "AUD/JPY", "AUD/CHF", "AUD/CAD", "AUD/NZD",
-    "CAD/JPY", "CAD/CHF", "CHF/JPY",
-    "NZD/JPY", "NZD/CAD", "NZD/CHF",
-    "USD/MXN", "USD/SEK", "USD/ZAR",
+    "AUD/CAD", "AUD/CHF", "AUD/JPY", "AUD/NZD", "AUD/USD",
+    "CAD/CHF", "CAD/JPY", "CHF/JPY",
+    "EUR/AUD", "EUR/CAD", "EUR/CHF", "EUR/GBP", "EUR/JPY", "EUR/NZD", "EUR/USD",
+    "GBP/AUD", "GBP/CAD", "GBP/CHF", "GBP/JPY", "GBP/NZD", "GBP/USD",
+    "NZD/CAD", "NZD/CHF", "NZD/JPY", "NZD/USD",
+    "USD/CAD", "USD/CHF", "USD/JPY", "USD/MXN", "USD/SEK", "USD/ZAR",
   ],
   Stocks: ["AAPL", "TSLA", "NVDA", "AMZN", "MSFT", "META", "GOOGL"],
   ETFs:   ["SPY", "QQQ", "GLD", "TLT", "VXX", "IWM", "XLF"],

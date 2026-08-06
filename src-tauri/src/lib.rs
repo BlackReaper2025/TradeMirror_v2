@@ -53,6 +53,27 @@ fn write_text_file(path: String, content: String) -> Result<(), String> {
     std::fs::write(&path, content).map_err(|e| e.to_string())
 }
 
+// ─── Copy a trade entry/exit screenshot into the app's data dir ───────────────
+
+#[tauri::command]
+fn save_trade_screenshot(app: tauri::AppHandle, source_path: String, kind: String) -> Result<String, String> {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let dir = app.path().app_data_dir().map_err(|e| e.to_string())?.join("screenshots");
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+
+    let ext = std::path::Path::new(&source_path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("png");
+    let now = SystemTime::now().duration_since(UNIX_EPOCH).map_err(|e| e.to_string())?;
+    let file_name = format!("{}-{}-{}.{}", kind, now.as_millis(), now.subsec_nanos(), ext);
+    let dest = dir.join(file_name);
+
+    std::fs::copy(&source_path, &dest).map_err(|e| e.to_string())?;
+    Ok(dest.to_string_lossy().to_string())
+}
+
 // ─── Send Telegram test notification ─────────────────────────────────────────
 
 #[tauri::command]
@@ -151,7 +172,7 @@ mod candle_store;
 mod oanda_client;
 mod indicators;
 mod scoring;
-mod positioning_store;
+mod backtest;
 use analytics_v3_demo::CandleV3;
 
 /// Read the OANDA API key from disk (first non-empty line).
@@ -160,14 +181,6 @@ fn read_oanda_key() -> Result<String, String> {
         .map_err(|e| format!("Could not read OANDA key file: {}", e))?;
     let key = contents.lines().next().unwrap_or("").trim().to_string();
     if key.is_empty() { Err("OANDA API key is empty".into()) } else { Ok(key) }
-}
-
-/// Resolve the SQLite db path inside the app data dir.
-fn db_path_for(app: &tauri::AppHandle) -> Result<String, String> {
-    let p = app.path().app_data_dir()
-        .map_err(|e: tauri::Error| e.to_string())?
-        .join("trademirror.db");
-    Ok(p.to_str().unwrap_or("").to_string())
 }
 
 #[tauri::command]
@@ -318,18 +331,31 @@ fn get_forex_news() -> Vec<NewsItem> {
 
 // ─── OANDA live price streaming ───────────────────────────────────────────────
 
-/// Fetch the latest mid price for EUR_USD.
+/// Fetch the latest mid price for the given pair (defaults to EUR_USD).
 /// Uses M1 candles — universally available on all OANDA accounts.
 /// Reads the API key exactly as background_sync does (proven to work).
 #[tauri::command]
-async fn get_live_price() -> Result<f64, String> {
+async fn get_live_price(pair: Option<String>) -> Result<f64, String> {
     let contents = std::fs::read_to_string(OANDA_KEY_PATH)
         .map_err(|e| format!("key file: {}", e))?;
     let api_key = contents.lines().next().unwrap_or("").trim().to_string();
     if api_key.is_empty() { return Err("OANDA key file is empty".into()); }
 
+    let pair = pair.unwrap_or_else(|| "EUR/USD".to_string());
+    let instrument = if pair.contains('_') {
+        pair.clone()
+    } else if pair.contains('/') {
+        pair.replace('/', "_")
+    } else {
+        format!("{}_{}", &pair[..3], &pair[3..])
+    };
+
+    let url = format!(
+        "https://api-fxtrade.oanda.com/v3/instruments/{}/candles?granularity=M1&count=1&price=M",
+        instrument
+    );
     let resp: serde_json::Value = reqwest::Client::new()
-        .get("https://api-fxtrade.oanda.com/v3/instruments/EUR_USD/candles?granularity=M1&count=1&price=M")
+        .get(&url)
         .header("Authorization", format!("Bearer {}", api_key))
         .header("Accept-Datetime-Format", "RFC3339")
         .send().await.map_err(|e| format!("request: {:?}", e))?
@@ -458,55 +484,6 @@ fn get_synthesis(pair: String, tf: String) -> Result<scoring::Synthesis, String>
     ))
 }
 
-// ─── AI Positioning: snapshots, outcomes, reporting ──────────────────────────
-
-#[tauri::command]
-fn force_snapshot(app: tauri::AppHandle, pair: String) -> Result<i64, String> {
-    let api_key = read_oanda_key()?;
-    let db_path = db_path_for(&app)?;
-    // Manual trigger: force = true refreshes today's snapshot in place.
-    positioning_store::run_snapshot_for(&db_path, &api_key, &pair, true)
-}
-
-#[tauri::command]
-fn force_resolve(
-    app: tauri::AppHandle,
-    snapshot_id: i64,
-) -> Result<Option<positioning_store::PositioningOutcome>, String> {
-    let api_key = read_oanda_key()?;
-    let db_path = db_path_for(&app)?;
-    // Returns None if the position is still open (no TP1/SL hit yet).
-    positioning_store::resolve_snapshot(&db_path, &api_key, snapshot_id)
-}
-
-#[tauri::command]
-fn list_open_snapshots(
-    app: tauri::AppHandle,
-) -> Result<Vec<positioning_store::PositioningSnapshot>, String> {
-    let db_path = db_path_for(&app)?;
-    positioning_store::list_open_snapshots(&db_path)
-}
-
-#[tauri::command]
-fn list_resolved_snapshots(
-    app: tauri::AppHandle,
-    pair: String,
-    limit: u32,
-) -> Result<Vec<positioning_store::ResolvedSnapshot>, String> {
-    let db_path = db_path_for(&app)?;
-    positioning_store::list_resolved_snapshots(&db_path, &pair, limit)
-}
-
-#[tauri::command]
-fn get_accuracy_stats(
-    app: tauri::AppHandle,
-    pair: String,
-    days: u32,
-) -> Result<positioning_store::AccuracyStats, String> {
-    let db_path = db_path_for(&app)?;
-    positioning_store::get_accuracy_stats(&db_path, &pair, days)
-}
-
 // ─── Headless positioning cron (runs without the GUI) ────────────────────────
 
 /// Database path used by the headless cron, matching Tauri's app_data_dir:
@@ -516,32 +493,104 @@ fn cron_db_path() -> String {
     format!("{}\\com.geoff.trademirror\\trademirror.db", base)
 }
 
-/// One-shot positioning run for the headless binary (src/bin/positioning_cron.rs).
-/// Triggered hourly by Windows Task Scheduler so snapshots + outcome resolution
-/// keep running even when the desktop app is closed. Idempotent: backfills missed
-/// days, takes today's snapshot if due, resolves expired snapshots, then exits.
-pub fn run_positioning_cron() {
+/// One-shot backtest runner for the headless binary (src/bin/backtest.rs).
+/// Reads daily EURUSD from the shared DB, runs the strategy-validation harness,
+/// and prints the results. Read-only: never writes trades or places orders.
+pub fn run_backtest_cli() {
+    let db_path = cron_db_path();
+    // Timeframe from CLI arg (e.g. `cargo run --bin backtest -- M5`); default M15.
+    let tf = std::env::args().nth(1).unwrap_or_else(|| "M15".to_string());
+
+    if tf != "D" {
+        let rows = candle_store::read_candles(&db_path, "EURUSD", &tf, 5_000_000).unwrap_or_default();
+        if rows.len() < 320 {
+            println!("[backtest] only {} {} candles. Backfill first (e.g. `cargo run --bin backfill_m5`).", rows.len(), tf);
+            return;
+        }
+        let cfg = backtest::BtConfig::m15();
+        let reports = backtest::run_all(&rows, &cfg, &backtest::m15_suite(&rows));
+        let label = format!("EURUSD {} (MTF confluence)", tf);
+        println!("{}", backtest::format_reports(&reports, &cfg, rows.len(), &label));
+        return;
+    }
+
+    let d = candle_store::read_candles(&db_path, "EURUSD", "D", 100_000).unwrap_or_default();
+    let cfg = backtest::BtConfig::daily();
+    if d.len() < cfg.warmup + 20 {
+        println!("[backtest] only {} daily candles.", d.len());
+        return;
+    }
+    let reports = backtest::run_all(&d, &cfg, &backtest::all_strategies());
+    println!("{}", backtest::format_reports(&reports, &cfg, d.len(), "EURUSD Daily"));
+}
+
+/// Backfill ~`target_bars` of an intraday timeframe into candles_v3 by paging
+/// backward through OANDA's `to` cursor, then computing indicators once over the
+/// full continuous series. Intraday rows are keyed by full timestamp in `date`
+/// so they don't collide on the day-only unique key used by daily candles.
+fn backfill_tf(
+    db_path: &str, api_key: &str,
+    instrument: &str, store_symbol: &str, granularity: &str, target_bars: usize,
+) -> Result<usize, String> {
+    use std::collections::BTreeMap;
+    const PAGE: u32 = 5000;
+    const MAX_PAGES: usize = 60;
+
+    let mut by_ts: BTreeMap<String, oanda_client::RawCandle> = BTreeMap::new();
+
+    let batch = oanda_client::fetch_raw_candles_tf(api_key, instrument, granularity, PAGE)?;
+    if batch.is_empty() { return Err("OANDA returned no candles".into()); }
+    let mut oldest = batch.iter().map(|c| c.timestamp.clone()).min().unwrap_or_default();
+    for c in batch { by_ts.insert(c.timestamp.clone(), c); }
+
+    let mut pages = 1usize;
+    while by_ts.len() < target_bars && pages < MAX_PAGES {
+        let b = oanda_client::fetch_raw_candles_tf_to(api_key, instrument, granularity, PAGE, &oldest)?;
+        if b.len() <= 1 { break; }
+        let new_oldest = b.iter().map(|c| c.timestamp.clone()).min().unwrap_or_default();
+        for c in b { by_ts.insert(c.timestamp.clone(), c); }
+        pages += 1;
+        if new_oldest == oldest { break; } // no progress → end of history
+        oldest = new_oldest;
+        println!("[backfill] page {} — {} bars so far, oldest {}", pages, by_ts.len(), oldest);
+    }
+
+    let raw: Vec<oanda_client::RawCandle> = by_ts.into_values().collect();
+    println!("[backfill] fetched {} raw {} candles over {} page(s); computing indicators…",
+        raw.len(), granularity, pages);
+
+    let mut rows = indicators::compute(raw);
+    for r in rows.iter_mut() { r.date = r.timestamp.clone(); } // unique key for intraday
+    let n = rows.len();
+    candle_store::upsert_candles(db_path, store_symbol, granularity, &rows)?;
+    Ok(n)
+}
+
+/// Headless entry: backfill ~3 years of EURUSD M15 into the shared DB.
+pub fn backfill_m15_cli() {
     let db_path = cron_db_path();
     let api_key = match read_oanda_key() {
         Ok(k) => k,
-        Err(e) => { eprintln!("[cron] {}", e); return; }
+        Err(e) => { eprintln!("[backfill] {}", e); return; }
     };
-
-    for pair in positioning_store::active_pairs() {
-        match positioning_store::backfill_missing(&db_path, &api_key, &pair) {
-            Ok(n) if n > 0 => println!("[cron] backfilled {} snapshot(s) for {}", n, pair),
-            Ok(_)          => {}
-            Err(e)         => eprintln!("[cron] backfill {}: {}", pair, e),
-        }
-        match positioning_store::run_snapshot_for(&db_path, &api_key, &pair, false) {
-            Ok(id) => println!("[cron] snapshot id {} for {}", id, pair),
-            Err(e) => println!("[cron] snapshot skipped for {}: {}", pair, e),
-        }
+    println!("[backfill] EURUSD M15 → {}", db_path);
+    match backfill_tf(&db_path, &api_key, "EUR_USD", "EURUSD", "M15", 80_000) {
+        Ok(n)  => println!("[backfill] done — stored {} M15 candles", n),
+        Err(e) => eprintln!("[backfill] failed: {}", e),
     }
+}
 
-    match positioning_store::resolve_all_pending(&db_path, &api_key) {
-        Ok(n)  => println!("[cron] resolved {} snapshot(s)", n),
-        Err(e) => eprintln!("[cron] resolve: {}", e),
+/// Headless entry: backfill ~3 years of EURUSD M5 into the shared DB.
+pub fn backfill_m5_cli() {
+    let db_path = cron_db_path();
+    let api_key = match read_oanda_key() {
+        Ok(k) => k,
+        Err(e) => { eprintln!("[backfill] {}", e); return; }
+    };
+    println!("[backfill] EURUSD M5 → {}", db_path);
+    match backfill_tf(&db_path, &api_key, "EUR_USD", "EURUSD", "M5", 240_000) {
+        Ok(n)  => println!("[backfill] done — stored {} M5 candles", n),
+        Err(e) => eprintln!("[backfill] failed: {}", e),
     }
 }
 
@@ -580,6 +629,12 @@ pub fn run() {
             sql: include_str!("../migrations/0005_positioning.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 6,
+            description: "drop_positioning",
+            sql: include_str!("../migrations/0006_drop_positioning.sql"),
+            kind: MigrationKind::Up,
+        },
     ];
 
     tauri::Builder::default()
@@ -604,50 +659,20 @@ pub fn run() {
             }
 
             // Background sync thread — syncs on startup then again every day at 22:10 UTC.
-            // After each sync the AI positioning snapshot is taken for every active pair
-            // (the daily candle has just closed, so the data is fresh).
             let bg_path = path_str.clone();
             std::thread::spawn(move || {
                 // Sync immediately on startup to catch any missed candles.
                 let _ = background_sync(&bg_path);
-                // Catch-up: reconstruct any snapshots missed while the app was closed,
-                // then take today's if it is due. Both paths are idempotent.
-                if let Ok(api_key) = read_oanda_key() {
-                    for pair in positioning_store::active_pairs() {
-                        let _ = positioning_store::backfill_missing(&bg_path, &api_key, &pair);
-                        let _ = positioning_store::run_snapshot_for(&bg_path, &api_key, &pair, false);
-                    }
-                }
-
-                // Then loop: wait until next 22:10 UTC, sync, snapshot, repeat.
+                // Then loop: wait until next 22:10 UTC, sync, repeat.
                 loop {
                     std::thread::sleep(std::time::Duration::from_secs(secs_until_daily_sync()));
                     let _ = background_sync(&bg_path);
-                    if let Ok(api_key) = read_oanda_key() {
-                        for pair in positioning_store::active_pairs() {
-                            let _ = positioning_store::run_snapshot_for(&bg_path, &api_key, &pair, false);
-                        }
-                    }
-                }
-            });
-
-            // Outcome resolver thread — resolves expired snapshots on startup then hourly.
-            let resolver_path = path_str.clone();
-            std::thread::spawn(move || {
-                if let Ok(api_key) = read_oanda_key() {
-                    let _ = positioning_store::resolve_all_pending(&resolver_path, &api_key);
-                }
-                loop {
-                    std::thread::sleep(std::time::Duration::from_secs(3600));
-                    if let Ok(api_key) = read_oanda_key() {
-                        let _ = positioning_store::resolve_all_pending(&resolver_path, &api_key);
-                    }
                 }
             });
 
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![list_images, read_credentials_file, write_text_file, get_candles_v3, get_ichi_rows_v3, sync_oanda_candles_v3, send_test_notification, send_telegram_message, get_forex_news, get_live_price, get_live_candles, get_live_candles_computed, get_synthesis, force_snapshot, force_resolve, list_open_snapshots, list_resolved_snapshots, get_accuracy_stats])
+        .invoke_handler(tauri::generate_handler![list_images, read_credentials_file, write_text_file, save_trade_screenshot, get_candles_v3, get_ichi_rows_v3, sync_oanda_candles_v3, send_test_notification, send_telegram_message, get_forex_news, get_live_price, get_live_candles, get_live_candles_computed, get_synthesis])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

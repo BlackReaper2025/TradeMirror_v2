@@ -11,7 +11,6 @@ pub mod trend;
 pub mod momentum;
 pub mod structure;
 pub mod volatility;
-pub mod positioning;
 
 use serde::Serialize;
 use crate::analytics_v3_demo::CandleV3;
