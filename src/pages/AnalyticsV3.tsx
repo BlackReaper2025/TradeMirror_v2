@@ -5,12 +5,12 @@
 //  Row 2         — Evidence: 5 equal group cards (Trend, MACD, Momentum, Volatility, Directional)
 //  Row 3         — Detail:   Entry/Exit plan | Signal history dots | Live indicator bars
 //
-import { useEffect, useRef, useState, useCallback, useMemo } from "react";
+import { useEffect, useRef, useState, useCallback, useMemo, memo } from "react";
 import {
   ComposedChart, Bar, Line, Area, XAxis, YAxis, ReferenceLine, ReferenceArea,
   ResponsiveContainer, Cell, Tooltip,
 } from "recharts";
-import { Maximize2, X, GripVertical } from "lucide-react";
+import { Maximize2, Minimize2, X, GripVertical, Settings } from "lucide-react";
 import { VerdictPanel }          from "../components/analytics/VerdictPanel";
 import { EvidenceCards }         from "../components/analytics/EvidenceCards";
 import { EntryExitPanel }        from "../components/analytics/EntryExitPanel";
@@ -28,6 +28,8 @@ import { getAnalyticsPanelOrder, setAnalyticsPanelOrder } from "../lib/preferenc
 import { playAlertSound } from "../lib/alertSound";
 import type { AlertSound } from "../lib/alertSound";
 import { AlertsPanel, type Alert } from "../components/panels/AlertsPanel";
+import { freshSupplyDemandZones, mostRecentTappedZone, type SupplyDemandZone } from "../lib/supplyDemand";
+import { computeAutoTrendlines, type TrendlineSegment } from "../lib/trendlines";
 import { invoke }                from "@tauri-apps/api/core";
 import {
   createChart, CandlestickSeries, AreaSeries, LineSeries,
@@ -789,21 +791,319 @@ class BBFillPrimitive {
 }
 
 
+// Supply/demand zone box — draws full-width shaded price bands. Price-anchored
+// rather than time-anchored, so a zone stays correctly positioned regardless of
+// which candle timeframe the chart itself is currently displaying.
+interface ZoneBox {
+  type: "supply" | "demand";
+  low: number;
+  high: number;
+  originTime: UTCTimestamp;
+  label: string;
+  tapped?: boolean;
+  insideTapped?: boolean;
+}
+const ZONE_COLORS: Record<"supply" | "demand", { fill: string; fillFaint: string; stroke: string }> = {
+  supply: { fill: "rgba(226,75,74,0.16)", fillFaint: "rgba(226,75,74,0.10)", stroke: "#E24B4A" },
+  demand: { fill: "rgba(139,195,74,0.16)", fillFaint: "rgba(139,195,74,0.10)", stroke: "#8BC34A" },
+};
+// Most-recently-tapped zone is drawn in grey instead of its supply/demand
+// color, so it visually reads as "already reacted to" rather than active.
+const TAPPED_ZONE_COLOR = { fill: "rgba(148,163,184,0.16)", fillFaint: "rgba(148,163,184,0.10)", stroke: "#94a3b8" };
+// A fresh zone nested entirely inside the most-recently-tapped zone of the
+// same timeframe is drawn in yellow — it sits inside price action that's
+// already reacted, so it reads as heightened-relevance context.
+const INSIDE_TAPPED_ZONE_COLOR = { fill: "rgba(234,179,8,0.16)", fillFaint: "rgba(234,179,8,0.10)", stroke: "#EAB308" };
+
+class ZoneBoxRenderer {
+  _p: ZoneBoxPrimitive;
+  constructor(p: ZoneBoxPrimitive) { this._p = p; }
+  draw(target: any) {
+    const chart  = this._p._chart;
+    const series = this._p._series;
+    const zones  = this._p._zones;
+    if (!chart || !series || zones.length === 0) return;
+    target.useBitmapCoordinateSpace((scope: any) => {
+      const ctx = scope.context;
+      const hr = scope.horizontalPixelRatio;
+      const vr = scope.verticalPixelRatio;
+      const w  = scope.bitmapSize.width;
+      const ts = chart.timeScale();
+      for (const z of zones) {
+        const yHighRaw = series.priceToCoordinate(z.high);
+        const yLowRaw  = series.priceToCoordinate(z.low);
+        if (yHighRaw === null || yLowRaw === null) continue;
+
+        // Anchor the left edge to the origin candle — nearest bar index on
+        // whatever timeframe the chart is currently displaying, so the box
+        // never gets drawn over history that predates the zone forming.
+        const idx = ts.timeToIndex(z.originTime, true);
+        if (idx === null) continue;
+        const xRaw = ts.logicalToCoordinate(idx as any);
+        if (xRaw === null) continue;
+        const x1 = Math.max(0, xRaw * hr);
+
+        const yTop = yHighRaw * vr;
+        const yBot = Math.max(yTop + 1, yLowRaw * vr);
+        const colors = z.tapped ? TAPPED_ZONE_COLOR : z.insideTapped ? INSIDE_TAPPED_ZONE_COLOR : ZONE_COLORS[z.type];
+        ctx.fillStyle = colors.fillFaint;
+        ctx.fillRect(x1, yTop, w - x1, yBot - yTop);
+        ctx.strokeStyle = colors.stroke;
+        ctx.lineWidth = hr;
+        ctx.strokeRect(x1, yTop, w - x1, yBot - yTop);
+
+        // Dashed line marking the zone's midpoint price.
+        const yMid = (yTop + yBot) / 2;
+        ctx.save();
+        ctx.setLineDash([4 * hr, 3 * hr]);
+        ctx.beginPath();
+        ctx.moveTo(x1, yMid);
+        ctx.lineTo(w, yMid);
+        ctx.strokeStyle = colors.stroke;
+        ctx.lineWidth = hr;
+        ctx.stroke();
+        ctx.restore();
+
+        ctx.fillStyle = colors.stroke;
+        ctx.font = `${Math.round(10 * vr)}px sans-serif`;
+        ctx.textBaseline = "top";
+        ctx.fillText(z.label, x1 + 6 * hr, yTop + 4 * vr);
+      }
+    });
+  }
+}
+class ZoneBoxPaneView {
+  _p: ZoneBoxPrimitive;
+  constructor(p: ZoneBoxPrimitive) { this._p = p; }
+  update() {}
+  zOrder() { return "bottom" as const; }
+  renderer() { return new ZoneBoxRenderer(this._p); }
+}
+class ZoneBoxPrimitive {
+  _chart: any = null;
+  _series: any = null;
+  _zones: ZoneBox[];
+  _views: ZoneBoxPaneView[] = [];
+  constructor(zones: ZoneBox[]) { this._zones = zones; }
+  attached({ chart, series }: any) { this._chart = chart; this._series = series; this._views = [new ZoneBoxPaneView(this)]; }
+  detached() { this._chart = null; this._series = null; this._views = []; }
+  updateAllViews() { this._views.forEach(v => v.update()); }
+  paneViews() { return this._views; }
+}
+
+// Auto trendline overlay — diagonal support/resistance lines connecting the
+// two most recent qualifying swing pivots, extended to the last candle.
+// Always blue regardless of timeframe or type.
+const TRENDLINE_COLOR = "#3b82f6";
+
+class TrendlineRenderer {
+  _p: TrendlinePrimitive;
+  constructor(p: TrendlinePrimitive) { this._p = p; }
+  draw(target: any) {
+    const chart = this._p._chart;
+    const series = this._p._series;
+    const lines = this._p._lines;
+    if (!chart || !series || lines.length === 0) return;
+    target.useBitmapCoordinateSpace((scope: any) => {
+      const ctx = scope.context;
+      const hr = scope.horizontalPixelRatio;
+      const vr = scope.verticalPixelRatio;
+      const w  = scope.bitmapSize.width;
+      const ts = chart.timeScale();
+      const loaded = this._p._loadedCandles;
+      if (loaded.length < 2) return;
+
+      // Resolves a pivot to whichever *currently loaded* bar actually
+      // touched that pivot's price, searched within one source-bar width of
+      // the pivot's own (bar-open) time — e.g. a Weekly pivot's high/low
+      // usually didn't happen on the week's opening bar, so matching by
+      // price against the Daily/4H/1H bars underneath finds the real wick.
+      // Falls back to the nearest loaded bar to the pivot's own time if no
+      // price match is found. Returns null only when the pivot's time is
+      // entirely outside the loaded window.
+      const resolveAnchor = (t: number, p: number, type: "support" | "resistance", srcDur: number)
+        : { xRaw: number; idx: number; arrIdx: number } | null => {
+        let matchArrIdx = -1;
+        if (srcDur > 0) {
+          let bestDiff = Infinity;
+          for (let i = 0; i < loaded.length; i++) {
+            const c = loaded[i];
+            if (c.t < t - srcDur || c.t > t + srcDur) continue;
+            const val = type === "resistance" ? c.h : c.l;
+            const diff = Math.abs(val - p);
+            if (diff < bestDiff) { bestDiff = diff; matchArrIdx = i; }
+          }
+        }
+        const bestTime = matchArrIdx >= 0 ? loaded[matchArrIdx].t : (t >= this._p._oldestLoadedTime ? t : null);
+        if (bestTime === null) return null;
+        const idx = ts.timeToIndex(bestTime, true);
+        if (idx === null) return null;
+        const xRaw = ts.logicalToCoordinate(idx as any);
+        if (xRaw === null) return null;
+        return { xRaw, idx, arrIdx: matchArrIdx };
+      };
+
+      for (const l of lines) {
+        if (l.t2 === l.t1) continue;
+        const y1Raw = series.priceToCoordinate(l.p1);
+        const y2Raw = series.priceToCoordinate(l.p2);
+        if (y1Raw === null || y2Raw === null) continue;
+
+        // t1 < t2 always, and the loaded window is contiguous ending at
+        // "now" — so if the recent pivot (t2) doesn't resolve, the older
+        // one (t1) can't either.
+        const a2 = resolveAnchor(l.t2, l.p2, l.type, l.srcDurationSec);
+        const a1 = a2 !== null ? resolveAnchor(l.t1, l.p1, l.type, l.srcDurationSec) : null;
+
+        // Circle markers only render for anchors that actually resolved —
+        // best-effort, skipped when that pivot's bar is outside the loaded
+        // window.
+        const circle1X = a1 !== null ? a1.xRaw : null;
+        const circle2X = a2 !== null ? a2.xRaw : null;
+
+        let x1Raw: number, x2Raw: number, y1: number, y2: number;
+
+        if (a2 !== null && a1 !== null) {
+          x1Raw = a1.xRaw; x2Raw = a2.xRaw;
+          y1 = y1Raw * vr; y2 = y2Raw * vr;
+        } else if (a2 !== null) {
+          // Older pivot predates the loaded window — extrapolate its x
+          // position from the recent (resolved) anchor using the LOCAL bar
+          // spacing right next to it, so weekend/session gaps elsewhere in
+          // the window don't distort the slope. The line still passes
+          // exactly through the one anchor that IS visible.
+          const neighborArrIdx = a2.arrIdx > 0 ? a2.arrIdx - 1 : a2.arrIdx + 1;
+          const neighbor = loaded[neighborArrIdx];
+          const localDur = neighbor ? Math.abs(loaded[a2.arrIdx].t - neighbor.t) : 0;
+          const xPrevRaw = ts.logicalToCoordinate((a2.idx - 1) as any);
+          if (xPrevRaw === null || localDur === 0) continue;
+          const pxPerBar = a2.xRaw - xPrevRaw;
+          const pxPerSec  = pxPerBar / localDur;
+          x1Raw = a2.xRaw - pxPerSec * (l.t2 - l.t1);
+          x2Raw = a2.xRaw;
+          y1 = y1Raw * vr; y2 = y2Raw * vr;
+        } else {
+          // Neither pivot resolves at all — draw the ray from the
+          // trendline's exact price equation sampled at the oldest/newest
+          // loaded bars instead. Approximate, but nothing is visible to
+          // mismatch against since no circle renders in this case either.
+          const slope = (l.p2 - l.p1) / (l.t2 - l.t1);
+          const priceAt = (t: number) => l.p1 + slope * (t - l.t1);
+          const tOld = loaded[0].t, tNew = loaded[loaded.length - 1].t;
+          const idxOld = ts.timeToIndex(tOld, true);
+          const idxNew = ts.timeToIndex(tNew, true);
+          if (idxOld === null || idxNew === null) continue;
+          const xOldRaw = ts.logicalToCoordinate(idxOld as any);
+          const xNewRaw = ts.logicalToCoordinate(idxNew as any);
+          const yOldRaw = series.priceToCoordinate(priceAt(tOld));
+          const yNewRaw = series.priceToCoordinate(priceAt(tNew));
+          if (xOldRaw === null || xNewRaw === null || yOldRaw === null || yNewRaw === null) continue;
+          x1Raw = xOldRaw; x2Raw = xNewRaw;
+          y1 = yOldRaw * vr; y2 = yNewRaw * vr;
+        }
+
+        const x1 = x1Raw * hr, x2 = x2Raw * hr;
+
+        // Extend as a ray from the most recent anchor to the right edge of
+        // the pane, rather than stopping there.
+        let xEnd = w, yEnd = y2;
+        const dx = x2 - x1;
+        if (dx !== 0) yEnd = y2 + ((y2 - y1) / dx) * (w - x2);
+
+        ctx.beginPath();
+        ctx.moveTo(x1, y1);
+        ctx.lineTo(xEnd, yEnd);
+        ctx.strokeStyle = TRENDLINE_COLOR;
+        ctx.lineWidth = hr;
+        ctx.stroke();
+
+        for (const [cxRaw, cyRaw] of [[circle1X, y1Raw], [circle2X, y2Raw]] as [number | null, number | null][]) {
+          if (cxRaw === null || cyRaw === null) continue;
+          ctx.beginPath();
+          ctx.arc(cxRaw * hr, cyRaw * vr, 3 * hr, 0, Math.PI * 2);
+          ctx.fillStyle = TRENDLINE_COLOR;
+          ctx.fill();
+        }
+      }
+    });
+  }
+}
+class TrendlinePaneView {
+  _p: TrendlinePrimitive;
+  constructor(p: TrendlinePrimitive) { this._p = p; }
+  update() {}
+  zOrder() { return "top" as const; }
+  renderer() { return new TrendlineRenderer(this._p); }
+}
+class TrendlinePrimitive {
+  _chart: any = null;
+  _series: any = null;
+  _lines: TrendlineSegment[];
+  _oldestLoadedTime = 0;
+  _loadedCandles: { t: number; h: number; l: number }[] = [];
+  _views: TrendlinePaneView[] = [];
+  constructor(lines: TrendlineSegment[]) { this._lines = lines; }
+  attached({ chart, series }: any) { this._chart = chart; this._series = series; this._views = [new TrendlinePaneView(this)]; }
+  detached() { this._chart = null; this._series = null; this._views = []; }
+  updateAllViews() { this._views.forEach(v => v.update()); }
+  paneViews() { return this._views; }
+}
+
 // ─── Price history chart ────────────────────────────────────────────────────────
 
-function PriceHistoryChart({ pair, chartTf, setChartTf }: { rows: SheetRow[]; pair: string; chartTf: "1W" | "1D" | "4H" | "1H" | "15M" | "5M" | "1M"; setChartTf: (tf: "1W" | "1D" | "4H" | "1H" | "15M" | "5M" | "1M") => void }) {
+function PriceHistoryChart({ pair, chartTf, setChartTf, livePrice }: { rows: SheetRow[]; pair: string; chartTf: "1W" | "1D" | "4H" | "1H" | "15M" | "5M" | "1M"; setChartTf: (tf: "1W" | "1D" | "4H" | "1H" | "15M" | "5M" | "1M") => void; livePrice: number | null }) {
   const [viewMode,   setViewMode]   = useState<"candles" | "line">("candles");
   const [tfRows,     setTfRows]     = useState<RawCandleTf[]>([]);
   const [tfLoading,  setTfLoading]  = useState(false);
   const [activeInds, setActiveInds] = useState<Set<IndKey>>(new Set());
+  const [isFullscreen, setIsFullscreen] = useState(false);
+
+  // Escape collapses the fullscreen chart view
+  useEffect(() => {
+    if (!isFullscreen) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setIsFullscreen(false); };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [isFullscreen]);
+
+  // Supply/demand zone toggles — Daily on by default, 4H/1H opt-in
+  const [showDailyZones, setShowDailyZones] = useState(true);
+  const [show4HZones,    setShow4HZones]    = useState(false);
+  const [show1HZones,    setShow1HZones]    = useState(false);
+  const [dailyZoneCandles, setDailyZoneCandles] = useState<RawCandleTf[]>([]);
+  const [h4ZoneCandles,    setH4ZoneCandles]    = useState<RawCandleTf[]>([]);
+  const [h1ZoneCandles,    setH1ZoneCandles]    = useState<RawCandleTf[]>([]);
+
+  // Auto trendline toggles — Weekly on by default, Daily/4H/1H off
+  const [showWeeklyTrend, setShowWeeklyTrend] = useState(true);
+  const [showDailyTrend,  setShowDailyTrend]  = useState(false);
+  const [show4HTrend,     setShow4HTrend]     = useState(false);
+  const [show1HTrend,     setShow1HTrend]     = useState(false);
+  const [weeklyTrendCandles, setWeeklyTrendCandles] = useState<RawCandleTf[]>([]);
+  const [dailyTrendCandles,  setDailyTrendCandles]  = useState<RawCandleTf[]>([]);
+  const [h4TrendCandles,     setH4TrendCandles]     = useState<RawCandleTf[]>([]);
+  const [h1TrendCandles,     setH1TrendCandles]     = useState<RawCandleTf[]>([]);
+
+  // Trendline count per timeframe — how many support + resistance rays to
+  // draw for each, configurable from the Lines settings panel.
+  const [trendCounts, setTrendCounts] = useState<{ W: number; D: number; H4: number; H1: number }>({
+    W: 1, D: 1, H4: 1, H1: 1,
+  });
+  const [showTrendSettings, setShowTrendSettings] = useState(false);
+  const trendSettingsBtnRef = useRef<HTMLButtonElement>(null);
 
   const containerRef  = useRef<HTMLDivElement>(null);
   const chartRef      = useRef<IChartApi | null>(null);
   const seriesRef     = useRef<any>(null);
+  const priceLineRef  = useRef<any>(null);
   const indSeriesRef  = useRef<Partial<Record<IndKey, any[]>>>({});
   const tfRowsRef     = useRef<RawCandleTf[]>([]);
   const viewModeRef   = useRef(viewMode);
   const activeIndsRef = useRef<Set<IndKey>>(new Set());
+  const zonePrimRef   = useRef<ZoneBoxPrimitive | null>(null);
+  const zoneBoxesRef  = useRef<ZoneBox[]>([]);
+  const trendPrimRef  = useRef<TrendlinePrimitive | null>(null);
+  const trendLinesRef = useRef<TrendlineSegment[]>([]);
 
   useEffect(() => { tfRowsRef.current    = tfRows;     }, [tfRows]);
   useEffect(() => { viewModeRef.current  = viewMode;   }, [viewMode]);
@@ -820,6 +1120,158 @@ function PriceHistoryChart({ pair, chartTf, setChartTf }: { rows: SheetRow[]; pa
       .catch(() => {})
       .finally(() => setTfLoading(false));
   }, [chartTf, pair]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Daily zone candles — fetched independently of chartTf whenever the Daily
+  // zone toggle is on, then polled every 10s so the still-forming candle's
+  // high/low (and therefore zone tap detection) tracks live price.
+  useEffect(() => {
+    if (!showDailyZones) { setDailyZoneCandles([]); return; }
+    const load = () => invoke<RawCandleTf[]>("get_live_candles", { pair, tf: "1D" })
+      .then(candles => setDailyZoneCandles(candles))
+      .catch(() => setDailyZoneCandles([]));
+    load();
+    const id = setInterval(load, 10_000);
+    return () => clearInterval(id);
+  }, [showDailyZones, pair]);
+
+  // 4H zone candles — fetched + polled only while the 4H zone toggle is on
+  useEffect(() => {
+    if (!show4HZones) { setH4ZoneCandles([]); return; }
+    const load = () => invoke<RawCandleTf[]>("get_live_candles", { pair, tf: "4H" })
+      .then(candles => setH4ZoneCandles(candles))
+      .catch(() => setH4ZoneCandles([]));
+    load();
+    const id = setInterval(load, 10_000);
+    return () => clearInterval(id);
+  }, [show4HZones, pair]);
+
+  // 1H zone candles — fetched + polled only while the 1H zone toggle is on
+  useEffect(() => {
+    if (!show1HZones) { setH1ZoneCandles([]); return; }
+    const load = () => invoke<RawCandleTf[]>("get_live_candles", { pair, tf: "1H" })
+      .then(candles => setH1ZoneCandles(candles))
+      .catch(() => setH1ZoneCandles([]));
+    load();
+    const id = setInterval(load, 10_000);
+    return () => clearInterval(id);
+  }, [show1HZones, pair]);
+
+  // Weekly trendline candles — fetched only while the Weekly trendline toggle is on
+  useEffect(() => {
+    if (!showWeeklyTrend) { setWeeklyTrendCandles([]); return; }
+    invoke<RawCandleTf[]>("get_live_candles", { pair, tf: "1W" })
+      .then(candles => setWeeklyTrendCandles(candles))
+      .catch(() => setWeeklyTrendCandles([]));
+  }, [showWeeklyTrend, pair]);
+
+  // Daily trendline candles — fetched only while the Daily trendline toggle is on
+  useEffect(() => {
+    if (!showDailyTrend) { setDailyTrendCandles([]); return; }
+    invoke<RawCandleTf[]>("get_live_candles", { pair, tf: "1D" })
+      .then(candles => setDailyTrendCandles(candles))
+      .catch(() => setDailyTrendCandles([]));
+  }, [showDailyTrend, pair]);
+
+  // 4H trendline candles — fetched only while the 4H trendline toggle is on
+  useEffect(() => {
+    if (!show4HTrend) { setH4TrendCandles([]); return; }
+    invoke<RawCandleTf[]>("get_live_candles", { pair, tf: "4H" })
+      .then(candles => setH4TrendCandles(candles))
+      .catch(() => setH4TrendCandles([]));
+  }, [show4HTrend, pair]);
+
+  // 1H trendline candles — fetched only while the 1H trendline toggle is on
+  useEffect(() => {
+    if (!show1HTrend) { setH1TrendCandles([]); return; }
+    invoke<RawCandleTf[]>("get_live_candles", { pair, tf: "1H" })
+      .then(candles => setH1TrendCandles(candles))
+      .catch(() => setH1TrendCandles([]));
+  }, [show1HTrend, pair]);
+
+  // Recompute trendline segments + repaint the primitive whenever inputs change
+  useEffect(() => {
+    let lines: TrendlineSegment[] = [];
+    if (showWeeklyTrend) lines = lines.concat(computeAutoTrendlines(weeklyTrendCandles, 2, trendCounts.W));
+    if (showDailyTrend)  lines = lines.concat(computeAutoTrendlines(dailyTrendCandles,  2, trendCounts.D));
+    if (show4HTrend)     lines = lines.concat(computeAutoTrendlines(h4TrendCandles,     2, trendCounts.H4));
+    if (show1HTrend)     lines = lines.concat(computeAutoTrendlines(h1TrendCandles,     2, trendCounts.H1));
+    trendLinesRef.current = lines;
+    if (trendPrimRef.current) trendPrimRef.current._lines = lines;
+    chartRef.current?.applyOptions({});
+  }, [showWeeklyTrend, showDailyTrend, show4HTrend, show1HTrend,
+      weeklyTrendCandles, dailyTrendCandles, h4TrendCandles, h1TrendCandles, trendCounts]);
+
+  // Recompute zone boxes + repaint the primitive whenever inputs change.
+  // Ties zones to the live price ticker: a zone that's still "fresh" per
+  // the candle-based tap history but currently contains the live price is
+  // treated as tapped right away, instead of waiting for the next candle
+  // poll to catch up.
+  useEffect(() => {
+    const toBox = (tfLabel: string, z: SupplyDemandZone, tapped: boolean, insideTapped = false): ZoneBox => ({
+      type: z.type, low: z.zoneLow, high: z.zoneHigh,
+      originTime: Math.floor(new Date(z.originTimestamp).getTime() / 1000) as UTCTimestamp,
+      label: `${tfLabel} ${z.type === "supply" ? "Supply" : "Demand"}${tapped ? " (Tapped)" : insideTapped ? " (Inside Tapped)" : ""} ${z.zoneLow.toFixed(5)}–${z.zoneHigh.toFixed(5)}`,
+      tapped,
+      insideTapped,
+    });
+    const currentPrice = livePrice ?? (tfRows.length > 0 ? tfRows[tfRows.length - 1].close : null);
+
+    const processTf = (tfLabel: string, candles: RawCandleTf[]): { fresh: ZoneBox[]; tapped: ZoneBox[] } => {
+      const freshZones = freshSupplyDemandZones(candles);
+      let liveTapped: SupplyDemandZone | null = null;
+      if (currentPrice !== null) {
+        const idx = freshZones.findIndex(z => currentPrice >= z.zoneLow && currentPrice <= z.zoneHigh);
+        if (idx !== -1) [liveTapped] = freshZones.splice(idx, 1);
+      }
+      let tapped = liveTapped ?? mostRecentTappedZone(candles);
+      // Once a candle CLOSES all the way through the tapped zone — on the
+      // zone's own timeframe, not just an intrabar wick or live tick — it's
+      // no longer relevant context, so hide it. Uses the last fully closed
+      // candle (the array's final entry is still forming while the toggle
+      // polls live).
+      if (tapped && candles.length >= 2) {
+        const lastClosedClose = candles[candles.length - 2].close;
+        const brokenThrough = tapped.type === "demand"
+          ? lastClosedClose < tapped.zoneLow
+          : lastClosedClose > tapped.zoneHigh;
+        if (brokenThrough) tapped = null;
+      }
+      let freshBoxes = freshZones.map(z => {
+        // Yellow if the zone is fully nested inside the tapped zone, OR
+        // merely overlaps it (lives on/touches it) — any price intersection
+        // between the two ranges.
+        const insideTapped = !!tapped && z.zoneLow <= tapped.zoneHigh && z.zoneHigh >= tapped.zoneLow;
+        return toBox(tfLabel, z, false, insideTapped);
+      });
+
+      // Keep only the 4 closest fresh zones of each type, per timeframe, to
+      // the current price — otherwise stale zones from further back clutter
+      // the chart.
+      if (currentPrice !== null) {
+        const closest4 = (t: "supply" | "demand") =>
+          freshBoxes.filter(z => z.type === t)
+            .sort((a, b) => Math.abs((a.low + a.high) / 2 - currentPrice) - Math.abs((b.low + b.high) / 2 - currentPrice))
+            .slice(0, 4);
+        freshBoxes = [...closest4("supply"), ...closest4("demand")];
+      }
+
+      return {
+        fresh: freshBoxes,
+        tapped: tapped ? [toBox(tfLabel, tapped, true)] : [],
+      };
+    };
+
+    let freshBoxes: ZoneBox[] = [];
+    let tappedBoxes: ZoneBox[] = [];
+    if (showDailyZones) { const r = processTf("D",  dailyZoneCandles); freshBoxes = freshBoxes.concat(r.fresh); tappedBoxes = tappedBoxes.concat(r.tapped); }
+    if (show4HZones)    { const r = processTf("4H", h4ZoneCandles);    freshBoxes = freshBoxes.concat(r.fresh); tappedBoxes = tappedBoxes.concat(r.tapped); }
+    if (show1HZones)    { const r = processTf("1H", h1ZoneCandles);    freshBoxes = freshBoxes.concat(r.fresh); tappedBoxes = tappedBoxes.concat(r.tapped); }
+
+    const boxes = [...freshBoxes, ...tappedBoxes];
+    zoneBoxesRef.current = boxes;
+    if (zonePrimRef.current) zonePrimRef.current._zones = boxes;
+    chartRef.current?.applyOptions({});
+  }, [showDailyZones, show4HZones, show1HZones, dailyZoneCandles, h4ZoneCandles, h1ZoneCandles, tfRows, livePrice]);
 
   // ── Indicator series helpers ────────────────────────────────────────────────
 
@@ -953,17 +1405,28 @@ function PriceHistoryChart({ pair, chartTf, setChartTf }: { rows: SheetRow[]; pa
         value: r.close,
       })));
     }
+    if (priceLineRef.current) {
+      try { series.removePriceLine(priceLineRef.current); } catch (_) {}
+      priceLineRef.current = null;
+    }
     const last = candles[candles.length - 1];
     if (last) {
       const isUp = candles.length > 1 ? last.close >= candles[candles.length - 2].close : true;
-      series.createPriceLine({ price: last.close, color: isUp ? "#60a5fa" : "#a78bfa",
+      priceLineRef.current = series.createPriceLine({ price: last.close, color: isUp ? "#60a5fa" : "#a78bfa",
         lineWidth: 1, lineStyle: LineStyle.Dashed, axisLabelVisible: true, title: "" });
     }
-    chart.timeScale().fitContent();
+    // Zoom to the most recent 120 candles rather than fitting the full
+    // (up to 5000-bar) loaded history.
+    const n = candles.length;
+    if (n > 120) {
+      chart.timeScale().setVisibleLogicalRange({ from: n - 120, to: n + 2 });
+    } else {
+      chart.timeScale().fitContent();
+    }
   }, []);
 
   const createSeries = useCallback((chart: IChartApi, mode: string) => {
-    if (seriesRef.current) { chart.removeSeries(seriesRef.current); seriesRef.current = null; }
+    if (seriesRef.current) { chart.removeSeries(seriesRef.current); seriesRef.current = null; priceLineRef.current = null; zonePrimRef.current = null; trendPrimRef.current = null; }
     if (mode === "candles") {
       const s = chart.addSeries(CandlestickSeries, {
         upColor: "#60a5fa", downColor: "#a78bfa",
@@ -980,6 +1443,12 @@ function PriceHistoryChart({ pair, chartTf, setChartTf }: { rows: SheetRow[]; pa
       s.applyOptions({ priceFormat: { type: "price", precision: 5, minMove: 0.00001 } });
       seriesRef.current = s;
     }
+    const zonePrim = new ZoneBoxPrimitive(zoneBoxesRef.current);
+    (seriesRef.current as any).attachPrimitive(zonePrim);
+    zonePrimRef.current = zonePrim;
+    const trendPrim = new TrendlinePrimitive(trendLinesRef.current);
+    (seriesRef.current as any).attachPrimitive(trendPrim);
+    trendPrimRef.current = trendPrim;
     if (tfRowsRef.current.length > 0) applyData(tfRowsRef.current, mode);
   }, [applyData]);
 
@@ -1000,15 +1469,16 @@ function PriceHistoryChart({ pair, chartTf, setChartTf }: { rows: SheetRow[]; pa
     const ro = new ResizeObserver(() => {
       if (!containerRef.current) return;
       const w = containerRef.current.clientWidth;
-      if (w === 0) return;
-      chart.applyOptions({ width: w, height: 480 });
+      const h = containerRef.current.clientHeight;
+      if (w === 0 || h === 0) return;
+      chart.applyOptions({ width: w, height: h });
       if (prevWidth === 0) chart.timeScale().fitContent();
       prevWidth = w;
     });
     ro.observe(containerRef.current);
     return () => {
       ro.disconnect(); chart.remove();
-      chartRef.current = null; seriesRef.current = null; indSeriesRef.current = {};
+      chartRef.current = null; seriesRef.current = null; indSeriesRef.current = {}; zonePrimRef.current = null; trendPrimRef.current = null;
     };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -1023,6 +1493,17 @@ function PriceHistoryChart({ pair, chartTf, setChartTf }: { rows: SheetRow[]; pa
     if (tfRows.length === 0) return;
     applyData(tfRows, viewModeRef.current);
     activeIndsRef.current.forEach(key => addIndSeries(key, tfRows));
+    // Track the oldest loaded bar's time and the loaded high/low series
+    // itself, so the trendline primitive can resolve each pivot anchor to
+    // whichever loaded bar actually touched that price (for the anchor
+    // circle markers), and knows when an anchor is within the loaded window
+    // at all.
+    if (trendPrimRef.current && tfRows.length >= 2) {
+      trendPrimRef.current._oldestLoadedTime = Math.floor(new Date(tfRows[0].timestamp).getTime() / 1000);
+      trendPrimRef.current._loadedCandles = tfRows.map(r => ({
+        t: Math.floor(new Date(r.timestamp).getTime() / 1000), h: r.high, l: r.low,
+      }));
+    }
   }, [tfRows, applyData, addIndSeries]);
 
   const [showIndPanel, setShowIndPanel] = useState(false);
@@ -1038,16 +1519,35 @@ function PriceHistoryChart({ pair, chartTf, setChartTf }: { rows: SheetRow[]; pa
     return () => document.removeEventListener("mousedown", close);
   }, [showIndPanel]);
 
+  useEffect(() => {
+    if (!showTrendSettings) return;
+    const close = (e: MouseEvent) => {
+      if (trendSettingsBtnRef.current && !trendSettingsBtnRef.current.closest("[data-trend-settings-panel]")?.contains(e.target as Node))
+        setShowTrendSettings(false);
+    };
+    document.addEventListener("mousedown", close);
+    return () => document.removeEventListener("mousedown", close);
+  }, [showTrendSettings]);
+
   const anyActive = activeInds.size > 0;
 
   return (
-    <div style={{ width: "66.667%", marginBottom: 10, flexShrink: 0 }}>
+    <div style={isFullscreen ? {
+      position: "fixed", inset: 0, zIndex: 200, background: "#0f1117",
+      padding: 16, display: "flex", flexDirection: "column",
+    } : { width: "66.667%", marginBottom: 10, flexShrink: 0 }}>
       {/* Toolbar: timeframes · Indicators button · view mode */}
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
-        <div style={{ display: "flex", gap: 4 }}>
+      <div style={{ display: "flex", alignItems: "center", marginBottom: 4, flexShrink: 0 }}>
+        <div style={{ display: "flex", gap: 4, alignItems: "center", flexShrink: 0 }}>
+          <span style={{
+            fontSize: 9, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em",
+            color: "var(--text-muted)", marginRight: 2,
+          }}>
+            Chart
+          </span>
           {(["1W","1D","4H","1H","15M","5M","1M"] as const).map(tf => (
             <button key={tf} onClick={() => setChartTf(tf)} style={{
-              fontSize: 9, fontWeight: 700, padding: "4px 10px",
+              fontSize: 9, fontWeight: 700, padding: "4px 6px",
               textTransform: "uppercase", letterSpacing: "0.08em",
               background: chartTf === tf ? "var(--accent-dim)"    : "var(--bg-panel-alt)",
               border:     chartTf === tf ? "1px solid var(--accent-border)" : "1px solid var(--border-medium)",
@@ -1056,14 +1556,126 @@ function PriceHistoryChart({ pair, chartTf, setChartTf }: { rows: SheetRow[]; pa
             }}>{tf}</button>
           ))}
         </div>
-        <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+        {/* Zone + trendline toggles — centered in the gap between 1M and Indicators */}
+        <div style={{ flex: 1, display: "flex", justifyContent: "center" }}>
+          <div style={{ display: "flex", gap: 32, alignItems: "center" }}>
+            <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+              <span style={{
+                fontSize: 9, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em",
+                color: "var(--text-muted)", marginRight: 2,
+              }}>
+                Supply & Demand Zones
+              </span>
+              {([
+                ["D",  showDailyZones, setShowDailyZones],
+                ["4H", show4HZones,    setShow4HZones],
+                ["1H", show1HZones,    setShow1HZones],
+              ] as const).map(([label, active, setter]) => (
+                <button key={label} onClick={() => setter(v => !v)} style={{
+                  fontSize: 9, fontWeight: 700, padding: "4px 6px",
+                  textTransform: "uppercase", letterSpacing: "0.08em",
+                  background: active ? "var(--accent-dim)"    : "var(--bg-panel-alt)",
+                  border:     active ? "1px solid var(--accent-border)" : "1px solid var(--border-medium)",
+                  color:      active ? "var(--accent-text)"   : "var(--text-secondary)",
+                  borderRadius: 8, cursor: "pointer",
+                }}>{label}</button>
+              ))}
+            </div>
+            <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+              <span style={{
+                fontSize: 9, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em",
+                color: "var(--text-muted)", marginRight: 2,
+              }}>
+                Trend Lines
+              </span>
+              {([
+                ["W",  showWeeklyTrend, setShowWeeklyTrend],
+                ["D",  showDailyTrend,  setShowDailyTrend],
+                ["4H", show4HTrend,     setShow4HTrend],
+                ["1H", show1HTrend,     setShow1HTrend],
+              ] as const).map(([label, active, setter]) => (
+                <button key={label} onClick={() => setter(v => !v)} style={{
+                  fontSize: 9, fontWeight: 700, padding: "4px 6px",
+                  textTransform: "uppercase", letterSpacing: "0.08em",
+                  background: active ? "rgba(59,130,246,0.16)" : "var(--bg-panel-alt)",
+                  border:     active ? "1px solid #3b82f6" : "1px solid var(--border-medium)",
+                  color:      active ? "#3b82f6" : "var(--text-secondary)",
+                  borderRadius: 8, cursor: "pointer",
+                }}>{label}</button>
+              ))}
+              {/* Trendline count settings */}
+              <div style={{ position: "relative" }} data-trend-settings-panel>
+                <button
+                  ref={trendSettingsBtnRef}
+                  onClick={() => setShowTrendSettings(v => !v)}
+                  title="Trendline count per timeframe"
+                  style={{
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                    width: 22, height: 22, padding: 0,
+                    background: showTrendSettings ? "rgba(59,130,246,0.16)" : "var(--bg-panel-alt)",
+                    border:     showTrendSettings ? "1px solid #3b82f6" : "1px solid var(--border-medium)",
+                    borderRadius: 8, cursor: "pointer",
+                    color: showTrendSettings ? "#3b82f6" : "var(--text-secondary)",
+                  }}
+                >
+                  <Settings size={12} />
+                </button>
+                {showTrendSettings && (
+                  <div style={{
+                    position: "absolute", top: "calc(100% + 6px)", left: 0, zIndex: 50,
+                    background: "var(--bg-panel)", border: "1px solid var(--border-medium)",
+                    borderRadius: 10, padding: "10px 12px", minWidth: 190,
+                    boxShadow: "0 8px 24px rgba(0,0,0,0.45)",
+                  }}>
+                    <div style={{ fontSize: 9, fontWeight: 800, textTransform: "uppercase",
+                      letterSpacing: "0.1em", color: "var(--text-muted)", marginBottom: 8 }}>
+                      Trendlines per timeframe
+                    </div>
+                    {([
+                      ["W",  "Weekly"] as const,
+                      ["D",  "Daily"]  as const,
+                      ["H4", "4H"]     as const,
+                      ["H1", "1H"]     as const,
+                    ]).map(([key, label]) => (
+                      <div key={key} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "4px 0" }}>
+                        <span style={{ fontSize: 11, color: "var(--text-secondary)" }}>{label}</span>
+                        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                          <button
+                            onClick={() => setTrendCounts(c => ({ ...c, [key]: Math.max(0, c[key] - 1) }))}
+                            style={{
+                              width: 18, height: 18, borderRadius: 4, cursor: "pointer",
+                              background: "var(--bg-panel-alt)", border: "1px solid var(--border-medium)",
+                              color: "var(--text-secondary)", fontSize: 11, lineHeight: 1,
+                            }}
+                          >−</button>
+                          <span style={{ fontSize: 11, fontWeight: 700, color: "var(--text-primary)", width: 14, textAlign: "center" }}>
+                            {trendCounts[key]}
+                          </span>
+                          <button
+                            onClick={() => setTrendCounts(c => ({ ...c, [key]: Math.min(10, c[key] + 1) }))}
+                            style={{
+                              width: 18, height: 18, borderRadius: 4, cursor: "pointer",
+                              background: "var(--bg-panel-alt)", border: "1px solid var(--border-medium)",
+                              color: "var(--text-secondary)", fontSize: 11, lineHeight: 1,
+                            }}
+                          >+</button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+        <div style={{ display: "flex", gap: 6, alignItems: "center", flexShrink: 0 }}>
           {/* Indicators button + dropdown */}
           <div style={{ position: "relative" }} data-ind-panel>
             <button
               ref={indBtnRef}
               onClick={() => setShowIndPanel(v => !v)}
               style={{
-                fontSize: 9, fontWeight: 700, padding: "4px 10px",
+                fontSize: 9, fontWeight: 700, padding: "4px 6px",
                 textTransform: "uppercase", letterSpacing: "0.08em",
                 background: anyActive ? "var(--accent-dim)"    : "var(--bg-panel-alt)",
                 border:     anyActive ? "1px solid var(--accent-border)" : "1px solid var(--border-medium)",
@@ -1115,26 +1727,41 @@ function PriceHistoryChart({ pair, chartTf, setChartTf }: { rows: SheetRow[]; pa
           </div>
           {/* View mode toggle */}
           <button onClick={() => setViewMode(v => v === "candles" ? "line" : "candles")} style={{
-            fontSize: 9, fontWeight: 700, padding: "4px 10px",
+            fontSize: 9, fontWeight: 700, padding: "4px 6px",
             textTransform: "uppercase", letterSpacing: "0.08em",
             background: "var(--bg-panel-alt)", border: "1px solid var(--border-medium)",
             borderRadius: 8, color: "var(--text-secondary)", cursor: "pointer",
           }}>{viewMode}</button>
+          {/* Expand/collapse fullscreen chart view */}
+          <button
+            onClick={() => setIsFullscreen(v => !v)}
+            title={isFullscreen ? "Collapse" : "Expand"}
+            style={{
+              display: "flex", alignItems: "center", justifyContent: "center",
+              width: 22, height: 22, padding: 0,
+              background: isFullscreen ? "var(--accent-dim)" : "var(--bg-panel-alt)",
+              border:     isFullscreen ? "1px solid var(--accent-border)" : "1px solid var(--border-medium)",
+              borderRadius: 8, cursor: "pointer",
+              color: isFullscreen ? "var(--accent-text)" : "var(--text-secondary)",
+            }}
+          >
+            {isFullscreen ? <Minimize2 size={12} /> : <Maximize2 size={12} />}
+          </button>
         </div>
       </div>
-      <div style={{ borderRadius: 14, overflow: "hidden", position: "relative" }}>
+      <div style={{ borderRadius: 14, overflow: "hidden", position: "relative", ...(isFullscreen ? { flex: 1, minHeight: 0 } : {}) }}>
         {tfLoading && (
           <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", zIndex: 10, pointerEvents: "none" }}>
             <span style={{ fontSize: 11, color: "var(--text-muted)", letterSpacing: "0.05em" }}>Loading…</span>
           </div>
         )}
-        <div ref={containerRef} style={{ height: 480, opacity: tfLoading ? 0.3 : 1 }} />
+        <div ref={containerRef} style={{ height: isFullscreen ? "100%" : 480, opacity: tfLoading ? 0.3 : 1 }} />
       </div>
     </div>
   );
 }
 
-function PricePanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolean }) {
+function PricePanelBodyImpl({ rows, expanded }: { rows: SheetRow[]; expanded?: boolean }) {
   const bodyRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -1302,14 +1929,14 @@ function buildMacdAnalysis(rows: MacdRow[]): { headline: string; bullets: string
   return { headline, bullets, description };
 }
 
-function MacdPanelBody({ pair, indicatorTf, expanded }: { pair: string; indicatorTf: string; expanded?: boolean }) {
+function MacdPanelBodyImpl({ pair, indicatorTf, expanded }: { pair: string; indicatorTf: string; expanded?: boolean }) {
   const [liveRows, setLiveRows] = useState<MacdRow[]>([]);
   const [loading,  setLoading]  = useState(false);
 
   useEffect(() => {
     setLoading(true);
     setLiveRows([]);
-    invoke<RawCandleV3[]>("get_live_candles_computed", { pair, tf: indicatorTf })
+    getStackCandles(pair, indicatorTf)
       .then(candles => setLiveRows(candles.map(c => ({
         date: c.date, macd: c.macd, macdSignal: c.macd_signal, macdHistogram: c.macd_histogram,
       }))))
@@ -1567,14 +2194,14 @@ function RsiTooltip({ active, payload }: { active?: boolean; payload?: Array<{ n
   );
 }
 
-function RsiPanelBody({ pair, indicatorTf, expanded }: { pair: string; indicatorTf: string; expanded?: boolean }) {
+function RsiPanelBodyImpl({ pair, indicatorTf, expanded }: { pair: string; indicatorTf: string; expanded?: boolean }) {
   const [liveRows, setLiveRows] = useState<{ date: string; rsi9: number; stochRsiK: number; stochRsiD: number }[]>([]);
   const [loading,  setLoading]  = useState(false);
 
   useEffect(() => {
     setLoading(true);
     setLiveRows([]);
-    invoke<RawCandleV3[]>("get_live_candles_computed", { pair, tf: indicatorTf })
+    getStackCandles(pair, indicatorTf)
       .then(candles => setLiveRows(candles.map(c => ({
         date:      c.date,
         rsi9:      c.rsi9,
@@ -1815,14 +2442,14 @@ function Rsi14Tooltip({ active, payload }: { active?: boolean; payload?: Array<{
   );
 }
 
-function Rsi14PanelBody({ pair, indicatorTf, expanded }: { pair: string; indicatorTf: string; expanded?: boolean }) {
+function Rsi14PanelBodyImpl({ pair, indicatorTf, expanded }: { pair: string; indicatorTf: string; expanded?: boolean }) {
   const [liveRows, setLiveRows] = useState<{ date: string; rsi14: number; close: number; sma50: number; sma200: number }[]>([]);
   const [loading,  setLoading]  = useState(false);
 
   useEffect(() => {
     setLoading(true);
     setLiveRows([]);
-    invoke<RawCandleV3[]>("get_live_candles_computed", { pair, tf: indicatorTf })
+    getStackCandles(pair, indicatorTf)
       .then(candles => setLiveRows(candles.map(c => ({
         date:   c.date,
         rsi14:  c.rsi14,
@@ -2330,14 +2957,14 @@ function buildKeltAnalysis(rows: KeltRow[]): { headline: string; bullets: string
 
 const MA_WINDOW = 20;
 
-function MaPanelBody({ pair, indicatorTf, expanded }: { pair: string; indicatorTf: string; expanded?: boolean }) {
+function MaPanelBodyImpl({ pair, indicatorTf, expanded }: { pair: string; indicatorTf: string; expanded?: boolean }) {
   const [liveRows, setLiveRows] = useState<MaRow[]>([]);
   const [loading,  setLoading]  = useState(false);
 
   useEffect(() => {
     setLoading(true);
     setLiveRows([]);
-    invoke<RawCandleV3[]>("get_live_candles_computed", { pair, tf: indicatorTf })
+    getStackCandles(pair, indicatorTf)
       .then(candles => setLiveRows(candles.map(c => ({
         date: c.date, open: c.open, high: c.high, low: c.low, close: c.close,
         ema9: c.ema9, ema20: c.ema20, ema50: c.ema50, ema100: c.ema100, ema200: c.ema200,
@@ -2606,14 +3233,14 @@ function MaPanelBody({ pair, indicatorTf, expanded }: { pair: string; indicatorT
 
 const ADX_WINDOW = 20;
 
-function AdxPanelBody({ pair, indicatorTf, expanded }: { pair: string; indicatorTf: string; expanded?: boolean }) {
+function AdxPanelBodyImpl({ pair, indicatorTf, expanded }: { pair: string; indicatorTf: string; expanded?: boolean }) {
   const [liveRows, setLiveRows] = useState<AdxRow[]>([]);
   const [loading,  setLoading]  = useState(false);
 
   useEffect(() => {
     setLoading(true);
     setLiveRows([]);
-    invoke<RawCandleV3[]>("get_live_candles_computed", { pair, tf: indicatorTf })
+    getStackCandles(pair, indicatorTf)
       .then(candles => setLiveRows(candles.map(c => ({
         date: c.date, diPlus: c.di_plus, diMinus: c.di_minus, adx: c.adx,
       }))))
@@ -2763,7 +3390,7 @@ function AdxPanelBody({ pair, indicatorTf, expanded }: { pair: string; indicator
 const ICHI_WINDOW = 20;
 const ICHI_SHIFT  = 26; // Senkou spans plotted 26 bars forward; Chikou plotted 26 bars back
 
-function IchiPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolean }) {
+function IchiPanelBodyImpl({ rows, expanded }: { rows: SheetRow[]; expanded?: boolean }) {
   const windowSize  = expanded ? 40 : ICHI_WINDOW;
   const totalPoints = windowSize + ICHI_SHIFT; // price window + cloud projection zone
   const maxOffset   = Math.max(0, rows.length - windowSize);
@@ -3175,7 +3802,7 @@ function buildSessionAnalysis(rows: SheetRow[]): { headline: string; bullets: st
   return { headline, bullets, description };
 }
 
-function SessionPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolean }) {
+function SessionPanelBodyImpl({ rows, expanded }: { rows: SheetRow[]; expanded?: boolean }) {
   const windowSize = expanded ? 40 : SESSION_WINDOW;
   const maxOffset  = Math.max(0, rows.length - windowSize - 1);
   const [offset, setOffset] = useState(0);
@@ -3413,14 +4040,14 @@ function buildRocAnalysis(rows: RocRow[]): { headline: string; bullets: string[]
 
 const AVGP_WINDOW = 20;
 
-function AvgPricePanelBody({ pair, indicatorTf, expanded }: { pair: string; indicatorTf: string; expanded?: boolean }) {
+function AvgPricePanelBodyImpl({ pair, indicatorTf, expanded }: { pair: string; indicatorTf: string; expanded?: boolean }) {
   const [liveRows, setLiveRows] = useState<AvgPriceRow[]>([]);
   const [loading,  setLoading]  = useState(false);
 
   useEffect(() => {
     setLoading(true);
     setLiveRows([]);
-    invoke<RawCandleV3[]>("get_live_candles_computed", { pair, tf: indicatorTf })
+    getStackCandles(pair, indicatorTf)
       .then(candles => setLiveRows(candles.map(c => ({
         date: c.date, high: c.high, low: c.low, close: c.close,
       }))))
@@ -3579,14 +4206,14 @@ function AvgPricePanelBody({ pair, indicatorTf, expanded }: { pair: string; indi
 
 const ROC_WINDOW = 20;
 
-function RocPanelBody({ pair, indicatorTf, expanded }: { pair: string; indicatorTf: string; expanded?: boolean }) {
+function RocPanelBodyImpl({ pair, indicatorTf, expanded }: { pair: string; indicatorTf: string; expanded?: boolean }) {
   const [liveRows, setLiveRows] = useState<RocRow[]>([]);
   const [loading,  setLoading]  = useState(false);
 
   useEffect(() => {
     setLoading(true);
     setLiveRows([]);
-    invoke<RawCandleV3[]>("get_live_candles_computed", { pair, tf: indicatorTf })
+    getStackCandles(pair, indicatorTf)
       .then(candles => setLiveRows(candles.map(c => ({ date: c.date, close: c.close }))))
       .catch(() => {})
       .finally(() => setLoading(false));
@@ -3831,14 +4458,14 @@ function buildAtrAnalysis(rows: AtrRow[]): { headline: string; bullets: string[]
 
 const ATR_WINDOW = 20;
 
-function AtrPanelBody({ pair, indicatorTf, expanded }: { pair: string; indicatorTf: string; expanded?: boolean }) {
+function AtrPanelBodyImpl({ pair, indicatorTf, expanded }: { pair: string; indicatorTf: string; expanded?: boolean }) {
   const [liveRows, setLiveRows] = useState<AtrRow[]>([]);
   const [loading,  setLoading]  = useState(false);
 
   useEffect(() => {
     setLoading(true);
     setLiveRows([]);
-    invoke<RawCandleV3[]>("get_live_candles_computed", { pair, tf: indicatorTf })
+    getStackCandles(pair, indicatorTf)
       .then(candles => setLiveRows(candles.map(c => ({ date: c.date, atr14: c.atr14 }))))
       .catch(() => {})
       .finally(() => setLoading(false));
@@ -4056,14 +4683,14 @@ function buildSqueezeAnalysis(rows: SqzRow[]): { headline: string; bullets: stri
   return { headline, bullets, description };
 }
 
-function SqueezePanelBody({ pair, indicatorTf, expanded }: { pair: string; indicatorTf: string; expanded?: boolean }) {
+function SqueezePanelBodyImpl({ pair, indicatorTf, expanded }: { pair: string; indicatorTf: string; expanded?: boolean }) {
   const [liveRows, setLiveRows] = useState<SqzRow[]>([]);
   const [loading,  setLoading]  = useState(false);
 
   useEffect(() => {
     setLoading(true);
     setLiveRows([]);
-    invoke<RawCandleV3[]>("get_live_candles_computed", { pair, tf: indicatorTf })
+    getStackCandles(pair, indicatorTf)
       .then(candles => setLiveRows(candles.map(c => ({
         date: c.date, high: c.high, low: c.low, close: c.close, sma20: c.sma20,
         bbUpper: c.bb_upper, bbLower: c.bb_lower,
@@ -4312,7 +4939,7 @@ function fsPercentileRank(sorted: number[], value: number): number {
   return parseFloat(((lo / sorted.length) * 100).toFixed(1));
 }
 
-function FailureSwingPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolean }) {
+function FailureSwingPanelBodyImpl({ rows, expanded }: { rows: SheetRow[]; expanded?: boolean }) {
   const showCdf   = true;
   const showToday = true;
   const showPercs = true;
@@ -4644,14 +5271,14 @@ function buildMarketStructureAnalysis(rows: MsRow[]): { bullets: string[]; descr
   return { bullets, description };
 }
 
-function MarketStructurePanelBody({ pair, indicatorTf, expanded }: { pair: string; indicatorTf: string; expanded?: boolean }) {
+function MarketStructurePanelBodyImpl({ pair, indicatorTf, expanded }: { pair: string; indicatorTf: string; expanded?: boolean }) {
   const [liveRows, setLiveRows] = useState<MsRow[]>([]);
   const [loading,  setLoading]  = useState(false);
 
   useEffect(() => {
     setLoading(true);
     setLiveRows([]);
-    invoke<RawCandleV3[]>("get_live_candles_computed", { pair, tf: indicatorTf })
+    getStackCandles(pair, indicatorTf)
       .then(candles => setLiveRows(candles.map(c => ({
         date: c.date, open: c.open, high: c.high, low: c.low, close: c.close, atr14: c.atr14,
       }))))
@@ -5035,14 +5662,14 @@ function MarketStructurePanelBody({ pair, indicatorTf, expanded }: { pair: strin
 
 const VOLA_WINDOW = 20;
 
-function VolatilityPanelBody({ pair, indicatorTf, expanded }: { pair: string; indicatorTf: string; expanded?: boolean }) {
+function VolatilityPanelBodyImpl({ pair, indicatorTf, expanded }: { pair: string; indicatorTf: string; expanded?: boolean }) {
   const [liveRows, setLiveRows] = useState<VolaRow[]>([]);
   const [loading,  setLoading]  = useState(false);
 
   useEffect(() => {
     setLoading(true);
     setLiveRows([]);
-    invoke<RawCandleV3[]>("get_live_candles_computed", { pair, tf: indicatorTf })
+    getStackCandles(pair, indicatorTf)
       .then(candles => setLiveRows(candles.map(c => ({
         date: c.date, open: c.open, high: c.high, low: c.low, close: c.close,
         bbUpper: c.bb_upper, bbMiddle: c.bb_middle, bbLower: c.bb_lower, histVol: c.hist_vol,
@@ -5325,14 +5952,14 @@ function buildMomentumAnalysis(rows: CciRow[]): { headline: string; bullets: str
 
 const MOM_WINDOW = 20;
 
-function CciPanelBody({ pair, indicatorTf, expanded }: { pair: string; indicatorTf: string; expanded?: boolean }) {
+function CciPanelBodyImpl({ pair, indicatorTf, expanded }: { pair: string; indicatorTf: string; expanded?: boolean }) {
   const [liveRows, setLiveRows] = useState<CciRow[]>([]);
   const [loading,  setLoading]  = useState(false);
 
   useEffect(() => {
     setLoading(true);
     setLiveRows([]);
-    invoke<RawCandleV3[]>("get_live_candles_computed", { pair, tf: indicatorTf })
+    getStackCandles(pair, indicatorTf)
       .then(candles => setLiveRows(candles.map(c => ({
         date:  c.date,
         cci:   c.cci,
@@ -5508,14 +6135,14 @@ function buildWrAnalysis(rows: WrRow[]): { headline: string; bullets: string[]; 
   return { headline, bullets, description };
 }
 
-function WrPanelBody({ pair, indicatorTf, expanded }: { pair: string; indicatorTf: string; expanded?: boolean }) {
+function WrPanelBodyImpl({ pair, indicatorTf, expanded }: { pair: string; indicatorTf: string; expanded?: boolean }) {
   const [liveRows, setLiveRows] = useState<WrRow[]>([]);
   const [loading,  setLoading]  = useState(false);
 
   useEffect(() => {
     setLoading(true);
     setLiveRows([]);
-    invoke<RawCandleV3[]>("get_live_candles_computed", { pair, tf: indicatorTf })
+    getStackCandles(pair, indicatorTf)
       .then(candles => setLiveRows(candles.map(c => ({ date: c.date, high: c.high, low: c.low, close: c.close }))))
       .catch(() => {})
       .finally(() => setLoading(false));
@@ -5698,7 +6325,7 @@ function buildPivotAnalysis(rows: SheetRow[]): { headline: string; bullets: stri
 
 const PVT_WINDOW = 20;
 
-function PivotPanelBody({ rows, expanded }: { rows: SheetRow[]; expanded?: boolean }) {
+function PivotPanelBodyImpl({ rows, expanded }: { rows: SheetRow[]; expanded?: boolean }) {
   const windowSize = expanded ? 40 : PVT_WINDOW;
   const maxOffset  = Math.max(0, rows.length - windowSize);
   const [offset, setOffset]       = useState(0);
@@ -6019,14 +6646,14 @@ function buildVolumeAnalysis(rows: VolumeRow[]): { headline: string; bullets: st
 
 const VOL_WINDOW = 20;
 
-function VolumePanelBody({ pair, indicatorTf, expanded }: { pair: string; indicatorTf: string; expanded?: boolean }) {
+function VolumePanelBodyImpl({ pair, indicatorTf, expanded }: { pair: string; indicatorTf: string; expanded?: boolean }) {
   const [liveRows, setLiveRows] = useState<VolumeRow[]>([]);
   const [loading,  setLoading]  = useState(false);
 
   useEffect(() => {
     setLoading(true);
     setLiveRows([]);
-    invoke<RawCandleV3[]>("get_live_candles_computed", { pair, tf: indicatorTf })
+    getStackCandles(pair, indicatorTf)
       .then(candles => setLiveRows(candles.map(c => ({
         date: c.date, open: c.open, close: c.close, volume: c.volume, volumeSma20: c.volume_sma20,
       }))))
@@ -6184,14 +6811,14 @@ function VolumePanelBody({ pair, indicatorTf, expanded }: { pair: string; indica
 
 const KELT_WINDOW = 20;
 
-function KeltPanelBody({ pair, indicatorTf, expanded }: { pair: string; indicatorTf: string; expanded?: boolean }) {
+function KeltPanelBodyImpl({ pair, indicatorTf, expanded }: { pair: string; indicatorTf: string; expanded?: boolean }) {
   const [liveRows, setLiveRows] = useState<KeltRow[]>([]);
   const [loading,  setLoading]  = useState(false);
 
   useEffect(() => {
     setLoading(true);
     setLiveRows([]);
-    invoke<RawCandleV3[]>("get_live_candles_computed", { pair, tf: indicatorTf })
+    getStackCandles(pair, indicatorTf)
       .then(candles => setLiveRows(candles.map(c => ({
         date: c.date, open: c.open, high: c.high, low: c.low, close: c.close,
         keltnerUpper: c.keltner_upper, keltnerMiddle: c.keltner_middle, keltnerLower: c.keltner_lower,
@@ -6426,7 +7053,7 @@ function KeltPanelBody({ pair, indicatorTf, expanded }: { pair: string; indicato
   );
 }
 
-function buildSynthesisNarrative(result: AnalysisResult): {
+function buildSynthesisNarrative(result: AnalysisResult, pair: string): {
   bullets: string[];
   summary: string;
   narrative: string;
@@ -6474,8 +7101,8 @@ function buildSynthesisNarrative(result: AnalysisResult): {
 
   // Rich analytical narrative for the right column
   let narrative = isLong
-    ? `EUR/USD is presenting a ${confLabel} long opportunity at ${confidence}% confidence. `
-    : `EUR/USD is presenting a ${confLabel} short opportunity at ${confidence}% confidence. `;
+    ? `${pair} is presenting a ${confLabel} long opportunity at ${confidence}% confidence. `
+    : `${pair} is presenting a ${confLabel} short opportunity at ${confidence}% confidence. `;
 
   if (confidence >= 80) {
     narrative += `Signal alignment is broad and consistent — this is a well-supported, high-quality setup. `;
@@ -6523,7 +7150,7 @@ function buildSynthesisNarrative(result: AnalysisResult): {
   return { bullets, summary, narrative, keyInsight };
 }
 
-function AiSynthesisPanelBody({ result, expanded }: { result: AnalysisResult; expanded?: boolean }) {
+function AiSynthesisPanelBodyImpl({ result, pair, expanded }: { result: AnalysisResult; pair: string; expanded?: boolean }) {
   const { direction, confidence, longScore, shortScore, riskReward, entry, stopLoss, tp1, tp2, tp3, signals } = result;
   const { trend, momentum, structure, volatility } = signals;
 
@@ -6542,7 +7169,7 @@ function AiSynthesisPanelBody({ result, expanded }: { result: AnalysisResult; ex
     { name: "Volatility", ...volatility },
   ];
 
-  const { bullets, summary, narrative } = buildSynthesisNarrative(result);
+  const { bullets, summary, narrative } = buildSynthesisNarrative(result, pair);
 
   if (!expanded) {
     return (
@@ -7021,14 +7648,14 @@ function buildRegimeAnalysis(rows: RegimeRow[]): { headline: string; bullets: st
   return { headline, bullets, description };
 }
 
-function RegimePanelBody({ pair, indicatorTf, expanded, showCandles, onToggleCandles }: { pair: string; indicatorTf: string; expanded?: boolean; showCandles: boolean; onToggleCandles: () => void }) {
+function RegimePanelBodyImpl({ pair, indicatorTf, expanded, showCandles, onToggleCandles }: { pair: string; indicatorTf: string; expanded?: boolean; showCandles: boolean; onToggleCandles: () => void }) {
   const [liveRows, setLiveRows] = useState<RegimeRow[]>([]);
   const [loading,  setLoading]  = useState(false);
 
   useEffect(() => {
     setLoading(true);
     setLiveRows([]);
-    invoke<RawCandleV3[]>("get_live_candles_computed", { pair, tf: indicatorTf })
+    getStackCandles(pair, indicatorTf)
       .then(candles => setLiveRows(candles.map(c => ({
         date: c.date, open: c.open, high: c.high, low: c.low, close: c.close,
         adx: c.adx, diPlus: c.di_plus, diMinus: c.di_minus,
@@ -7310,7 +7937,7 @@ function RegimePanelBody({ pair, indicatorTf, expanded, showCandles, onToggleCan
 
 // ─── Candle Context Panel body ────────────────────────────────────────────────
 
-function CandleContextPanelBody({ pair, indicatorTf, expanded }: { pair: string; indicatorTf: string; expanded?: boolean }) {
+function CandleContextPanelBodyImpl({ pair, indicatorTf, expanded }: { pair: string; indicatorTf: string; expanded?: boolean }) {
   const [liveRows, setLiveRows] = useState<CandleCtxRow[]>([]);
   const [loading,  setLoading]  = useState(false);
   const [ohlcOpen, setOhlcOpen] = useState(false);
@@ -7318,7 +7945,7 @@ function CandleContextPanelBody({ pair, indicatorTf, expanded }: { pair: string;
   useEffect(() => {
     setLoading(true);
     setLiveRows([]);
-    invoke<RawCandleV3[]>("get_live_candles_computed", { pair, tf: indicatorTf })
+    getStackCandles(pair, indicatorTf)
       .then(candles => setLiveRows(candles.map(c => ({
         date: c.date, open: c.open, high: c.high, low: c.low, close: c.close,
       }))))
@@ -7581,7 +8208,7 @@ type StackTfState = { dir: "bullish" | "bearish" | "neutral"; cond: "trending" |
 // row over STACK_TFS, and the expanded legend. Panels differ only in the header label, the
 // per-candle compute, and the four legend rules — all passed as props. Consumes the shared
 // indicator engine (get_live_candles_computed) via getStackCandles; no UI-side math.
-function StackPanelBody({ pair, expanded, headerLabel, compute, bullRule, bearRule, trendRule, consolRule, labelMinWidth }: {
+function StackPanelBodyImpl({ pair, expanded, headerLabel, compute, bullRule, bearRule, trendRule, consolRule, labelMinWidth }: {
   pair: string;
   expanded?: boolean;
   headerLabel: string;
@@ -7675,7 +8302,7 @@ const macdStackCompute = (last: RawCandleV3): StackTfState => {
   const trending = (last.macd > 0 && last.macd_signal > 0) || (last.macd < 0 && last.macd_signal < 0);
   return { dir, cond: trending ? "trending" : "consolidating" };
 };
-function MacdStackPanelBody({ pair, expanded }: { pair: string; expanded?: boolean }) {
+function MacdStackPanelBodyImpl({ pair, expanded }: { pair: string; expanded?: boolean }) {
   return <StackPanelBody pair={pair} expanded={expanded} headerLabel="vs Signal" compute={macdStackCompute}
     bullRule="MACD line above its signal line" bearRule="MACD line below its signal line"
     trendRule="MACD and signal on the same side of zero" consolRule="MACD and signal straddle the zero line" labelMinWidth />;
@@ -7688,7 +8315,7 @@ const emaStackCompute = (last: RawCandleV3): StackTfState => {
   const trending = (last.close > last.ema9 && last.close > last.ema20) || (last.close < last.ema9 && last.close < last.ema20);
   return { dir, cond: trending ? "trending" : "consolidating" };
 };
-function EmaStackPanelBody({ pair, expanded }: { pair: string; expanded?: boolean }) {
+function EmaStackPanelBodyImpl({ pair, expanded }: { pair: string; expanded?: boolean }) {
   return <StackPanelBody pair={pair} expanded={expanded} headerLabel="9 vs 20" compute={emaStackCompute}
     bullRule="EMA9 above EMA20" bearRule="EMA9 below EMA20"
     trendRule="price above or below both EMAs" consolRule="price between the two EMAs" />;
@@ -7701,7 +8328,7 @@ const ema200StackCompute = (last: RawCandleV3): StackTfState => {
   const trending = (last.close > last.ema50 && last.close > last.ema200) || (last.close < last.ema50 && last.close < last.ema200);
   return { dir, cond: trending ? "trending" : "consolidating" };
 };
-function Ema200StackPanelBody({ pair, expanded }: { pair: string; expanded?: boolean }) {
+function Ema200StackPanelBodyImpl({ pair, expanded }: { pair: string; expanded?: boolean }) {
   return <StackPanelBody pair={pair} expanded={expanded} headerLabel="50 vs 200" compute={ema200StackCompute}
     bullRule="EMA50 above EMA200" bearRule="EMA50 below EMA200"
     trendRule="price above or below both EMAs" consolRule="price between the two EMAs" />;
@@ -7714,7 +8341,7 @@ const adxStackCompute = (last: RawCandleV3): StackTfState => {
   const trending = last.adx >= 25;
   return { dir, cond: trending ? "trending" : "consolidating" };
 };
-function AdxStackPanelBody({ pair, expanded }: { pair: string; expanded?: boolean }) {
+function AdxStackPanelBodyImpl({ pair, expanded }: { pair: string; expanded?: boolean }) {
   return <StackPanelBody pair={pair} expanded={expanded} headerLabel="DI / ADX" compute={adxStackCompute}
     bullRule="+DI above −DI" bearRule="−DI above +DI"
     trendRule="ADX at or above 25" consolRule="ADX below 25" />;
@@ -7727,7 +8354,7 @@ const rsiStackCompute = (last: RawCandleV3): StackTfState => {
   const trending = last.rsi14 >= 60 || last.rsi14 <= 40;
   return { dir, cond: trending ? "trending" : "consolidating" };
 };
-function RsiStackPanelBody({ pair, expanded }: { pair: string; expanded?: boolean }) {
+function RsiStackPanelBodyImpl({ pair, expanded }: { pair: string; expanded?: boolean }) {
   return <StackPanelBody pair={pair} expanded={expanded} headerLabel="RSI 14" compute={rsiStackCompute}
     bullRule="RSI above 50" bearRule="RSI below 50"
     trendRule="RSI at or beyond 60 / 40" consolRule="RSI between 40 and 60" />;
@@ -7740,7 +8367,7 @@ const squeezeStackCompute = (last: RawCandleV3): StackTfState => {
   const squeezeOn = last.bb_upper <= last.keltner_upper && last.bb_lower >= last.keltner_lower;
   return { dir, cond: squeezeOn ? "consolidating" : "trending" };
 };
-function SqueezeStackPanelBody({ pair, expanded }: { pair: string; expanded?: boolean }) {
+function SqueezeStackPanelBodyImpl({ pair, expanded }: { pair: string; expanded?: boolean }) {
   return <StackPanelBody pair={pair} expanded={expanded} headerLabel="Squeeze" compute={squeezeStackCompute}
     bullRule="price above Bollinger basis" bearRule="price below Bollinger basis"
     trendRule="Bollinger bands outside Keltner (released)" consolRule="Bollinger bands inside Keltner (in squeeze)" />;
@@ -7753,7 +8380,7 @@ const cciStackCompute = (last: RawCandleV3): StackTfState => {
   const trending = Math.abs(last.cci) > 100;
   return { dir, cond: trending ? "trending" : "consolidating" };
 };
-function CciStackPanelBody({ pair, expanded }: { pair: string; expanded?: boolean }) {
+function CciStackPanelBodyImpl({ pair, expanded }: { pair: string; expanded?: boolean }) {
   return <StackPanelBody pair={pair} expanded={expanded} headerLabel="CCI" compute={cciStackCompute}
     bullRule="CCI above 0" bearRule="CCI below 0"
     trendRule="CCI beyond ±100" consolRule="CCI within ±100" />;
@@ -7762,7 +8389,7 @@ function CciStackPanelBody({ pair, expanded }: { pair: string; expanded?: boolea
 // Market Structure Stack — multi-timeframe swing-structure bias via the shared
 // computeMarketStructure engine: HH/HL = bullish, LH/LL = bearish, Range/Shifting = consolidating.
 // Reuses the deduped getStackCandles fetch and the shared structure engine; no UI-side math.
-function MarketStructureStackPanelBody({ pair, expanded }: { pair: string; expanded?: boolean }) {
+function MarketStructureStackPanelBodyImpl({ pair, expanded }: { pair: string; expanded?: boolean }) {
   type TfState = { dir: "bullish" | "bearish" | "neutral"; cond: "trending" | "consolidating" };
   const [states, setStates] = useState<Record<string, TfState>>({});
   const [loading, setLoading] = useState(false);
@@ -7970,7 +8597,7 @@ function formatNewsDate(dateStr: string): string {
   } catch { return ""; }
 }
 
-function ForexNewsPanel({ news, loading }: { news: NewsArticle[]; loading: boolean }) {
+function ForexNewsPanel({ news, loading, pair }: { news: NewsArticle[]; loading: boolean; pair: string }) {
   return (
     <div style={{ display: "flex", flexDirection: "column", height: 338, marginTop: 14 }}>
       <div style={{
@@ -7994,7 +8621,7 @@ function ForexNewsPanel({ news, loading }: { news: NewsArticle[]; loading: boole
               padding: "8px 10px", cursor: "pointer",
             }}
           >
-            <div style={{ fontSize: 11, fontWeight: 500, color: "var(--text-primary)", lineHeight: 1.4, marginBottom: 4 }}>
+            <div style={{ fontSize: 13, fontWeight: 500, color: "var(--text-primary)", lineHeight: 1.4, marginBottom: 4 }}>
               {item.title}
             </div>
             <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
@@ -8015,12 +8642,49 @@ function ForexNewsPanel({ news, loading }: { news: NewsArticle[]; loading: boole
           <span style={{ fontSize: 9, color: "var(--text-muted)" }}>Updating…</span>
         )}
         <span style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em", color: "var(--text-muted)" }}>
-          Live News · EUR/USD
+          Live News · {pair}
         </span>
       </div>
     </div>
   );
 }
+
+// Memoized panel bodies: the parent (AnalyticsV3) re-renders on every 5s live-price
+// tick, 10s alert-status poll, and 60s alert-eval cycle. Without memo, every chart
+// panel below re-executes and its Recharts tree gets torn down/rebuilt on each tick
+// even though its own props didn't change.
+const PricePanelBody               = memo(PricePanelBodyImpl);
+const MacdPanelBody                = memo(MacdPanelBodyImpl);
+const RsiPanelBody                 = memo(RsiPanelBodyImpl);
+const Rsi14PanelBody               = memo(Rsi14PanelBodyImpl);
+const MaPanelBody                  = memo(MaPanelBodyImpl);
+const AdxPanelBody                 = memo(AdxPanelBodyImpl);
+const IchiPanelBody                = memo(IchiPanelBodyImpl);
+const SessionPanelBody             = memo(SessionPanelBodyImpl);
+const AvgPricePanelBody            = memo(AvgPricePanelBodyImpl);
+const RocPanelBody                 = memo(RocPanelBodyImpl);
+const AtrPanelBody                 = memo(AtrPanelBodyImpl);
+const SqueezePanelBody             = memo(SqueezePanelBodyImpl);
+const FailureSwingPanelBody        = memo(FailureSwingPanelBodyImpl);
+const MarketStructurePanelBody     = memo(MarketStructurePanelBodyImpl);
+const VolatilityPanelBody          = memo(VolatilityPanelBodyImpl);
+const CciPanelBody                 = memo(CciPanelBodyImpl);
+const WrPanelBody                  = memo(WrPanelBodyImpl);
+const PivotPanelBody               = memo(PivotPanelBodyImpl);
+const VolumePanelBody              = memo(VolumePanelBodyImpl);
+const KeltPanelBody                = memo(KeltPanelBodyImpl);
+const AiSynthesisPanelBody         = memo(AiSynthesisPanelBodyImpl);
+const RegimePanelBody              = memo(RegimePanelBodyImpl);
+const CandleContextPanelBody       = memo(CandleContextPanelBodyImpl);
+const StackPanelBody               = memo(StackPanelBodyImpl);
+const MacdStackPanelBody           = memo(MacdStackPanelBodyImpl);
+const EmaStackPanelBody            = memo(EmaStackPanelBodyImpl);
+const Ema200StackPanelBody         = memo(Ema200StackPanelBodyImpl);
+const AdxStackPanelBody            = memo(AdxStackPanelBodyImpl);
+const RsiStackPanelBody            = memo(RsiStackPanelBodyImpl);
+const SqueezeStackPanelBody        = memo(SqueezeStackPanelBodyImpl);
+const CciStackPanelBody            = memo(CciStackPanelBodyImpl);
+const MarketStructureStackPanelBody = memo(MarketStructureStackPanelBodyImpl);
 
 export function AnalyticsV3() {
   const { analysisResult, eurusdSnapshot, sheetRows } = useAnalytics();
@@ -8040,17 +8704,18 @@ export function AnalyticsV3() {
       .catch(console.error);
   }
 
-  // Live price — poll every 2 s
+  // Live price — poll every 5 s for the selected pair
   useEffect(() => {
+    setLivePrice(null);
     const poll = () => {
-      invoke<number>("get_live_price")
+      invoke<number>("get_live_price", { pair: selectedPair })
         .then(p => { setLivePrice(p); setPriceError(null); })
         .catch(e => setPriceError(String(e)));
     };
     poll();
     const id = setInterval(poll, 5000);
     return () => clearInterval(id);
-  }, []);
+  }, [selectedPair]);
 
   // Forex news — fetch on mount then every 60 s
   useEffect(() => {
@@ -8140,7 +8805,7 @@ export function AnalyticsV3() {
       const tfData: Record<string, RawCandleV3[]> = {};
       await Promise.all([...allTfs].map(async tf => {
         try {
-          const candles = await invoke<RawCandleV3[]>("get_live_candles_computed", { pair: selectedPair, tf });
+          const candles = await getStackCandles(selectedPair, tf);
           if (candles.length >= 2) tfData[tf] = candles.slice(-3);
         } catch { /* ignore fetch errors */ }
       }));
@@ -8394,7 +9059,7 @@ export function AnalyticsV3() {
 
   useEffect(() => {
     const loadCandles = () =>
-      invoke<RawCandleV3[]>("get_candles_v3")
+      invoke<RawCandleV3[]>("get_candles_v3", { pair: selectedPair })
         .then(async candles => {
           if (!candles.length) return;
           const last      = candles[candles.length - 1];
@@ -8425,7 +9090,7 @@ export function AnalyticsV3() {
         .catch(err => setError(String(err)));
 
     // Always read from DB after sync resolves or fails — backend thread handles the sync.
-    invoke<number>("sync_oanda_candles_v3")
+    invoke<number>("sync_oanda_candles_v3", { pair: selectedPair })
       .then(() => loadCandles())
       .catch(() => loadCandles());
   }, [selectedPair]);
@@ -8439,7 +9104,7 @@ export function AnalyticsV3() {
 
   const [indicatorRows, setIndicatorRows] = useState<SheetRow[]>([]);
   useEffect(() => {
-    invoke<RawCandleV3[]>("get_live_candles_computed", { pair: selectedPair, tf: indicatorTf })
+    getStackCandles(selectedPair, indicatorTf)
       .then(candles => setIndicatorRows(candles.map(mapToSheetRow)))
       .catch(() => {});
   }, [selectedPair, indicatorTf]);
@@ -9222,7 +9887,7 @@ export function AnalyticsV3() {
 
       {/* ── Top bar: Pair Selector + Timeframe + Data date ─────────── */}
       <div className="flex items-center gap-3 shrink-0" style={{ height: "40px" }}>
-        <PairSelector onPairChange={(pair) => setSelectedPair(pair)} />
+        <PairSelector value={selectedPair} onPairChange={(pair) => setSelectedPair(pair)} />
       </div>
 
       {/* ── Panels ────────────────────────────────────────────────── */}
@@ -9279,7 +9944,7 @@ export function AnalyticsV3() {
                   </div>
                 ) : undefined}
                 onExpand={() => setExpanded({ id: p.id, label: p.label, sub: p.sub })}>
-                {p.id === "ai-synthesis" && <AiSynthesisPanelBody result={analysisResult} />}
+                {p.id === "ai-synthesis" && <AiSynthesisPanelBody result={analysisResult} pair={selectedPair} />}
                 {p.id === "ai-chat"      && <AlertsPanel instrument={selectedPair.replace("/", "_")} alerts={alerts} onUpdate={updateAlert} onDelete={deleteAlert} />}
               </BlankPanel>
             );
@@ -9296,7 +9961,7 @@ export function AnalyticsV3() {
         <div className="flex-1 min-h-0" style={{ overflowY: "auto", paddingTop: "0", paddingRight: "10px" }}>
           {sheetRows.length > 0 && (
             <div style={{ display: "flex", alignItems: "flex-start", marginTop: 10 }}>
-              <PriceHistoryChart rows={sheetRows} pair={selectedPair} chartTf={chartTf} setChartTf={setChartTf} />
+              <PriceHistoryChart rows={sheetRows} pair={selectedPair} chartTf={chartTf} setChartTf={setChartTf} livePrice={livePrice} />
               <div style={{ flex: 1, paddingLeft: 24, marginTop: 4, position: "relative" }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 32 }}>
                   <div style={{ display: "flex", alignItems: "flex-start" }}>
@@ -9353,7 +10018,7 @@ export function AnalyticsV3() {
                     <div style={{ height: 1, background: "var(--border-medium)", marginTop: 14 }} />
                   </>
                 )}
-                <ForexNewsPanel news={newsItems} loading={newsLoading} />
+                <ForexNewsPanel news={newsItems} loading={newsLoading} pair={selectedPair} />
               </div>
             </div>
           )}
@@ -9527,7 +10192,7 @@ export function AnalyticsV3() {
             </button>
           </div>
         ) : undefined} badge={expanded.id === "ai-synthesis" ? aisBadgeExpanded : expanded.id === "macd" ? macdBadgeExpanded : expanded.id === "price" ? priceBadgeExpanded : expanded.id === "rsi9" ? rsiBadgeExpanded : expanded.id === "rsi14" ? rsi14BadgeExpanded : expanded.id === "moving-averages" ? maBadgeExpanded : expanded.id === "keltner" ? keltBadgeExpanded : expanded.id === "adx" ? adxBadgeExpanded : expanded.id === "ichimoku" ? ichiBadgeExpanded : expanded.id === "session" ? sessionBadgeExpanded : expanded.id === "volume" ? volBadgeExpanded : expanded.id === "pivots" ? pivotBadgeExpanded : expanded.id === "cci" ? momBadgeExpanded : expanded.id === "wr" ? wrBadgeExpanded : expanded.id === "volatility" ? volaBadgeExpanded : expanded.id === "avg-price" ? avgpBadgeExpanded : expanded.id === "roc" ? rocBadgeExpanded : expanded.id === "atr" ? atrBadgeExpanded : expanded.id === "candle-context" ? cctxBadgeExpanded : expanded.id === "market-structure" ? msBadgeExpanded : expanded.id === "regime" ? regimeBadgeExpanded : undefined} subtitle={expanded.id === "ai-synthesis" ? aisHeadline : expanded.id === "macd" ? macdHeadline : expanded.id === "price" ? priceHeadline : expanded.id === "rsi9" ? rsiHeadline : expanded.id === "rsi14" ? rsi14Headline : expanded.id === "moving-averages" ? maHeadline : expanded.id === "keltner" ? keltHeadline : expanded.id === "adx" ? adxHeadline : expanded.id === "ichimoku" ? ichiHeadline : expanded.id === "session" ? sessionHeadline : expanded.id === "volume" ? volHeadline : expanded.id === "pivots" ? pivotHeadline : expanded.id === "cci" ? momHeadline : expanded.id === "wr" ? wrHeadline : expanded.id === "volatility" ? volaHeadline : expanded.id === "avg-price" ? avgpHeadline : expanded.id === "roc" ? rocHeadline : expanded.id === "atr" ? atrHeadline : expanded.id === "failure-swing" ? fswHeadline : expanded.id === "candle-context" ? cctxHeadline : expanded.id === "market-structure" ? msHeadline : expanded.id === "regime" ? regimeHeadline : undefined} subtitle2={expanded.id === "regime" ? regimeAlignmentInsight : undefined}>
-          {expanded.id === "ai-synthesis"    && <AiSynthesisPanelBody result={analysisResult} expanded />}
+          {expanded.id === "ai-synthesis"    && <AiSynthesisPanelBody result={analysisResult} pair={selectedPair} expanded />}
           {expanded.id === "price"           && <PricePanelBody      rows={sheetRows} expanded />}
           {expanded.id === "macd"            && <MacdPanelBody       pair={selectedPair} indicatorTf={indicatorTf} expanded />}
           {expanded.id === "rsi9"            && <RsiPanelBody        pair={selectedPair} indicatorTf={indicatorTf} expanded />}

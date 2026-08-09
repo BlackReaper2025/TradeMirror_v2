@@ -127,18 +127,35 @@ const OANDA_KEY_PATH: &str = "C:\\Users\\Geoff\\.trademirror\\oanda-api-key.txt"
 const TELEGRAM_TOKEN_PATH: &str = "C:\\Users\\Geoff\\.trademirror\\telegram-bot-token.txt";
 const TELEGRAM_CHAT_ID_PATH: &str = "C:\\Users\\Geoff\\.trademirror\\telegram-chat-id.txt";
 
+/// Normalizes a display pair ("EURUSD", "EUR/USD", "EUR_USD") to OANDA's
+/// underscored instrument form. Mirrors the conversion already used by
+/// get_live_candles / get_live_candles_computed / get_synthesis.
+fn to_oanda_instrument(pair: &str) -> String {
+    if pair.contains('_') {
+        pair.to_string()
+    } else if pair.contains('/') {
+        pair.replace('/', "_")
+    } else {
+        format!("{}_{}", &pair[..3], &pair[3..])
+    }
+}
+
 /// Core sync logic — usable from both the Tauri command and the background thread.
-fn background_sync(db_path: &str) -> Result<usize, String> {
+/// `pair` is a display pair like "EURUSD"; it is normalized to the OANDA instrument
+/// form for the fetch and back to a bare symbol (no separators) for storage.
+fn background_sync(db_path: &str, pair: &str) -> Result<usize, String> {
     let contents = std::fs::read_to_string(OANDA_KEY_PATH)
         .map_err(|e| format!("Could not read OANDA key file: {}", e))?;
     let api_key = contents.lines().next().unwrap_or("").trim().to_string();
     if api_key.is_empty() {
         return Err("OANDA API key is empty".into());
     }
-    let raw = oanda_client::fetch_raw_candles(&api_key, "EUR_USD", 500)?;
+    let instrument = to_oanda_instrument(pair);
+    let symbol = instrument.replace('_', "");
+    let raw = oanda_client::fetch_raw_candles(&api_key, &instrument, 500)?;
     let rows = indicators::compute(raw);
     let count = rows.len();
-    candle_store::upsert_candles(db_path, "EURUSD", "D", &rows)?;
+    candle_store::upsert_candles(db_path, &symbol, "D", &rows)?;
     Ok(count)
 }
 
@@ -159,11 +176,11 @@ fn secs_until_daily_sync() -> u64 {
 }
 
 #[tauri::command]
-fn sync_oanda_candles_v3(app: tauri::AppHandle) -> Result<usize, String> {
+fn sync_oanda_candles_v3(app: tauri::AppHandle, pair: String) -> Result<usize, String> {
     let db_path = app.path().app_data_dir()
         .map_err(|e: tauri::Error| e.to_string())?
         .join("trademirror.db");
-    background_sync(db_path.to_str().unwrap_or(""))
+    background_sync(db_path.to_str().unwrap_or(""), &pair)
 }
 
 // ─── Analytics V3 ─────────────────────────────────────────────────────────────
@@ -184,14 +201,15 @@ fn read_oanda_key() -> Result<String, String> {
 }
 
 #[tauri::command]
-fn get_candles_v3(app: tauri::AppHandle) -> Result<Vec<CandleV3>, String> {
+fn get_candles_v3(app: tauri::AppHandle, pair: String) -> Result<Vec<CandleV3>, String> {
     let db_path = app.path().app_data_dir()
         .map_err(|e: tauri::Error| e.to_string())?
         .join("trademirror.db");
 
+    let symbol = to_oanda_instrument(&pair).replace('_', "");
     let rows = candle_store::read_candles(
         db_path.to_str().unwrap_or(""),
-        "EURUSD", "D", 500,
+        &symbol, "D", 500,
     ).unwrap_or_default();
 
     if rows.is_empty() {
@@ -408,7 +426,7 @@ fn get_live_candles(pair: String, tf: String) -> Result<Vec<oanda_client::RawCan
         _     => return Err(format!("Unknown timeframe: {}", tf)),
     };
 
-    oanda_client::fetch_raw_candles_tf(&api_key, &instrument, granularity, 200)
+    oanda_client::fetch_raw_candles_tf(&api_key, &instrument, granularity, 5000)
 }
 
 // ─── Live candles with computed indicators for any timeframe ─────────────────
@@ -439,7 +457,7 @@ fn get_live_candles_computed(pair: String, tf: String) -> Result<Vec<CandleV3>, 
         _     => return Err(format!("Unknown timeframe: {}", tf)),
     };
 
-    let raw = oanda_client::fetch_raw_candles_tf(&api_key, &instrument, granularity, 200)?;
+    let raw = oanda_client::fetch_raw_candles_tf(&api_key, &instrument, granularity, 5000)?;
     Ok(indicators::compute(raw))
 }
 
@@ -662,11 +680,11 @@ pub fn run() {
             let bg_path = path_str.clone();
             std::thread::spawn(move || {
                 // Sync immediately on startup to catch any missed candles.
-                let _ = background_sync(&bg_path);
+                let _ = background_sync(&bg_path, "EURUSD");
                 // Then loop: wait until next 22:10 UTC, sync, repeat.
                 loop {
                     std::thread::sleep(std::time::Duration::from_secs(secs_until_daily_sync()));
-                    let _ = background_sync(&bg_path);
+                    let _ = background_sync(&bg_path, "EURUSD");
                 }
             });
 
