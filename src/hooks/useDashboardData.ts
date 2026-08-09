@@ -36,12 +36,15 @@ export interface DashboardData {
 }
 
 const EMPTY_STATS: AllTimeStats = {
-  tradeCount: 0, winCount: 0, lossCount: 0,
+  totalPnl: 0, tradeCount: 0, winCount: 0, lossCount: 0,
   winRate: 0, avgWin: 0, avgLoss: 0, profitFactor: 0,
   largestWin: 0, largestLoss: 0,
 };
 
-const EMPTY_TODAY: TodayLiveStats = { totalPnl: 0, tradeCount: 0, winCount: 0, lossCount: 0 };
+const EMPTY_TODAY: TodayLiveStats = {
+  totalPnl: 0, tradeCount: 0, winCount: 0, lossCount: 0,
+  largestWin: 0, largestLoss: 0,
+};
 
 const EMPTY: DashboardData = {
   account:        null,

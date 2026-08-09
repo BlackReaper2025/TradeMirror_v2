@@ -43,6 +43,19 @@ export const trades = sqliteTable("trades", {
   tradeRef: text("trade_ref"),
 });
 
+// ─── trade_images — entry/exit/additional screenshots with descriptions ───────
+
+export const tradeImages = sqliteTable("trade_images", {
+  id: text("id").primaryKey(),
+  tradeId: text("trade_id")
+    .notNull()
+    .references(() => trades.id),
+  kind: text("kind", { enum: ["entry", "exit", "additional"] }).notNull(),
+  path: text("path").notNull(),
+  description: text("description"),
+  sortOrder: integer("sort_order").notNull().default(0),
+});
+
 // ─── trade_journal ────────────────────────────────────────────────────────────
 
 export const tradeJournal = sqliteTable("trade_journal", {

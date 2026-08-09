@@ -8,6 +8,7 @@ import {
   createJournalEntry,
   updateTrade,
   upsertJournalEntry,
+  syncTradeImages,
   deleteTradeById,
   recalculateDailyStats,
   updateAccountBalance,
@@ -153,6 +154,8 @@ export function TradeLogPreview({ trades, selectedDate, onTradeChanged }: Props)
       freeformNotes:   values.freeformNotes.trim()               || undefined,
     });
 
+    await syncTradeImages(tradeId, values.images);
+
     await finishSave(account.id, [day]);
   }, [account, finishSave]);
 
@@ -194,6 +197,8 @@ export function TradeLogPreview({ trades, selectedDate, onTradeChanged }: Props)
         freeformNotes:   values.freeformNotes.trim()               || undefined,
       }
     );
+
+    await syncTradeImages(editTrade.id, values.images);
 
     await finishSave(account.id, [oldDay, newDay]);
   }, [account, editTrade, finishSave]);

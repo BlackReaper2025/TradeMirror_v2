@@ -12,6 +12,7 @@ pub fn upsert_candles(
     let conn = Connection::open(db_path).map_err(|e| e.to_string())?;
 
     conn.execute_batch("PRAGMA journal_mode=WAL;").map_err(|e| e.to_string())?;
+    conn.execute_batch("BEGIN;").map_err(|e| e.to_string())?;
 
     let mut stmt = conn.prepare(
         "INSERT OR REPLACE INTO candles_v3 (
@@ -69,6 +70,7 @@ pub fn upsert_candles(
         ]).map_err(|e| e.to_string())?;
     }
 
+    conn.execute_batch("COMMIT;").map_err(|e| e.to_string())?;
     Ok(())
 }
 

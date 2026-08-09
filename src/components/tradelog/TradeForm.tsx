@@ -1,11 +1,21 @@
 // ─── TradeForm — slide-over drawer for new trade entry or edit ────────────────
 import { useState, useEffect, useRef, useCallback } from "react"; // useRef used in TimeInput hold logic
-import { X, ChevronRight, TrendingUp, TrendingDown, BookOpen, ChevronUp, ChevronDown } from "lucide-react";
+import { X, ChevronRight, TrendingUp, TrendingDown, BookOpen, ChevronUp, ChevronDown, Maximize2, ImagePlus } from "lucide-react";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { FormField, inputClass, inputStyle } from "../ui/FormField";
+import { getImagesByTradeId } from "../../db/queries";
 import type { Account, TradeWithJournal } from "../../db/queries";
 import { ftmoTimeToLocal } from "../../lib/ftmoTime";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
+
+export interface TradeImageDraft {
+  id:          string;
+  kind:        "entry" | "exit" | "additional";
+  path:        string;
+  description: string;
+}
 
 export interface TradeFormValues {
   // Trade
@@ -24,6 +34,7 @@ export interface TradeFormValues {
   technicalNotes: string;
   tags:          string;
   tradeRef:      string;
+  images:        TradeImageDraft[];
   // Journal
   emotionBefore:    string;
   emotionAfter:     string;
@@ -50,9 +61,10 @@ const MAJOR_PAIRS = [
   "EUR/AUD", "EUR/CAD", "EUR/CHF", "EUR/GBP", "EUR/JPY", "EUR/NZD", "EUR/USD",
   "GBP/AUD", "GBP/CAD", "GBP/CHF", "GBP/JPY", "GBP/NZD", "GBP/USD",
   "NZD/CAD", "NZD/CHF", "NZD/JPY", "NZD/USD",
-  "US100", "US30", "US500",
+  "BTC/USD",
+  "US100", "US30", "US500", "USOIL",
   "USD/CAD", "USD/CHF", "USD/JPY", "USD/MXN", "USD/SEK", "USD/ZAR",
-  "XAU/USD",
+  "XAG/USD", "XAU/USD",
 ];
 
 const TAG_GROUPS = [
@@ -94,6 +106,7 @@ function makeEmpty(defaultDate?: string): TradeFormValues {
     technicalNotes: "",
     tags: "",
     tradeRef: "",
+    images: [],
     emotionBefore: "",
     emotionAfter: "",
     mistakes: "",
@@ -126,6 +139,7 @@ function tradeToFormValues(t: TradeWithJournal): TradeFormValues {
     technicalNotes:  norm(t.technicalNotes),
     tags:            norm(t.tags),
     tradeRef:        norm(t.tradeRef),
+    images:          [], // loaded async by the Screenshots tab (see loadTradeImages effect)
     emotionBefore:   norm(t.journal?.emotionBefore),
     emotionAfter:    norm(t.journal?.emotionAfter),
     mistakes:        norm(t.journal?.mistakes),
@@ -351,6 +365,171 @@ function SelectInput({
   );
 }
 
+// ─── Screenshots tab building blocks ───────────────────────────────────────────
+
+function asAssetSrc(path: string): string {
+  return convertFileSrc(path.replace(/\\/g, "/"));
+}
+
+function UploadSlot({ label, busy, onClick }: { label: string; busy: boolean; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={busy}
+      className="flex flex-col items-center justify-center gap-1.5 rounded-lg w-full transition-opacity hover:opacity-80 disabled:opacity-50"
+      style={{ height: 140, border: "1px dashed var(--border-medium)", color: "var(--text-muted)", background: "var(--bg-panel-alt)" }}
+    >
+      <ImagePlus size={18} />
+      <span className="text-[11px] font-medium">{busy ? "Uploading…" : label}</span>
+    </button>
+  );
+}
+
+function ImageCard({
+  image,
+  onDescriptionChange,
+  onRemove,
+  onExpand,
+}: {
+  image: TradeImageDraft;
+  onDescriptionChange: (v: string) => void;
+  onRemove: () => void;
+  onExpand: () => void;
+}) {
+  return (
+    <div className="rounded-lg overflow-hidden" style={{ border: "1px solid var(--border-medium)" }}>
+      <div className="relative" style={{ height: 140 }}>
+        <img
+          src={asAssetSrc(image.path)}
+          alt={image.description || image.kind}
+          className="w-full h-full object-cover"
+        />
+        <button
+          type="button"
+          onClick={onExpand}
+          className="absolute bottom-1 right-1 w-6 h-6 rounded flex items-center justify-center"
+          style={{ background: "rgba(0,0,0,0.6)", color: "#fff" }}
+          title="View full screen"
+        >
+          <Maximize2 size={12} />
+        </button>
+        <button
+          type="button"
+          onClick={onRemove}
+          className="absolute top-1 right-1 w-5 h-5 rounded flex items-center justify-center text-[11px] font-bold"
+          style={{ background: "rgba(0,0,0,0.6)", color: "#fff" }}
+          title="Remove image"
+        >
+          ×
+        </button>
+      </div>
+      <input
+        value={image.description}
+        onChange={(e) => onDescriptionChange(e.target.value)}
+        placeholder="Description…"
+        className={inputClass}
+        style={{ ...inputStyle, borderRadius: 0, border: "none", borderTop: "1px solid var(--border-subtle)" }}
+      />
+    </div>
+  );
+}
+
+function ScreenshotsTab({
+  images,
+  setImages,
+  onExpand,
+}: {
+  images: TradeImageDraft[];
+  setImages: (imgs: TradeImageDraft[]) => void;
+  onExpand: (path: string) => void;
+}) {
+  const [busyKind, setBusyKind] = useState<TradeImageDraft["kind"] | null>(null);
+
+  async function upload(kind: TradeImageDraft["kind"]) {
+    try {
+      const selected = await openDialog({
+        multiple: false,
+        filters: [{ name: "Images", extensions: ["png", "jpg", "jpeg", "gif", "webp", "bmp"] }],
+      });
+      if (typeof selected !== "string" || !selected) return;
+      setBusyKind(kind);
+      const savedPath = await invoke<string>("save_trade_screenshot", { sourcePath: selected, kind });
+      const draft: TradeImageDraft = {
+        id: `img-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        kind, path: savedPath, description: "",
+      };
+      setImages(
+        kind === "additional"
+          ? [...images, draft]
+          : [...images.filter((i) => i.kind !== kind), draft]
+      );
+    } catch (err) {
+      console.error("[ScreenshotsTab] upload failed:", err);
+    } finally {
+      setBusyKind(null);
+    }
+  }
+
+  function updateDescription(id: string, description: string) {
+    setImages(images.map((i) => (i.id === id ? { ...i, description } : i)));
+  }
+
+  function remove(id: string) {
+    setImages(images.filter((i) => i.id !== id));
+  }
+
+  const entry      = images.find((i) => i.kind === "entry");
+  const exit       = images.find((i) => i.kind === "exit");
+  const additional = images.filter((i) => i.kind === "additional");
+
+  return (
+    <div className="flex flex-col gap-4">
+      <div className="grid grid-cols-2 gap-3">
+        <FormField label="Entry Screenshot">
+          {entry ? (
+            <ImageCard
+              image={entry}
+              onDescriptionChange={(v) => updateDescription(entry.id, v)}
+              onRemove={() => remove(entry.id)}
+              onExpand={() => onExpand(entry.path)}
+            />
+          ) : (
+            <UploadSlot label="Upload entry screenshot" busy={busyKind === "entry"} onClick={() => upload("entry")} />
+          )}
+        </FormField>
+        <FormField label="Exit Screenshot">
+          {exit ? (
+            <ImageCard
+              image={exit}
+              onDescriptionChange={(v) => updateDescription(exit.id, v)}
+              onRemove={() => remove(exit.id)}
+              onExpand={() => onExpand(exit.path)}
+            />
+          ) : (
+            <UploadSlot label="Upload exit screenshot" busy={busyKind === "exit"} onClick={() => upload("exit")} />
+          )}
+        </FormField>
+      </div>
+
+      <FormField label="Additional Images">
+        <div className="grid grid-cols-2 gap-3">
+          {additional.map((img) => (
+            <ImageCard
+              key={img.id}
+              image={img}
+              onDescriptionChange={(v) => updateDescription(img.id, v)}
+              onRemove={() => remove(img.id)}
+              onExpand={() => onExpand(img.path)}
+            />
+          ))}
+          <UploadSlot label="Add image" busy={busyKind === "additional"} onClick={() => upload("additional")} />
+        </div>
+      </FormField>
+    </div>
+  );
+}
+
 function ScoreInput({
   value,
   onChange,
@@ -413,7 +592,7 @@ interface Props {
   onDuplicate?: (values: TradeFormValues) => void;
 }
 
-type Tab = "trade" | "journal";
+type Tab = "trade" | "journal" | "screenshots";
 
 export function TradeForm({ account, existingTrade, defaultDate, defaultValues, onClose, onSaved, onDuplicate }: Props) {
   const isEdit = existingTrade != null;
@@ -426,8 +605,22 @@ export function TradeForm({ account, existingTrade, defaultDate, defaultValues, 
   // New trades are logged straight from the FTMO/MetaTrader report (server time);
   // edits load already-converted local timestamps, so default this off for edits.
   const [ftmoTime, setFtmoTime] = useState(!isEdit);
+  const [lightboxPath, setLightboxPath] = useState<string | null>(null);
   const historyRef            = useRef<TradeFormValues[]>([]);
   const isUndoRef             = useRef(false);
+
+  // Existing images live in a separate table — load them once when editing a trade.
+  useEffect(() => {
+    if (!isEdit || !existingTrade) return;
+    getImagesByTradeId(existingTrade.id)
+      .then((rows) => {
+        setValues((prev) => ({
+          ...prev,
+          images: rows.map((r) => ({ id: r.id, kind: r.kind, path: r.path, description: r.description ?? "" })),
+        }));
+      })
+      .catch((err) => console.error("[TradeForm] failed to load images:", err));
+  }, [isEdit, existingTrade]);
 
   // Close on Escape, undo on Ctrl+Z
   useEffect(() => {
@@ -504,7 +697,7 @@ export function TradeForm({ account, existingTrade, defaultDate, defaultValues, 
           style={{ borderBottom: "1px solid var(--border-subtle)", height: 52, background: "var(--bg-panel-alt)" }}
         >
           <div className="flex items-end h-full" style={{ paddingBottom: 8 }}>
-            {(["trade", "journal"] as Tab[]).map((t) => (
+            {(["trade", "journal", "screenshots"] as Tab[]).map((t) => (
               <button
                 key={t}
                 onClick={() => setTab(t)}
@@ -516,7 +709,7 @@ export function TradeForm({ account, existingTrade, defaultDate, defaultValues, 
                   borderRadius: tab === t ? "6px 6px 0 0" : undefined,
                 }}
               >
-                {t === "trade" ? "Trade Details" : "Journal"}
+                {t === "trade" ? "Trade Details" : t === "journal" ? "Journal" : "Screenshots"}
               </button>
             ))}
           </div>
@@ -539,6 +732,9 @@ export function TradeForm({ account, existingTrade, defaultDate, defaultValues, 
           </div>
           <div className="px-6 py-2" style={{ display: tab === "journal" ? "block" : "none" }}>
             <JournalTab values={values} set={set} />
+          </div>
+          <div className="px-6 py-2" style={{ display: tab === "screenshots" ? "block" : "none" }}>
+            <ScreenshotsTab images={values.images} setImages={(imgs) => set("images", imgs)} onExpand={setLightboxPath} />
           </div>
         </form>
 
@@ -611,6 +807,30 @@ export function TradeForm({ account, existingTrade, defaultDate, defaultValues, 
           </div>
         </div>
       </div>
+
+      {/* ── Fullscreen image lightbox ── */}
+      {lightboxPath && (
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center"
+          style={{ background: "rgba(0,0,0,0.85)" }}
+          onClick={() => setLightboxPath(null)}
+        >
+          <img
+            src={asAssetSrc(lightboxPath)}
+            alt=""
+            style={{ maxWidth: "92vw", maxHeight: "92vh", objectFit: "contain" }}
+          />
+          <button
+            type="button"
+            onClick={() => setLightboxPath(null)}
+            className="fixed top-4 right-4 w-9 h-9 rounded-full flex items-center justify-center"
+            style={{ background: "rgba(255,255,255,0.12)", color: "#fff" }}
+            title="Close"
+          >
+            <X size={18} />
+          </button>
+        </div>
+      )}
     </>
   );
 }

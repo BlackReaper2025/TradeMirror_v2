@@ -1,10 +1,11 @@
 // ─── Typed query functions ────────────────────────────────────────────────────
-import { eq, desc, and, gte, lte, lt, sql } from "drizzle-orm";
+import { eq, desc, and, gte, lte, lt, sql, type SQL } from "drizzle-orm";
 import { getDb } from "./index";
 import {
   accounts,
   trades,
   tradeJournal,
+  tradeImages,
   dailyStats,
   quotes,
   appSettings,
@@ -40,6 +41,7 @@ function tradingDayBounds(): { start: string; end: string } {
 export type Account      = typeof accounts.$inferSelect;
 export type Trade        = typeof trades.$inferSelect;
 export type TradeJournal = typeof tradeJournal.$inferSelect;
+export type TradeImage   = typeof tradeImages.$inferSelect;
 export type DailyStat    = typeof dailyStats.$inferSelect;
 export type Quote        = typeof quotes.$inferSelect;
 
@@ -145,29 +147,45 @@ export interface AllTimeStats {
   largestLoss:  number;
 }
 
-export async function getAllTimeStats(accountId: string): Promise<AllTimeStats> {
+// Shared aggregate query behind getAllTimeStats/getMonthlyStats/getWeeklyStats/
+// getTodayFullStats — same AllTimeStats shape, differing only by WHERE bounds.
+// Computed in SQL (SUM/COUNT/MAX/MIN) instead of pulling every matching trade
+// row across the Tauri IPC boundary and reducing in JS.
+async function aggregateTradeStats(condition: SQL | undefined): Promise<AllTimeStats> {
   const db = getDb();
 
-  const allTrades = await db
-    .select({ pnl: trades.pnl })
+  const [row] = await db
+    .select({
+      tradeCount:  sql<number>`count(*)`,
+      totalPnl:    sql<number>`coalesce(sum(${trades.pnl}), 0)`,
+      winCount:    sql<number>`coalesce(sum(case when ${trades.pnl} > 0 then 1 else 0 end), 0)`,
+      lossCount:   sql<number>`coalesce(sum(case when ${trades.pnl} < 0 then 1 else 0 end), 0)`,
+      winSum:      sql<number>`coalesce(sum(case when ${trades.pnl} > 0 then ${trades.pnl} else 0 end), 0)`,
+      lossSum:     sql<number>`coalesce(sum(case when ${trades.pnl} < 0 then ${trades.pnl} else 0 end), 0)`,
+      largestWin:  sql<number>`coalesce(max(case when ${trades.pnl} > 0 then ${trades.pnl} end), 0)`,
+      largestLoss: sql<number>`coalesce(min(case when ${trades.pnl} < 0 then ${trades.pnl} end), 0)`,
+    })
     .from(trades)
-    .where(eq(trades.accountId, accountId));
+    .where(condition);
 
-  const wins   = allTrades.filter((t) => (t.pnl ?? 0) > 0);
-  const losses = allTrades.filter((t) => (t.pnl ?? 0) < 0);
-
-  const tradeCount   = allTrades.length;
-  const winCount     = wins.length;
-  const lossCount    = losses.length;
+  const tradeCount   = row?.tradeCount ?? 0;
+  const winCount     = row?.winCount ?? 0;
+  const lossCount    = row?.lossCount ?? 0;
   const winRate      = tradeCount > 0 ? (winCount / tradeCount) * 100 : 0;
-  const avgWin       = winCount  > 0 ? wins.reduce((s, t)   => s + (t.pnl ?? 0), 0) / winCount   : 0;
-  const avgLoss      = lossCount > 0 ? Math.abs(losses.reduce((s, t) => s + (t.pnl ?? 0), 0)) / lossCount : 0;
+  const avgWin       = winCount  > 0 ? (row?.winSum ?? 0) / winCount : 0;
+  const avgLoss      = lossCount > 0 ? Math.abs(row?.lossSum ?? 0) / lossCount : 0;
   const profitFactor = avgLoss > 0 ? (avgWin * winCount) / (avgLoss * Math.max(lossCount, 1)) : 0;
-  const largestWin   = wins.length   > 0 ? Math.max(...wins.map(t => t.pnl ?? 0))                : 0;
-  const largestLoss  = losses.length > 0 ? Math.abs(Math.min(...losses.map(t => t.pnl ?? 0)))    : 0;
 
-  const totalPnl = allTrades.reduce((s, t) => s + (t.pnl ?? 0), 0);
-  return { totalPnl, tradeCount, winCount, lossCount, winRate, avgWin, avgLoss, profitFactor, largestWin, largestLoss };
+  return {
+    totalPnl: row?.totalPnl ?? 0,
+    tradeCount, winCount, lossCount, winRate, avgWin, avgLoss, profitFactor,
+    largestWin:  row?.largestWin ?? 0,
+    largestLoss: Math.abs(row?.largestLoss ?? 0),
+  };
+}
+
+export async function getAllTimeStats(accountId: string): Promise<AllTimeStats> {
+  return aggregateTradeStats(eq(trades.accountId, accountId));
 }
 
 // ─── Dashboard: today's stats — computed LIVE from trades table ───────────────
@@ -184,29 +202,16 @@ export interface TodayLiveStats {
 }
 
 export async function getTodayLiveStats(accountId: string): Promise<TodayLiveStats> {
-  const db     = getDb();
-  const today  = localDateStr();
-  const rows   = await db
-    .select({ pnl: trades.pnl })
-    .from(trades)
-    .where(
-      and(
-        eq(trades.accountId, accountId),
-        gte(trades.closedAt, today + "T00:00:00"),
-        lte(trades.closedAt, today + "T23:59:59")
-      )
-    );
-
-  const wins   = rows.filter((t) => (t.pnl ?? 0) > 0);
-  const losses = rows.filter((t) => (t.pnl ?? 0) < 0);
-  return {
-    totalPnl:    rows.reduce((s, t) => s + (t.pnl ?? 0), 0),
-    tradeCount:  rows.length,
-    winCount:    wins.length,
-    lossCount:   losses.length,
-    largestWin:  wins.length  > 0 ? Math.max(...wins.map(t => t.pnl ?? 0))                   : 0,
-    largestLoss: losses.length > 0 ? Math.abs(Math.min(...losses.map(t => t.pnl ?? 0)))       : 0,
-  };
+  const today = localDateStr();
+  const stats = await aggregateTradeStats(
+    and(
+      eq(trades.accountId, accountId),
+      gte(trades.closedAt, today + "T00:00:00"),
+      lte(trades.closedAt, today + "T23:59:59")
+    )
+  );
+  const { totalPnl, tradeCount, winCount, lossCount, largestWin, largestLoss } = stats;
+  return { totalPnl, tradeCount, winCount, lossCount, largestWin, largestLoss };
 }
 
 // Keep the old daily_stats reader for compatibility — used internally by equity curve etc.
@@ -570,7 +575,6 @@ export async function getPortfolio() {
 // ─── Dashboard: monthly stats — same shape as AllTimeStats, current month ─────
 
 export async function getMonthlyStats(accountId: string): Promise<AllTimeStats> {
-  const db  = getDb();
   const now  = new Date();
   const year = now.getFullYear();
   const mm   = String(now.getMonth() + 1).padStart(2, "0");
@@ -579,30 +583,12 @@ export async function getMonthlyStats(accountId: string): Promise<AllTimeStats> 
   const start = `${year}-${mm}-01T00:00:00`;
   const end   = `${year}-${mm}-31T23:59:59`;
 
-  const rows = await db
-    .select({ pnl: trades.pnl })
-    .from(trades)
-    .where(and(eq(trades.accountId, accountId), gte(trades.closedAt, start), lte(trades.closedAt, end)));
-
-  const wins   = rows.filter((t) => (t.pnl ?? 0) > 0);
-  const losses = rows.filter((t) => (t.pnl ?? 0) < 0);
-  const tradeCount   = rows.length;
-  const winCount     = wins.length;
-  const lossCount    = losses.length;
-  const winRate      = tradeCount > 0 ? (winCount / tradeCount) * 100 : 0;
-  const avgWin       = winCount  > 0 ? wins.reduce((s, t)   => s + (t.pnl ?? 0), 0) / winCount   : 0;
-  const avgLoss      = lossCount > 0 ? Math.abs(losses.reduce((s, t) => s + (t.pnl ?? 0), 0)) / lossCount : 0;
-  const profitFactor = avgLoss > 0 ? (avgWin * winCount) / (avgLoss * Math.max(lossCount, 1)) : 0;
-  const largestWin   = wins.length   > 0 ? Math.max(...wins.map(t => t.pnl ?? 0))                : 0;
-  const largestLoss  = losses.length > 0 ? Math.abs(Math.min(...losses.map(t => t.pnl ?? 0)))    : 0;
-  const totalPnl = rows.reduce((s, t) => s + (t.pnl ?? 0), 0);
-  return { totalPnl, tradeCount, winCount, lossCount, winRate, avgWin, avgLoss, profitFactor, largestWin, largestLoss };
+  return aggregateTradeStats(and(eq(trades.accountId, accountId), gte(trades.closedAt, start), lte(trades.closedAt, end)));
 }
 
 // ─── Dashboard: weekly stats — AllTimeStats shape, current Mon–Sun week ──────
 
 export async function getWeeklyStats(accountId: string): Promise<AllTimeStats> {
-  const db  = getDb();
   const now  = new Date();
   const day  = now.getDay(); // 0=Sun
   const diffToMon = (day === 0 ? -6 : 1 - day);
@@ -611,53 +597,18 @@ export async function getWeeklyStats(accountId: string): Promise<AllTimeStats> {
   const pad  = (n: number) => String(n).padStart(2, "0");
   const fmt  = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 
-  const rows = await db
-    .select({ pnl: trades.pnl })
-    .from(trades)
-    .where(and(eq(trades.accountId, accountId), gte(trades.closedAt, fmt(mon)), lte(trades.closedAt, fmt(sun))));
-
-  const wins   = rows.filter((t) => (t.pnl ?? 0) > 0);
-  const losses = rows.filter((t) => (t.pnl ?? 0) < 0);
-  const tradeCount   = rows.length;
-  const winCount     = wins.length;
-  const lossCount    = losses.length;
-  const winRate      = tradeCount > 0 ? (winCount / tradeCount) * 100 : 0;
-  const avgWin       = winCount  > 0 ? wins.reduce((s, t)   => s + (t.pnl ?? 0), 0) / winCount   : 0;
-  const avgLoss      = lossCount > 0 ? Math.abs(losses.reduce((s, t) => s + (t.pnl ?? 0), 0)) / lossCount : 0;
-  const profitFactor = avgLoss > 0 ? (avgWin * winCount) / (avgLoss * Math.max(lossCount, 1)) : 0;
-  const largestWin   = wins.length   > 0 ? Math.max(...wins.map(t => t.pnl ?? 0))             : 0;
-  const largestLoss  = losses.length > 0 ? Math.abs(Math.min(...losses.map(t => t.pnl ?? 0))) : 0;
-  const totalPnl = rows.reduce((s, t) => s + (t.pnl ?? 0), 0);
-  return { totalPnl, tradeCount, winCount, lossCount, winRate, avgWin, avgLoss, profitFactor, largestWin, largestLoss };
+  return aggregateTradeStats(and(eq(trades.accountId, accountId), gte(trades.closedAt, fmt(mon)), lte(trades.closedAt, fmt(sun))));
 }
 
 // ─── Dashboard: today full stats — AllTimeStats shape, current day only ───────
 
 export async function getTodayFullStats(accountId: string): Promise<AllTimeStats> {
-  const db    = getDb();
   const today = localDateStr();
-  const rows  = await db
-    .select({ pnl: trades.pnl })
-    .from(trades)
-    .where(and(
-      eq(trades.accountId, accountId),
-      gte(trades.closedAt, today + "T00:00:00"),
-      lte(trades.closedAt, today + "T23:59:59"),
-    ));
-
-  const wins   = rows.filter((t) => (t.pnl ?? 0) > 0);
-  const losses = rows.filter((t) => (t.pnl ?? 0) < 0);
-  const tradeCount   = rows.length;
-  const winCount     = wins.length;
-  const lossCount    = losses.length;
-  const winRate      = tradeCount > 0 ? (winCount / tradeCount) * 100 : 0;
-  const avgWin       = winCount  > 0 ? wins.reduce((s, t)   => s + (t.pnl ?? 0), 0) / winCount   : 0;
-  const avgLoss      = lossCount > 0 ? Math.abs(losses.reduce((s, t) => s + (t.pnl ?? 0), 0)) / lossCount : 0;
-  const profitFactor = avgLoss > 0 ? (avgWin * winCount) / (avgLoss * Math.max(lossCount, 1)) : 0;
-  const largestWin   = wins.length   > 0 ? Math.max(...wins.map(t => t.pnl ?? 0))                : 0;
-  const largestLoss  = losses.length > 0 ? Math.abs(Math.min(...losses.map(t => t.pnl ?? 0)))    : 0;
-  const totalPnl = rows.reduce((s, t) => s + (t.pnl ?? 0), 0);
-  return { totalPnl, tradeCount, winCount, lossCount, winRate, avgWin, avgLoss, profitFactor, largestWin, largestLoss };
+  return aggregateTradeStats(and(
+    eq(trades.accountId, accountId),
+    gte(trades.closedAt, today + "T00:00:00"),
+    lte(trades.closedAt, today + "T23:59:59"),
+  ));
 }
 
 // ─── Dashboard: quotes ────────────────────────────────────────────────────────
@@ -944,6 +895,57 @@ export async function upsertJournalEntry(
   }
 }
 
+// ─── Trade images (entry/exit/additional screenshots) ────────────────────────
+
+export async function getImagesByTradeId(tradeId: string): Promise<TradeImage[]> {
+  const db = getDb();
+  return db
+    .select()
+    .from(tradeImages)
+    .where(eq(tradeImages.tradeId, tradeId))
+    .orderBy(tradeImages.sortOrder);
+}
+
+export interface TradeImageDraftInput {
+  id: string;
+  kind: "entry" | "exit" | "additional";
+  path: string;
+  description?: string;
+}
+
+// Reconcile the full image set for a trade in one pass: insert drafts that
+// aren't in the DB yet, update ones that are, delete rows no longer present.
+export async function syncTradeImages(tradeId: string, images: TradeImageDraftInput[]): Promise<void> {
+  const db = getDb();
+  const existing = await db
+    .select({ id: tradeImages.id })
+    .from(tradeImages)
+    .where(eq(tradeImages.tradeId, tradeId));
+  const existingIds = new Set(existing.map((r) => r.id));
+  const keepIds = new Set(images.map((i) => i.id));
+
+  for (const row of existing) {
+    if (!keepIds.has(row.id)) {
+      await db.delete(tradeImages).where(eq(tradeImages.id, row.id));
+    }
+  }
+
+  for (let i = 0; i < images.length; i++) {
+    const img = images[i];
+    if (existingIds.has(img.id)) {
+      await db
+        .update(tradeImages)
+        .set({ kind: img.kind, path: img.path, description: img.description ?? null, sortOrder: i })
+        .where(eq(tradeImages.id, img.id));
+    } else {
+      await db.insert(tradeImages).values({
+        id: img.id, tradeId, kind: img.kind, path: img.path,
+        description: img.description ?? null, sortOrder: i,
+      });
+    }
+  }
+}
+
 // ─── Delete a single trade + its journal entry ────────────────────────────────
 // Returns the { accountId, day } so the caller can recalculate stats.
 
@@ -957,8 +959,9 @@ export async function deleteTradeById(
   const trade = rows[0];
   const day   = (trade.closedAt ?? trade.openedAt).slice(0, 10); // "YYYY-MM-DD"
 
-  // Delete journal first (FK order)
+  // Delete journal + images first (FK order)
   await db.delete(tradeJournal).where(eq(tradeJournal.tradeId, tradeId));
+  await db.delete(tradeImages).where(eq(tradeImages.tradeId, tradeId));
   await db.delete(trades).where(eq(trades.id, tradeId));
 
   return { accountId: trade.accountId, day };
@@ -980,6 +983,9 @@ export async function clearAllTradesForAccount(accountId: string): Promise<void>
     const ids = accountTrades.map((t) => t.id);
     await db.delete(tradeJournal).where(
       sql`${tradeJournal.tradeId} IN (${sql.join(ids.map((id) => sql`${id}`), sql`, `)})`
+    );
+    await db.delete(tradeImages).where(
+      sql`${tradeImages.tradeId} IN (${sql.join(ids.map((id) => sql`${id}`), sql`, `)})`
     );
     await db.delete(trades).where(eq(trades.accountId, accountId));
   }
@@ -1004,15 +1010,14 @@ export async function clearAllTradesForAccount(accountId: string): Promise<void>
 export async function updateAccountBalance(accountId: string): Promise<void> {
   const db = getDb();
 
-  const allTrades = await db
-    .select({ pnl: trades.pnl })
+  const [{ totalPnl }] = await db
+    .select({ totalPnl: sql<number>`coalesce(sum(${trades.pnl}), 0)` })
     .from(trades)
     .where(eq(trades.accountId, accountId));
 
   const account = await getAccount(accountId);
   if (!account) return;
 
-  const totalPnl       = allTrades.reduce((s, t) => s + (t.pnl ?? 0), 0);
   const newBalance     = account.startingBalance + totalPnl;
 
   console.log("[updateAccountBalance] accountId:", accountId, "totalPnl:", totalPnl, "newBalance:", newBalance);
@@ -1030,12 +1035,11 @@ export async function updateAccountBalance(accountId: string): Promise<void> {
 export async function resetAccountBalance(accountId: string, targetBalance: number): Promise<void> {
   const db = getDb();
 
-  const allTrades = await db
-    .select({ pnl: trades.pnl })
+  const [{ totalPnl }] = await db
+    .select({ totalPnl: sql<number>`coalesce(sum(${trades.pnl}), 0)` })
     .from(trades)
     .where(eq(trades.accountId, accountId));
 
-  const totalPnl     = allTrades.reduce((s, t) => s + (t.pnl ?? 0), 0);
   const newStarting  = targetBalance - totalPnl;
 
   await db

@@ -15,6 +15,25 @@ const MIGRATIONS: string[] = [
   `UPDATE trades SET exit_price = target_price WHERE exit_price IS NULL AND target_price IS NOT NULL`,
   // v4 — account archiving (soft archive, preserves trade data)
   `ALTER TABLE accounts ADD COLUMN is_archived INTEGER NOT NULL DEFAULT 0`,
+  // v5 — entry/exit/additional trade screenshots with per-image descriptions
+  `CREATE TABLE IF NOT EXISTS trade_images (
+    id TEXT PRIMARY KEY,
+    trade_id TEXT NOT NULL REFERENCES trades(id),
+    kind TEXT NOT NULL,
+    path TEXT NOT NULL,
+    description TEXT,
+    sort_order INTEGER NOT NULL DEFAULT 0
+  )`,
+  // v6 — drop the supply/demand zones table (Strategy screen feature removed)
+  `DROP TABLE IF EXISTS supply_demand_zones`,
+  // v7 — indexes for the hot-path stats/dashboard/trade-log queries, which all
+  // filter trades by account_id (often + closed_at) and were doing full table
+  // scans over every Tauri IPC round-trip.
+  `CREATE INDEX IF NOT EXISTS idx_trades_account_id ON trades(account_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_trades_account_closed_at ON trades(account_id, closed_at)`,
+  `CREATE INDEX IF NOT EXISTS idx_daily_stats_account_day ON daily_stats(account_id, day)`,
+  `CREATE INDEX IF NOT EXISTS idx_trade_journal_trade_id ON trade_journal(trade_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_trade_images_trade_id ON trade_images(trade_id)`,
 ];
 
 export async function runMigrations(): Promise<void> {

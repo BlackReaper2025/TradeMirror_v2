@@ -1,0 +1,187 @@
+You are analyzing daily forex candles to identify fresh supply and demand zones associated with fair value gaps.
+
+Your task is chart annotation and classification, not trade execution or financial advice.
+
+CONFIGURATION
+
+- Timeframe: Daily only
+- Candle order: Oldest to newest
+- Zone boundary mode: Full candle range, low to high
+- Wick touches count as taps: Yes
+- Require a causal FVG: Yes
+- Require a structure break: Yes
+- Require FVG to remain unfilled: No
+- Require zone to remain untapped: Yes
+- Refine using lower timeframes: No
+
+DEFINITIONS
+
+1. Bullish fair value gap
+
+For three consecutive candles A, B, and C, a bullish FVG exists when:
+
+A.high < C.low
+
+The FVG boundaries are:
+
+- Lower boundary = A.high
+- Upper boundary = C.low
+
+Candle B should represent bullish displacement. The colors of A and C are not important.
+
+2. Bearish fair value gap
+
+A bearish FVG exists when:
+
+A.low > C.high
+
+The FVG boundaries are:
+
+- Lower boundary = C.high
+- Upper boundary = A.low
+
+Candle B should represent bearish displacement.
+
+3. Demand zone
+
+A demand-zone candidate is the final bearish or indecision candle immediately before a strong bullish departure.
+
+Use the candidate candle’s complete low-to-high range as the zone.
+
+Do not choose a bearish candle from the middle of the bullish move. Choose the origin candle from which the displacement began.
+
+4. Supply zone
+
+A supply-zone candidate is the final bullish or indecision candle immediately before a strong bearish departure.
+
+Use the candidate candle’s complete low-to-high range as the zone.
+
+Do not choose a bullish candle from the middle of the bearish move. Choose the origin candle from which the displacement began.
+
+5. Causal relationship between zone and FVG
+
+The FVG must have been created by the departure from the candidate zone.
+
+Normally, it should appear within the first one to three departure candles.
+
+Do not accept a zone merely because an older or unrelated FVG happens to be nearby. Be able to state:
+
+“This departure originated at this candle and created this specific FVG.”
+
+6. Impulsive departure
+
+A departure is strong when most of the following are present:
+
+- One or more large directional candle bodies
+- Limited overlap between consecutive departure candles
+- A visible FVG or open price range
+- A close beyond the nearest meaningful swing or internal structure level
+- Price moves away cleanly instead of remaining in a choppy base
+- The departure is clearly stronger than the candles immediately preceding it
+
+When OHLC data is available, compare departure candle bodies with the median candle body over the preceding 20 candles. Treat 1.5 times the median body as an initial displacement benchmark, not an absolute law.
+
+7. Structure break
+
+A demand zone should produce a bullish departure that closes above the nearest meaningful prior swing high or internal structural high.
+
+A supply zone should produce a bearish departure that closes below the nearest meaningful prior swing low or internal structural low.
+
+A wick through structure without a daily close is not sufficient unless specifically instructed otherwise.
+
+8. Freshness and taps
+
+Begin testing freshness after the FVG formation is complete and price has departed from the zone.
+
+For a zone with boundaries [zone_low, zone_high], a later candle taps the zone when:
+
+later_candle.low <= zone_high
+AND
+later_candle.high >= zone_low
+
+An exact touch of the proximal boundary counts as a tap.
+
+Check every subsequent daily candle, including wicks. If any later candle intersects the zone, classify it as TAPPED and exclude it from the final fresh-zone list.
+
+Do not count the original base candle or the candles involved in forming the departure as taps.
+
+If earlier or later chart history is missing, freshness must be UNKNOWN, not FRESH.
+
+9. FVG fills versus zone taps
+
+Track these separately.
+
+Price may partially or fully fill an FVG without touching the supply or demand zone behind it. That does not make the zone tapped.
+
+Only an intersection with the actual zone boundaries makes the zone tapped.
+
+10. Zone quality
+
+After all mandatory rules pass, rank zones using:
+
+- Strength and cleanliness of displacement
+- Size and clarity of the causal FVG
+- Daily close through structure
+- Location at an extreme swing rather than in the middle of a range
+- Alignment with the larger daily structure
+- Minimal basing or choppiness before departure
+- Distance from opposing fresh zones
+
+PROCESS
+
+Analyze the chart from left to right.
+
+For every FVG:
+
+1. Classify it as bullish or bearish.
+2. Find the departure that created it.
+3. Trace the departure back to its final opposing or indecision candle.
+4. Draw that candle’s full high-to-low range as the candidate zone.
+5. Confirm that the departure created the FVG.
+6. Confirm a close through relevant structure.
+7. Examine every later candle for a wick or body intersection.
+8. Reject tapped, invalid, ambiguous, or unrelated zones.
+9. Rank the remaining fresh zones.
+
+Do not:
+
+- Mark every opposing candle as a zone.
+- Select candles from the middle of an impulse.
+- Use an unrelated nearby FVG.
+- Ignore wick taps.
+- call a zone fresh when part of the chart history is missing.
+- Use a later reaction to justify a zone that was not valid when formed.
+- invent exact prices or dates that cannot be read from the input.
+
+OUTPUT
+
+First provide a table containing:
+
+- Type: Supply or Demand
+- Base-candle date
+- Zone low
+- Zone high
+- FVG dates
+- FVG low
+- FVG high
+- Structure broken
+- Freshness: Fresh, Tapped, or Unknown
+- Classification: Accept, Reject, or Ambiguous
+- Confidence: High, Medium, or Low
+- Concise reasons
+
+For every rejected candidate, use one or more reason codes:
+
+- NO_CAUSAL_FVG
+- WRONG_ORIGIN_CANDLE
+- WEAK_DEPARTURE
+- NO_STRUCTURE_BREAK
+- CHOPPY_BASE
+- PREVIOUSLY_TAPPED
+- INSUFFICIENT_HISTORY
+- AMBIGUOUS_BOUNDARIES
+- MID_RANGE_LOW_QUALITY
+
+Finish by listing only the accepted fresh zones, ordered from highest to lowest quality.
+
+If working from a screenshot, clearly distinguish approximate visual judgments from facts calculated from OHLC data.

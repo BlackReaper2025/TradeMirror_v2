@@ -1,5 +1,5 @@
 // ─── TradeTable — lists all trades for the selected account ──────────────────
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback, memo } from "react";
 import { ArrowUpRight, ArrowDownRight, BookOpen, Pencil, Trash2 } from "lucide-react";
 import { Badge } from "../ui/Badge";
 import type { TradeWithJournal } from "../../db/queries";
@@ -70,6 +70,205 @@ const COL_HEADERS = [
   { label: "",             width: 72  }, // actions
 ];
 
+interface TradeRowProps {
+  trade: TradeWithJournal;
+  rowNumber: number;
+  rowBg: string;
+  isNewDateGroup: boolean;
+  hour12: boolean;
+  awaitingConfirm: boolean;
+  onEditTrade: (trade: TradeWithJournal) => void;
+  onDeleteClick: (tradeId: string) => void;
+}
+
+// Memoized so that toggling the delete-confirm state (or hour12 pref) only
+// re-renders the one row affected instead of every row in the table.
+const TradeRow = memo(function TradeRow({
+  trade, rowNumber, rowBg, isNewDateGroup, hour12, awaitingConfirm, onEditTrade, onDeleteClick,
+}: TradeRowProps) {
+  const pnl      = trade.pnl ?? 0;
+  const isWin    = pnl > 0;
+  const isLoss   = pnl < 0;
+  const pnlColor = isWin ? "#7ed62e" : isLoss ? "#f03a3a" : "var(--text-secondary)";
+
+  return (
+    <tr
+      className="group transition-colors cursor-pointer"
+      style={{
+        background: rowBg,
+        borderBottom: "1px solid var(--border-subtle)",
+        borderTop: isNewDateGroup ? "2px solid rgba(255,255,255,0.2)" : undefined,
+      }}
+      onDoubleClick={() => onEditTrade(trade)}
+    >
+      {/* # */}
+      <td className="px-3 py-3 text-center tabular-nums" style={{ boxShadow: "inset -1px 0 0 var(--border-subtle)" }}>
+        <span className="text-[11px] font-medium" style={{ color: "var(--text-muted)" }}>
+          {rowNumber}
+        </span>
+      </td>
+
+      {/* Entry Date */}
+      <td className="px-3 py-3 text-center">
+        <span className="text-[12px] font-medium" style={{ color: "var(--text-secondary)" }}>
+          {fmtDate(trade.openedAt)}
+        </span>
+      </td>
+
+      {/* Entry Time */}
+      <td className="px-3 py-3 text-center tabular-nums" style={{ boxShadow: "inset -1px 0 0 var(--border-subtle)" }}>
+        <span className="text-[11px]" style={{ color: "var(--text-muted)" }}>
+          {fmtTime(trade.openedAt, hour12)}
+        </span>
+      </td>
+
+      {/* Instrument */}
+      <td className="px-3 py-3 text-center" style={{ boxShadow: "inset -1px 0 0 var(--border-subtle)" }}>
+        <span className="text-[13px] font-semibold" style={{ color: "var(--text-secondary)" }}>
+          {trade.instrument}
+        </span>
+      </td>
+
+      {/* Side */}
+      <td className="px-3 py-3 text-center" style={{ boxShadow: "inset -1px 0 0 var(--border-subtle)" }}>
+        <div className="flex items-center justify-center gap-1.5">
+          <div
+            className="w-5 h-5 rounded-md flex items-center justify-center"
+            style={{ background: trade.side === "long" ? "rgba(126,214,46,0.12)" : "rgba(240,58,58,0.12)" }}
+          >
+            {trade.side === "long"
+              ? <ArrowUpRight size={12} style={{ color: "#7ed62e" }} />
+              : <ArrowDownRight size={12} style={{ color: "#f03a3a" }} />
+            }
+          </div>
+          <span className="text-[12px] font-medium capitalize" style={{ color: trade.side === "long" ? "#7ed62e" : "#f03a3a" }}>
+            {trade.side}
+          </span>
+        </div>
+      </td>
+
+      {/* Size */}
+      <td className="px-3 py-3 text-center tabular-nums" style={{ boxShadow: "inset -1px 0 0 var(--border-subtle)" }}>
+        <span className="text-[12px]" style={{ color: "var(--text-muted)" }}>
+          {fmtSize(trade.size)}
+        </span>
+      </td>
+
+      {/* Entry Price */}
+      <td className="px-3 py-3 text-center tabular-nums">
+        <span className="text-[12px]" style={{ color: "var(--text-muted)" }}>
+          {fmtPrice(trade.entryPrice)}
+        </span>
+      </td>
+
+      {/* Stop Price */}
+      <td className="px-3 py-3 text-center tabular-nums">
+        <span className="text-[12px]" style={{ color: "var(--text-muted)" }}>
+          {fmtPrice(trade.stopPrice)}
+        </span>
+      </td>
+
+      {/* Target Price */}
+      <td className="px-3 py-3 text-center tabular-nums" style={{ boxShadow: "inset -1px 0 0 var(--border-subtle)" }}>
+        <span className="text-[12px]" style={{ color: "var(--text-muted)" }}>
+          {fmtPrice(trade.targetPrice)}
+        </span>
+      </td>
+
+      {/* Exit Date */}
+      <td className="px-3 py-3 text-center" style={{ whiteSpace: "nowrap" }}>
+        <span className="text-[12px] font-medium" style={{ color: "var(--text-secondary)" }}>
+          {trade.closedAt ? fmtDate(trade.closedAt) : "—"}
+        </span>
+      </td>
+
+      {/* Exit Time */}
+      <td className="px-3 py-3 text-center tabular-nums">
+        <span className="text-[11px]" style={{ color: "var(--text-muted)" }}>
+          {trade.closedAt ? fmtTime(trade.closedAt, hour12) : "—"}
+        </span>
+      </td>
+
+      {/* Exit Price */}
+      <td className="px-3 py-3 text-center tabular-nums" style={{ boxShadow: "inset -1px 0 0 var(--border-subtle)" }}>
+        <span className="text-[12px]" style={{ color: "var(--text-muted)" }}>
+          {fmtPrice(trade.exitPrice)}
+        </span>
+      </td>
+
+      {/* P&L */}
+      <td className="px-3 py-3 text-center tabular-nums" style={{ boxShadow: "inset -1px 0 0 var(--border-subtle)" }}>
+        <span className="text-[13px] font-bold" style={{ color: pnlColor }}>
+          {fmt(pnl)}
+        </span>
+      </td>
+
+      {/* Trade ID */}
+      <td className="px-3 py-3 text-center tabular-nums" style={{ boxShadow: "inset -1px 0 0 var(--border-subtle)" }}>
+        <span className="text-[11px] font-mono" style={{ color: "var(--text-muted)" }}>
+          {trade.tradeRef ?? "—"}
+        </span>
+      </td>
+
+      {/* Setup */}
+      <td className="px-3 py-3 text-center">
+        {trade.setupName ? (
+          <span className="text-[12px]" style={{ color: "var(--text-muted)" }}>
+            {trade.setupName}
+          </span>
+        ) : (
+          <span style={{ color: "var(--text-muted)" }}>—</span>
+        )}
+      </td>
+
+      {/* Journal indicator */}
+      <td className="px-3 py-3 text-center">
+        {trade.journal ? (
+          <Badge label="✓" color="green" />
+        ) : (
+          <span className="text-[11px]" style={{ color: "var(--text-muted)" }}>—</span>
+        )}
+      </td>
+
+      {/* Actions */}
+      <td className="px-3 py-3" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-center gap-1">
+          {/* Edit hint icon — subtle, reinforces row is clickable */}
+          <button
+            title="Edit trade"
+            onClick={(e) => { e.stopPropagation(); onEditTrade(trade); }}
+            className="w-6 h-6 rounded flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+            style={{ color: "var(--text-muted)" }}
+          >
+            <Pencil size={12} />
+          </button>
+
+          {/* Delete button — two-click confirm */}
+          <button
+            title={awaitingConfirm ? "Click again to confirm delete" : "Delete trade"}
+            onClick={(e) => { e.stopPropagation(); onDeleteClick(trade.id); }}
+            className="w-6 h-6 rounded flex items-center justify-center opacity-0 group-hover:opacity-100 transition-all"
+            style={{
+              color: awaitingConfirm ? "#f87171" : "var(--text-muted)",
+              background: awaitingConfirm ? "rgba(248,113,113,0.12)" : "transparent",
+              opacity: awaitingConfirm ? 1 : undefined,
+            }}
+          >
+            <Trash2 size={12} />
+          </button>
+
+          {/* Confirm label */}
+          {awaitingConfirm && (
+            <span className="text-[10px] font-semibold" style={{ color: "#f87171" }}>
+              Confirm?
+            </span>
+          )}
+        </div>
+      </td>
+    </tr>
+  );
+});
+
 export function TradeTable({ trades, onNewTrade, onEditTrade, onDeleteTrade }: Props) {
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [hour12, setHour12] = useState(() => getTimeFormat() === "12h");
@@ -80,18 +279,19 @@ export function TradeTable({ trades, onNewTrade, onEditTrade, onDeleteTrade }: P
     return () => window.removeEventListener("tm:prefs-changed", handler);
   }, []);
 
-  function handleDeleteClick(e: React.MouseEvent, tradeId: string) {
-    e.stopPropagation(); // don't open the edit drawer
-    if (confirmDeleteId === tradeId) {
-      // Second click = confirmed
-      setConfirmDeleteId(null);
-      onDeleteTrade(tradeId);
-    } else {
-      setConfirmDeleteId(tradeId);
+  // Stable across re-renders (no confirmDeleteId in deps) so TradeRow's memo
+  // isn't invalidated for every row just because one row's confirm state ticked.
+  const handleDeleteClick = useCallback((tradeId: string) => {
+    setConfirmDeleteId((cur) => {
+      if (cur === tradeId) {
+        onDeleteTrade(tradeId);
+        return null;
+      }
       // Auto-cancel after 4 s
-      setTimeout(() => setConfirmDeleteId((cur) => (cur === tradeId ? null : cur)), 4000);
-    }
-  }
+      setTimeout(() => setConfirmDeleteId((c) => (c === tradeId ? null : c)), 4000);
+      return tradeId;
+    });
+  }, [onDeleteTrade]);
 
   if (trades.length === 0) {
     return (
@@ -139,192 +339,21 @@ export function TradeTable({ trades, onNewTrade, onEditTrade, onDeleteTrade }: P
         </thead>
         <tbody>
           {trades.map((trade, i) => {
-            const pnl      = trade.pnl ?? 0;
-            const isWin    = pnl > 0;
-            const isLoss   = pnl < 0;
-            const pnlColor = isWin ? "#7ed62e" : isLoss ? "#f03a3a" : "var(--text-secondary)";
-            const awaitingConfirm = confirmDeleteId === trade.id;
             const prevDate = i > 0 ? (trades[i - 1].closedAt?.slice(0, 10) ?? null) : null;
             const thisDate = trade.closedAt?.slice(0, 10) ?? null;
             const isNewDateGroup = prevDate !== null && prevDate !== thisDate;
-
-            const rowBg = i % 2 === 0 ? "transparent" : "rgba(255,255,255,0.04)";
             return (
-              <tr
+              <TradeRow
                 key={trade.id}
-                className="group transition-colors cursor-pointer"
-                style={{
-                  background: rowBg,
-                  borderBottom: "1px solid var(--border-subtle)",
-                  borderTop: isNewDateGroup ? "2px solid rgba(255,255,255,0.2)" : undefined,
-                }}
-                onDoubleClick={() => onEditTrade(trade)}
-              >
-                {/* # */}
-                <td className="px-3 py-3 text-center tabular-nums" style={{ boxShadow: "inset -1px 0 0 var(--border-subtle)" }}>
-                  <span className="text-[11px] font-medium" style={{ color: "var(--text-muted)" }}>
-                    {trades.length - i}
-                  </span>
-                </td>
-
-                {/* Entry Date */}
-                <td className="px-3 py-3 text-center">
-                  <span className="text-[12px] font-medium" style={{ color: "var(--text-secondary)" }}>
-                    {fmtDate(trade.openedAt)}
-                  </span>
-                </td>
-
-                {/* Entry Time */}
-                <td className="px-3 py-3 text-center tabular-nums" style={{ boxShadow: "inset -1px 0 0 var(--border-subtle)" }}>
-                  <span className="text-[11px]" style={{ color: "var(--text-muted)" }}>
-                    {fmtTime(trade.openedAt, hour12)}
-                  </span>
-                </td>
-
-                {/* Instrument */}
-                <td className="px-3 py-3 text-center" style={{ boxShadow: "inset -1px 0 0 var(--border-subtle)" }}>
-                  <span className="text-[13px] font-semibold" style={{ color: "var(--text-secondary)" }}>
-                    {trade.instrument}
-                  </span>
-                </td>
-
-                {/* Side */}
-                <td className="px-3 py-3 text-center" style={{ boxShadow: "inset -1px 0 0 var(--border-subtle)" }}>
-                  <div className="flex items-center justify-center gap-1.5">
-                    <div
-                      className="w-5 h-5 rounded-md flex items-center justify-center"
-                      style={{ background: trade.side === "long" ? "rgba(126,214,46,0.12)" : "rgba(240,58,58,0.12)" }}
-                    >
-                      {trade.side === "long"
-                        ? <ArrowUpRight size={12} style={{ color: "#7ed62e" }} />
-                        : <ArrowDownRight size={12} style={{ color: "#f03a3a" }} />
-                      }
-                    </div>
-                    <span className="text-[12px] font-medium capitalize" style={{ color: trade.side === "long" ? "#7ed62e" : "#f03a3a" }}>
-                      {trade.side}
-                    </span>
-                  </div>
-                </td>
-
-                {/* Size */}
-                <td className="px-3 py-3 text-center tabular-nums" style={{ boxShadow: "inset -1px 0 0 var(--border-subtle)" }}>
-                  <span className="text-[12px]" style={{ color: "var(--text-muted)" }}>
-                    {fmtSize(trade.size)}
-                  </span>
-                </td>
-
-                {/* Entry Price */}
-                <td className="px-3 py-3 text-center tabular-nums">
-                  <span className="text-[12px]" style={{ color: "var(--text-muted)" }}>
-                    {fmtPrice(trade.entryPrice)}
-                  </span>
-                </td>
-
-                {/* Stop Price */}
-                <td className="px-3 py-3 text-center tabular-nums">
-                  <span className="text-[12px]" style={{ color: "var(--text-muted)" }}>
-                    {fmtPrice(trade.stopPrice)}
-                  </span>
-                </td>
-
-                {/* Target Price */}
-                <td className="px-3 py-3 text-center tabular-nums" style={{ boxShadow: "inset -1px 0 0 var(--border-subtle)" }}>
-                  <span className="text-[12px]" style={{ color: "var(--text-muted)" }}>
-                    {fmtPrice(trade.targetPrice)}
-                  </span>
-                </td>
-
-                {/* Exit Date */}
-                <td className="px-3 py-3 text-center" style={{ whiteSpace: "nowrap" }}>
-                  <span className="text-[12px] font-medium" style={{ color: "var(--text-secondary)" }}>
-                    {trade.closedAt ? fmtDate(trade.closedAt) : "—"}
-                  </span>
-                </td>
-
-                {/* Exit Time */}
-                <td className="px-3 py-3 text-center tabular-nums">
-                  <span className="text-[11px]" style={{ color: "var(--text-muted)" }}>
-                    {trade.closedAt ? fmtTime(trade.closedAt, hour12) : "—"}
-                  </span>
-                </td>
-
-                {/* Exit Price */}
-                <td className="px-3 py-3 text-center tabular-nums" style={{ boxShadow: "inset -1px 0 0 var(--border-subtle)" }}>
-                  <span className="text-[12px]" style={{ color: "var(--text-muted)" }}>
-                    {fmtPrice(trade.exitPrice)}
-                  </span>
-                </td>
-
-                {/* P&L */}
-                <td className="px-3 py-3 text-center tabular-nums" style={{ boxShadow: "inset -1px 0 0 var(--border-subtle)" }}>
-                  <span className="text-[13px] font-bold" style={{ color: pnlColor }}>
-                    {fmt(pnl)}
-                  </span>
-                </td>
-
-                {/* Trade ID */}
-                <td className="px-3 py-3 text-center tabular-nums" style={{ boxShadow: "inset -1px 0 0 var(--border-subtle)" }}>
-                  <span className="text-[11px] font-mono" style={{ color: "var(--text-muted)" }}>
-                    {trade.tradeRef ?? "—"}
-                  </span>
-                </td>
-
-                {/* Setup */}
-                <td className="px-3 py-3 text-center">
-                  {trade.setupName ? (
-                    <span className="text-[12px]" style={{ color: "var(--text-muted)" }}>
-                      {trade.setupName}
-                    </span>
-                  ) : (
-                    <span style={{ color: "var(--text-muted)" }}>—</span>
-                  )}
-                </td>
-
-                {/* Journal indicator */}
-                <td className="px-3 py-3 text-center">
-                  {trade.journal ? (
-                    <Badge label="✓" color="green" />
-                  ) : (
-                    <span className="text-[11px]" style={{ color: "var(--text-muted)" }}>—</span>
-                  )}
-                </td>
-
-                {/* Actions */}
-                <td className="px-3 py-3" onClick={(e) => e.stopPropagation()}>
-                  <div className="flex items-center justify-center gap-1">
-                    {/* Edit hint icon — subtle, reinforces row is clickable */}
-                    <button
-                      title="Edit trade"
-                      onClick={(e) => { e.stopPropagation(); onEditTrade(trade); }}
-                      className="w-6 h-6 rounded flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
-                      style={{ color: "var(--text-muted)" }}
-                    >
-                      <Pencil size={12} />
-                    </button>
-
-                    {/* Delete button — two-click confirm */}
-                    <button
-                      title={awaitingConfirm ? "Click again to confirm delete" : "Delete trade"}
-                      onClick={(e) => handleDeleteClick(e, trade.id)}
-                      className="w-6 h-6 rounded flex items-center justify-center opacity-0 group-hover:opacity-100 transition-all"
-                      style={{
-                        color: awaitingConfirm ? "#f87171" : "var(--text-muted)",
-                        background: awaitingConfirm ? "rgba(248,113,113,0.12)" : "transparent",
-                        opacity: awaitingConfirm ? 1 : undefined,
-                      }}
-                    >
-                      <Trash2 size={12} />
-                    </button>
-
-                    {/* Confirm label */}
-                    {awaitingConfirm && (
-                      <span className="text-[10px] font-semibold" style={{ color: "#f87171" }}>
-                        Confirm?
-                      </span>
-                    )}
-                  </div>
-                </td>
-              </tr>
+                trade={trade}
+                rowNumber={trades.length - i}
+                rowBg={i % 2 === 0 ? "transparent" : "rgba(255,255,255,0.04)"}
+                isNewDateGroup={isNewDateGroup}
+                hour12={hour12}
+                awaitingConfirm={confirmDeleteId === trade.id}
+                onEditTrade={onEditTrade}
+                onDeleteClick={handleDeleteClick}
+              />
             );
           })}
         </tbody>

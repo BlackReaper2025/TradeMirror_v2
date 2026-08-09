@@ -1,5 +1,5 @@
 // ─── Trade Log page — Phase 3 ────────────────────────────────────────────────
-import React, { useEffect, useState, useCallback } from "react";
+import React, { useEffect, useState, useCallback, useMemo } from "react";
 import { Plus, TrendingUp, TrendingDown, BarChart2, Hash } from "lucide-react";
 import { Panel } from "../components/ui/Panel";
 import { TradeTable } from "../components/tradelog/TradeTable";
@@ -12,6 +12,7 @@ import {
   createJournalEntry,
   updateTrade,
   upsertJournalEntry,
+  syncTradeImages,
   deleteTradeById,
   recalculateDailyStats,
   updateAccountBalance,
@@ -113,6 +114,8 @@ export function TradeLog() {
         freeformNotes:   values.freeformNotes.trim()               || undefined,
       });
 
+      await syncTradeImages(tradeId, values.images);
+
       await finishSave(account.id, [day]);
     } catch (err) {
       console.error("[TradeLog] create error:", err);
@@ -162,6 +165,8 @@ export function TradeLog() {
         }
       );
 
+      await syncTradeImages(editTrade.id, values.images);
+
       // Recalculate both days in case openedAt moved to a different date
       await finishSave(account.id, [oldDay, newDay]);
     } catch (err) {
@@ -184,14 +189,19 @@ export function TradeLog() {
   }, [account, load]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Summary stats from loaded trades ──────────────────────────────────────
-  const wins    = trades.filter((t) => (t.pnl ?? 0) > 0);
-  const losses  = trades.filter((t) => (t.pnl ?? 0) < 0);
-  const totalPnl    = trades.reduce((s, t) => s + (t.pnl ?? 0), 0);
-  const winRate     = trades.length > 0 ? Math.round((wins.length / trades.length) * 100) : 0;
-  const avgWin      = wins.length   > 0 ? wins.reduce((s, t)   => s + (t.pnl ?? 0), 0) / wins.length   : 0;
-  const avgLoss     = losses.length > 0 ? Math.abs(losses.reduce((s, t) => s + (t.pnl ?? 0), 0)) / losses.length : 0;
-  const largestWin  = wins.length   > 0 ? Math.max(...wins.map((t) => t.pnl ?? 0))   : 0;
-  const largestLoss = losses.length > 0 ? Math.abs(Math.min(...losses.map((t) => t.pnl ?? 0))) : 0;
+  // Memoized so unrelated re-renders (form open/close, save errors) don't redo
+  // 7 full passes over the trade list every time.
+  const { wins, losses, totalPnl, winRate, avgWin, avgLoss, largestWin, largestLoss } = useMemo(() => {
+    const wins    = trades.filter((t) => (t.pnl ?? 0) > 0);
+    const losses  = trades.filter((t) => (t.pnl ?? 0) < 0);
+    const totalPnl    = trades.reduce((s, t) => s + (t.pnl ?? 0), 0);
+    const winRate     = trades.length > 0 ? Math.round((wins.length / trades.length) * 100) : 0;
+    const avgWin      = wins.length   > 0 ? wins.reduce((s, t)   => s + (t.pnl ?? 0), 0) / wins.length   : 0;
+    const avgLoss     = losses.length > 0 ? Math.abs(losses.reduce((s, t) => s + (t.pnl ?? 0), 0)) / losses.length : 0;
+    const largestWin  = wins.length   > 0 ? Math.max(...wins.map((t) => t.pnl ?? 0))   : 0;
+    const largestLoss = losses.length > 0 ? Math.abs(Math.min(...losses.map((t) => t.pnl ?? 0))) : 0;
+    return { wins, losses, totalPnl, winRate, avgWin, avgLoss, largestWin, largestLoss };
+  }, [trades]);
 
   return (
     <div
