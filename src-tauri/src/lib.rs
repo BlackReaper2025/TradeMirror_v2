@@ -426,7 +426,7 @@ fn get_live_candles(pair: String, tf: String) -> Result<Vec<oanda_client::RawCan
         _     => return Err(format!("Unknown timeframe: {}", tf)),
     };
 
-    oanda_client::fetch_raw_candles_tf(&api_key, &instrument, granularity, 5000)
+    oanda_client::fetch_raw_candles_tf(&api_key, &instrument, granularity, 1000)
 }
 
 // ─── Live candles with computed indicators for any timeframe ─────────────────
@@ -457,7 +457,7 @@ fn get_live_candles_computed(pair: String, tf: String) -> Result<Vec<CandleV3>, 
         _     => return Err(format!("Unknown timeframe: {}", tf)),
     };
 
-    let raw = oanda_client::fetch_raw_candles_tf(&api_key, &instrument, granularity, 5000)?;
+    let raw = oanda_client::fetch_raw_candles_tf(&api_key, &instrument, granularity, 1000)?;
     Ok(indicators::compute(raw))
 }
 

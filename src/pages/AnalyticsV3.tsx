@@ -28,7 +28,7 @@ import { getAnalyticsPanelOrder, setAnalyticsPanelOrder } from "../lib/preferenc
 import { playAlertSound } from "../lib/alertSound";
 import type { AlertSound } from "../lib/alertSound";
 import { AlertsPanel, type Alert } from "../components/panels/AlertsPanel";
-import { freshSupplyDemandZones, mostRecentTappedZone, type SupplyDemandZone } from "../lib/supplyDemand";
+import { computeSupplyDemandZones, type SupplyDemandZone } from "../lib/supplyDemand";
 import { computeAutoTrendlines, type TrendlineSegment } from "../lib/trendlines";
 import { invoke }                from "@tauri-apps/api/core";
 import {
@@ -1156,6 +1156,14 @@ function PriceHistoryChart({ pair, chartTf, setChartTf, livePrice }: { rows: She
     return () => clearInterval(id);
   }, [show1HZones, pair]);
 
+  // Fair-value-gap zone detection is O(n^2)-ish over the candle series — run
+  // it once per timeframe whenever that timeframe's candles actually change,
+  // not on every 5s live-price tick (the zone-box effect below only needs a
+  // cheap price comparison against this already-computed list).
+  const dailyZonesAll = useMemo(() => computeSupplyDemandZones(dailyZoneCandles), [dailyZoneCandles]);
+  const h4ZonesAll    = useMemo(() => computeSupplyDemandZones(h4ZoneCandles),    [h4ZoneCandles]);
+  const h1ZonesAll    = useMemo(() => computeSupplyDemandZones(h1ZoneCandles),    [h1ZoneCandles]);
+
   // Weekly trendline candles — fetched only while the Weekly trendline toggle is on
   useEffect(() => {
     if (!showWeeklyTrend) { setWeeklyTrendCandles([]); return; }
@@ -1216,14 +1224,21 @@ function PriceHistoryChart({ pair, chartTf, setChartTf, livePrice }: { rows: She
     });
     const currentPrice = livePrice ?? (tfRows.length > 0 ? tfRows[tfRows.length - 1].close : null);
 
-    const processTf = (tfLabel: string, candles: RawCandleTf[]): { fresh: ZoneBox[]; tapped: ZoneBox[] } => {
-      const freshZones = freshSupplyDemandZones(candles);
+    // zonesAll is precomputed (useMemo, keyed on the candle array) — derive
+    // both fresh and tapped from that single pass instead of recomputing the
+    // FVG scan twice per timeframe.
+    const processTf = (tfLabel: string, zonesAll: SupplyDemandZone[], candles: RawCandleTf[]): { fresh: ZoneBox[]; tapped: ZoneBox[] } => {
+      const freshZones = zonesAll.filter(z => z.fresh);
       let liveTapped: SupplyDemandZone | null = null;
       if (currentPrice !== null) {
         const idx = freshZones.findIndex(z => currentPrice >= z.zoneLow && currentPrice <= z.zoneHigh);
         if (idx !== -1) [liveTapped] = freshZones.splice(idx, 1);
       }
-      let tapped = liveTapped ?? mostRecentTappedZone(candles);
+      let tapped = liveTapped ?? (() => {
+        const tappedZones = zonesAll.filter(z => !z.fresh && z.tapIndex !== null);
+        if (tappedZones.length === 0) return null;
+        return tappedZones.reduce((a, b) => (b.tapIndex! > a.tapIndex! ? b : a));
+      })();
       // Once a candle CLOSES all the way through the tapped zone — on the
       // zone's own timeframe, not just an intrabar wick or live tick — it's
       // no longer relevant context, so hide it. Uses the last fully closed
@@ -1263,15 +1278,17 @@ function PriceHistoryChart({ pair, chartTf, setChartTf, livePrice }: { rows: She
 
     let freshBoxes: ZoneBox[] = [];
     let tappedBoxes: ZoneBox[] = [];
-    if (showDailyZones) { const r = processTf("D",  dailyZoneCandles); freshBoxes = freshBoxes.concat(r.fresh); tappedBoxes = tappedBoxes.concat(r.tapped); }
-    if (show4HZones)    { const r = processTf("4H", h4ZoneCandles);    freshBoxes = freshBoxes.concat(r.fresh); tappedBoxes = tappedBoxes.concat(r.tapped); }
-    if (show1HZones)    { const r = processTf("1H", h1ZoneCandles);    freshBoxes = freshBoxes.concat(r.fresh); tappedBoxes = tappedBoxes.concat(r.tapped); }
+    if (showDailyZones) { const r = processTf("D",  dailyZonesAll, dailyZoneCandles); freshBoxes = freshBoxes.concat(r.fresh); tappedBoxes = tappedBoxes.concat(r.tapped); }
+    if (show4HZones)    { const r = processTf("4H", h4ZonesAll,    h4ZoneCandles);    freshBoxes = freshBoxes.concat(r.fresh); tappedBoxes = tappedBoxes.concat(r.tapped); }
+    if (show1HZones)    { const r = processTf("1H", h1ZonesAll,    h1ZoneCandles);    freshBoxes = freshBoxes.concat(r.fresh); tappedBoxes = tappedBoxes.concat(r.tapped); }
 
     const boxes = [...freshBoxes, ...tappedBoxes];
     zoneBoxesRef.current = boxes;
     if (zonePrimRef.current) zonePrimRef.current._zones = boxes;
     chartRef.current?.applyOptions({});
-  }, [showDailyZones, show4HZones, show1HZones, dailyZoneCandles, h4ZoneCandles, h1ZoneCandles, tfRows, livePrice]);
+  }, [showDailyZones, show4HZones, show1HZones,
+      dailyZoneCandles, h4ZoneCandles, h1ZoneCandles,
+      dailyZonesAll, h4ZonesAll, h1ZonesAll, tfRows, livePrice]);
 
   // ── Indicator series helpers ────────────────────────────────────────────────
 
