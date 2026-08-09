@@ -1,6 +1,5 @@
 // ─── Trade Log page — Phase 3 ────────────────────────────────────────────────
 import React, { useEffect, useState, useCallback, useMemo } from "react";
-import { Plus, TrendingUp, TrendingDown, BarChart2, Hash } from "lucide-react";
 import { Panel } from "../components/ui/Panel";
 import { TradeTable } from "../components/tradelog/TradeTable";
 import { useDatabase } from "../db/DatabaseProvider";

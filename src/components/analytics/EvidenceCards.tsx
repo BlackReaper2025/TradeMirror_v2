@@ -421,7 +421,7 @@ function ExpandedModal({ card, onClose }: { card: EvidenceCard; onClose: () => v
                       background: "var(--bg-panel)", border: "1px solid var(--border-subtle)",
                       borderRadius: "8px", fontSize: "10px", color: "var(--text-secondary)", pointerEvents: "none",
                     }}
-                    formatter={(val: number) => val.toFixed(1)}
+                    formatter={(val) => typeof val === "number" ? val.toFixed(1) : String(val ?? "")}
                     labelFormatter={() => ""}
                   />
                   {mShowDiPlus  && <Line dataKey="diPlus"  dot={false} activeDot={false} strokeWidth={1.5} stroke="#60a5fa" />}
@@ -603,7 +603,7 @@ function ExpandedModal({ card, onClose }: { card: EvidenceCard; onClose: () => v
                       background: "var(--bg-panel)", border: "1px solid var(--border-subtle)",
                       borderRadius: "8px", fontSize: "10px", color: "var(--text-secondary)", pointerEvents: "none",
                     }}
-                    formatter={(val: number) => val.toFixed(5)}
+                    formatter={(val) => typeof val === "number" ? val.toFixed(5) : String(val ?? "")}
                     labelFormatter={() => ""}
                   />
                   {mShowHistogram && <Bar dataKey="histogram" fill="#7a8fa8" opacity={0.5} radius={[2, 2, 0, 0]} />}

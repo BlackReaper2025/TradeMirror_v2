@@ -111,7 +111,7 @@ export function getAnalyticsPanelOrder(defaultOrder: string[]): string[] {
       ids[0] !== defaultOrder[0] ||       // pinned slot 0 must match
       ids[1] !== defaultOrder[1]          // pinned slot 1 must match
     ) return [...defaultOrder];
-    return saved;
+    return ids as string[];
   } catch {
     return [...defaultOrder];
   }

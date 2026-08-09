@@ -4,7 +4,7 @@ import {
   Calculator, Settings,
   PanelLeftClose, PanelLeftOpen, ExternalLink, Music,
 } from "lucide-react";
-import { PieChart, Pie, Cell, ResponsiveContainer, Sector } from "recharts";
+import { PieChart, Pie, Cell, ResponsiveContainer } from "recharts";
 import { clsx } from "clsx";
 import { useDatabase } from "../../db/DatabaseProvider";
 import { tradeEvents } from "../../lib/tradeEvents";
@@ -189,17 +189,13 @@ function PortfolioWidget({ portfolio, activeAccountName }: { portfolio: Portfoli
                 paddingAngle={2}
                 dataKey="value"
                 strokeWidth={0}
-                activeIndex={activeIdx >= 0 ? activeIdx : undefined}
-                activeShape={(props: Record<string, unknown>) => (
-                  <Sector
-                    {...(props as Parameters<typeof Sector>[0])}
-                    outerRadius={(props.outerRadius as number ?? 38) + 4}
-                    style={{ filter: `drop-shadow(0 0 7px ${glowColor})` }}
-                  />
-                )}
               >
                 {portfolio.map((_, i) => (
-                  <Cell key={i} fill={shades[i]} />
+                  <Cell
+                    key={i}
+                    fill={shades[i]}
+                    style={i === activeIdx ? { filter: `drop-shadow(0 0 7px ${glowColor})` } : undefined}
+                  />
                 ))}
               </Pie>
             </PieChart>

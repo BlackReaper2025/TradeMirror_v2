@@ -167,7 +167,7 @@ function CandleChart({ candles, startingBalance }: { candles: Candle[]; starting
           tickFormatter={fmtBalance} width={52}
         />
         <Tooltip content={<CandleTooltip />} cursor={{ stroke: "rgba(255,255,255,0.07)", strokeWidth: 1 }} />
-        <Customized component={(props: object) => <CandlesLayer candles={candles} {...(props as Parameters<typeof CandlesLayer>[0])} />} />
+        <Customized component={(props: object) => <CandlesLayer {...(props as Parameters<typeof CandlesLayer>[0])} candles={candles} />} />
       </ComposedChart>
     </ResponsiveContainer>
   );
