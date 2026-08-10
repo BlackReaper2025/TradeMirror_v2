@@ -6,11 +6,14 @@
 //  Row 3         — Detail:   Entry/Exit plan | Signal history dots | Live indicator bars
 //
 import { useEffect, useRef, useState, useCallback, useMemo, memo } from "react";
+import { createPortal } from "react-dom";
 import {
   ComposedChart, Bar, Line, Area, XAxis, YAxis, ReferenceLine, ReferenceArea,
   ResponsiveContainer, Cell, Tooltip,
 } from "recharts";
-import { Maximize2, Minimize2, X, GripVertical, Settings } from "lucide-react";
+import { Maximize2, Minimize2, X, GripVertical, Settings, Camera } from "lucide-react";
+import { toPng } from "html-to-image";
+import { getSettings, getAllTradesWithJournal, addTradeImage, type TradeWithJournal } from "../db/queries";
 import { VerdictPanel }          from "../components/analytics/VerdictPanel";
 import { EvidenceCards }         from "../components/analytics/EvidenceCards";
 import { EntryExitPanel }        from "../components/analytics/EntryExitPanel";
@@ -24,7 +27,8 @@ import type { AnalysisResult } from "../data/analyticsDataV3";
 import type { SheetRow }         from "../lib/googleSheets";
 import { fetchSynthesis, synthesisToAnalysisResult } from "../lib/brain/synthesis";
 import type { Synthesis }        from "../lib/brain/synthesis";
-import { getAnalyticsPanelOrder, setAnalyticsPanelOrder } from "../lib/preferences";
+import { getAnalyticsPanelOrder, setAnalyticsPanelOrder, getReversalSettings, setReversalSettings } from "../lib/preferences";
+import { pairSelectionEvents } from "../lib/pairSelection";
 import { playAlertSound } from "../lib/alertSound";
 import type { AlertSound } from "../lib/alertSound";
 import { AlertsPanel, type Alert } from "../components/panels/AlertsPanel";
@@ -33,7 +37,7 @@ import { computeAutoTrendlines, type TrendlineSegment } from "../lib/trendlines"
 import { invoke }                from "@tauri-apps/api/core";
 import {
   createChart, CandlestickSeries, AreaSeries, LineSeries,
-  ColorType, CrosshairMode, LineStyle,
+  ColorType, CrosshairMode, LineStyle, TickMarkType,
 } from "lightweight-charts";
 import type { IChartApi, UTCTimestamp } from "lightweight-charts";
 const ALERTS_JSON_PATH = "D:\\Dev\\TradeMirror_v2\\TradeMirror\\TradeMirror_Alert_Test\\alerts.json";
@@ -537,7 +541,7 @@ function CandleShape({ x, width, payload, background, yDomain }: any) {
 
 // ─── Indicator helpers ─────────────────────────────────────────────────────────
 
-type IndKey = "bb" | "ichi" | "ema9" | "ema20" | "ema50" | "ema200";
+type IndKey = "bb" | "ichi" | "ema9" | "ema20" | "ema50" | "ema200" | "reversal" | "session8am";
 
 const IND_DEFS: { key: IndKey; label: string; color: string }[] = [
   { key: "bb",    label: "BB(20,2)", color: "#64b5f6" },
@@ -801,15 +805,33 @@ interface ZoneBox {
   originTime: UTCTimestamp;
   label: string;
   tapped?: boolean;
+  // 0 = just tapped (still full supply/demand color) → 1 = fully faded to
+  // grey. Ramps up over TAPPED_FADE_CANDLES candles since the tap.
+  tapFade?: number;
   insideTapped?: boolean;
 }
-const ZONE_COLORS: Record<"supply" | "demand", { fill: string; fillFaint: string; stroke: string }> = {
-  supply: { fill: "rgba(226,75,74,0.16)", fillFaint: "rgba(226,75,74,0.10)", stroke: "#E24B4A" },
-  demand: { fill: "rgba(139,195,74,0.16)", fillFaint: "rgba(139,195,74,0.10)", stroke: "#8BC34A" },
+const ZONE_BASE_RGB: Record<"supply" | "demand", [number, number, number]> = {
+  supply: [226, 75, 74],
+  demand: [139, 195, 74],
 };
-// Most-recently-tapped zone is drawn in grey instead of its supply/demand
-// color, so it visually reads as "already reacted to" rather than active.
-const TAPPED_ZONE_COLOR = { fill: "rgba(148,163,184,0.16)", fillFaint: "rgba(148,163,184,0.10)", stroke: "#94a3b8" };
+// Most-recently-tapped zone fades to grey instead of snapping there
+// instantly, so it visually reads as "reacting" for a while before it settles
+// into "already reacted to". Ramps over this many candles on the zone's own
+// timeframe — user-configurable from the Supply & Demand settings popup.
+const DEFAULT_TAP_FADE_CANDLES = 10;
+const TAPPED_BASE_RGB: [number, number, number] = [148, 163, 184];
+function zoneFadeColor(base: [number, number, number], t: number): { fill: string; fillFaint: string; stroke: string } {
+  const [r0, g0, b0] = base;
+  const [r1, g1, b1] = TAPPED_BASE_RGB;
+  const r = Math.round(r0 + (r1 - r0) * t);
+  const g = Math.round(g0 + (g1 - g0) * t);
+  const b = Math.round(b0 + (b1 - b0) * t);
+  return { fill: `rgba(${r},${g},${b},0.16)`, fillFaint: `rgba(${r},${g},${b},0.10)`, stroke: `rgb(${r},${g},${b})` };
+}
+const ZONE_COLORS: Record<"supply" | "demand", { fill: string; fillFaint: string; stroke: string }> = {
+  supply: zoneFadeColor(ZONE_BASE_RGB.supply, 0),
+  demand: zoneFadeColor(ZONE_BASE_RGB.demand, 0),
+};
 // A fresh zone nested entirely inside the most-recently-tapped zone of the
 // same timeframe is drawn in yellow — it sits inside price action that's
 // already reacted, so it reads as heightened-relevance context.
@@ -845,7 +867,9 @@ class ZoneBoxRenderer {
 
         const yTop = yHighRaw * vr;
         const yBot = Math.max(yTop + 1, yLowRaw * vr);
-        const colors = z.tapped ? TAPPED_ZONE_COLOR : z.insideTapped ? INSIDE_TAPPED_ZONE_COLOR : ZONE_COLORS[z.type];
+        const colors = z.tapped
+          ? zoneFadeColor(ZONE_BASE_RGB[z.type], z.tapFade ?? 1)
+          : z.insideTapped ? INSIDE_TAPPED_ZONE_COLOR : ZONE_COLORS[z.type];
         ctx.fillStyle = colors.fillFaint;
         ctx.fillRect(x1, yTop, w - x1, yBot - yTop);
         ctx.strokeStyle = colors.stroke;
@@ -889,6 +913,336 @@ class ZoneBoxPrimitive {
   detached() { this._chart = null; this._series = null; this._views = []; }
   updateAllViews() { this._views.forEach(v => v.update()); }
   paneViews() { return this._views; }
+}
+
+// Generic time-and-price-bounded box — a box drawn between two times and two
+// price levels, in the style of ZoneBox but bounded on both left and right
+// edges (ZoneBox is anchored left and unbounded right). Shared by the 8am
+// session box and the London/Tokyo/New York session-range boxes below.
+interface TimeRangeBox {
+  low:       number;
+  high:      number;
+  startTime: UTCTimestamp;
+  endTime:   UTCTimestamp;
+  fill:      string;
+  stroke:    string;
+  label?:    string;
+  midLine?:  boolean;
+}
+
+class TimeRangeBoxRenderer {
+  _p: TimeRangeBoxPrimitive;
+  constructor(p: TimeRangeBoxPrimitive) { this._p = p; }
+  draw(target: any) {
+    const chart  = this._p._chart;
+    const series = this._p._series;
+    const boxes  = this._p._boxes;
+    if (!chart || !series || boxes.length === 0) return;
+    target.useBitmapCoordinateSpace((scope: any) => {
+      const ctx = scope.context;
+      const hr = scope.horizontalPixelRatio;
+      const vr = scope.verticalPixelRatio;
+      const ts = chart.timeScale();
+      for (const b of boxes) {
+        const yHighRaw = series.priceToCoordinate(b.high);
+        const yLowRaw  = series.priceToCoordinate(b.low);
+        if (yHighRaw === null || yLowRaw === null) continue;
+
+        const idx1 = ts.timeToIndex(b.startTime, true);
+        const idx2 = ts.timeToIndex(b.endTime, true);
+        if (idx1 === null || idx2 === null) continue;
+        // logicalToCoordinate(idx) gives the CENTER of bar idx (confirmed in
+        // lightweight-charts' own indexToCoordinate: `-(delta + 0.5) * barSpacing`),
+        // and only accepts integer logical indices — passing idx - 0.5 silently
+        // collapses to coordinate 0. Shift by half the bar's pixel width instead
+        // so both edges land on the actual bar boundary (start time).
+        const barSpacing = ts.options().barSpacing;
+        const c1 = ts.logicalToCoordinate(idx1 as any);
+        const c2 = ts.logicalToCoordinate(idx2 as any);
+        if (c1 === null || c2 === null) continue;
+        const x1Raw = c1 - barSpacing / 2;
+        const x2Raw = c2 - barSpacing / 2;
+        const x1 = x1Raw * hr;
+        const x2 = Math.max(x1 + 1, x2Raw * hr);
+
+        const yTop = yHighRaw * vr;
+        const yBot = Math.max(yTop + 1, yLowRaw * vr);
+
+        ctx.fillStyle = b.fill;
+        ctx.fillRect(x1, yTop, x2 - x1, yBot - yTop);
+        ctx.strokeStyle = b.stroke;
+        ctx.lineWidth = hr;
+        ctx.strokeRect(x1, yTop, x2 - x1, yBot - yTop);
+
+        if (b.midLine) {
+          const yMid = (yTop + yBot) / 2;
+          ctx.save();
+          ctx.setLineDash([4 * hr, 3 * hr]);
+          ctx.beginPath();
+          ctx.moveTo(x1, yMid);
+          ctx.lineTo(x2, yMid);
+          ctx.stroke();
+          ctx.restore();
+        }
+
+        if (b.label) {
+          ctx.fillStyle = b.stroke;
+          ctx.font = `${Math.round(10 * vr)}px sans-serif`;
+          ctx.textBaseline = "top";
+          ctx.fillText(b.label, x1 + 4 * hr, yTop + 3 * vr);
+        }
+      }
+    });
+  }
+}
+class TimeRangeBoxPaneView {
+  _p: TimeRangeBoxPrimitive;
+  constructor(p: TimeRangeBoxPrimitive) { this._p = p; }
+  update() {}
+  zOrder() { return "top" as const; }
+  renderer() { return new TimeRangeBoxRenderer(this._p); }
+}
+class TimeRangeBoxPrimitive {
+  _chart: any = null;
+  _series: any = null;
+  _boxes: TimeRangeBox[];
+  _views: TimeRangeBoxPaneView[] = [];
+  constructor(boxes: TimeRangeBox[]) { this._boxes = boxes; }
+  attached({ chart, series }: any) { this._chart = chart; this._series = series; this._views = [new TimeRangeBoxPaneView(this)]; }
+  detached() { this._chart = null; this._series = null; this._views = []; }
+  updateAllViews() { this._views.forEach(v => v.update()); }
+  paneViews() { return this._views; }
+}
+
+// Reversal-candle callouts — custom-drawn (not the built-in series-markers
+// plugin) because we need two independent colors per marker (arrow vs. label
+// text) and greedy row-packing so labels on nearby candles stack vertically
+// instead of overlapping, neither of which the plugin supports.
+interface ReversalMarkerData {
+  time: UTCTimestamp;
+  anchorPrice: number; // candle low (bullish) or high (bearish) to plant the arrow against
+  bias: "bullish" | "bearish";
+  text: string;
+}
+class ReversalMarkerRenderer {
+  _p: ReversalMarkerPrimitive;
+  constructor(p: ReversalMarkerPrimitive) { this._p = p; }
+  draw(target: any) {
+    const chart   = this._p._chart;
+    const series  = this._p._series;
+    const markers = this._p._markers;
+    if (!chart || !series || markers.length === 0) return;
+    target.useBitmapCoordinateSpace((scope: any) => {
+      const ctx = scope.context;
+      const hr = scope.horizontalPixelRatio;
+      const vr = scope.verticalPixelRatio;
+      const ts = chart.timeScale();
+      ctx.font = `${Math.round(10 * vr)}px sans-serif`;
+      ctx.textBaseline = "middle";
+      ctx.textAlign = "left";
+      const arrowR  = 4 * vr;
+      const rowGap  = 15 * vr;
+      const padding = 8 * hr;
+      // Rightmost pixel already claimed in each stacked row, tracked
+      // separately for above-bar (bearish) and below-bar (bullish) markers —
+      // markers are processed in time order (left-to-right), so a marker
+      // only needs to check earlier rows for its own side.
+      const rowsAbove: number[] = [];
+      const rowsBelow: number[] = [];
+      for (const m of markers) {
+        const idx = ts.timeToIndex(m.time, true);
+        if (idx === null) continue;
+        const xRaw = ts.logicalToCoordinate(idx as any);
+        const yAnchorRaw = series.priceToCoordinate(m.anchorPrice);
+        if (xRaw === null || yAnchorRaw === null) continue;
+        const x = xRaw * hr;
+        const yAnchor = yAnchorRaw * vr;
+        const bullish = m.bias === "bullish";
+
+        const textWidth = ctx.measureText(m.text).width;
+        const groupLeft  = x - arrowR;
+        const groupRight = x + arrowR + 4 * hr + textWidth + padding;
+
+        const rows = bullish ? rowsBelow : rowsAbove;
+        let row = 0;
+        while (rows[row] !== undefined && groupLeft < rows[row]) row++;
+        rows[row] = groupRight;
+
+        const y = bullish ? yAnchor + 10 * vr + row * rowGap : yAnchor - 10 * vr - row * rowGap;
+
+        ctx.fillStyle = bullish ? "#22c55e" : "#ef4444";
+        ctx.beginPath();
+        if (bullish) {
+          ctx.moveTo(x, y - arrowR); ctx.lineTo(x - arrowR, y + arrowR); ctx.lineTo(x + arrowR, y + arrowR);
+        } else {
+          ctx.moveTo(x, y + arrowR); ctx.lineTo(x - arrowR, y - arrowR); ctx.lineTo(x + arrowR, y - arrowR);
+        }
+        ctx.closePath();
+        ctx.fill();
+
+        ctx.fillStyle = "#eab308";
+        ctx.fillText(m.text, x + arrowR + 4 * hr, y);
+      }
+    });
+  }
+}
+class ReversalMarkerPaneView {
+  _p: ReversalMarkerPrimitive;
+  constructor(p: ReversalMarkerPrimitive) { this._p = p; }
+  update() {}
+  zOrder() { return "top" as const; }
+  renderer() { return new ReversalMarkerRenderer(this._p); }
+}
+class ReversalMarkerPrimitive {
+  _chart: any = null;
+  _series: any = null;
+  _markers: ReversalMarkerData[];
+  _views: ReversalMarkerPaneView[] = [];
+  constructor(markers: ReversalMarkerData[]) { this._markers = markers; }
+  attached({ chart, series }: any) { this._chart = chart; this._series = series; this._views = [new ReversalMarkerPaneView(this)]; }
+  detached() { this._chart = null; this._series = null; this._views = []; }
+  updateAllViews() { this._views.forEach(v => v.update()); }
+  paneViews() { return this._views; }
+}
+
+// "My time" for time-of-day chart indicators (8am box, trading sessions) —
+// matches the app's existing local-time convention used for FTMO
+// time-of-day conversions (src/lib/ftmoTime.ts).
+const SESSION_LOCAL_ZONE = "America/New_York";
+
+// Chart time axis / crosshair — also rendered in SESSION_LOCAL_ZONE so the
+// axis stays consistent with the 8am box and session boxes (lightweight-charts
+// defaults to UTC on the axis, which previously made NY-time boxes look
+// misaligned against UTC-labeled tick marks).
+const NY_AXIS_TIME_FMT = new Intl.DateTimeFormat("en-US", {
+  timeZone: SESSION_LOCAL_ZONE, hour: "2-digit", minute: "2-digit", hourCycle: "h23",
+});
+const NY_AXIS_DATE_FMT = new Intl.DateTimeFormat("en-US", {
+  timeZone: SESSION_LOCAL_ZONE, month: "short", day: "2-digit",
+});
+function formatNyTickMark(time: any, tickMarkType: TickMarkType): string {
+  const d = new Date((time as number) * 1000);
+  return tickMarkType === TickMarkType.Time || tickMarkType === TickMarkType.TimeWithSeconds
+    ? NY_AXIS_TIME_FMT.format(d)
+    : NY_AXIS_DATE_FMT.format(d);
+}
+function formatNyCrosshairTime(time: any): string {
+  const d = new Date((time as number) * 1000);
+  return `${NY_AXIS_DATE_FMT.format(d)} ${NY_AXIS_TIME_FMT.format(d)}`;
+}
+
+const EIGHT_AM_BOX_COLOR = { fill: "rgba(0,191,255,0.16)", stroke: "#00BFFF" };
+
+function computeEightAmBoxes(candles: RawCandleTf[]): TimeRangeBox[] {
+  const fmt = new Intl.DateTimeFormat("en-US", {
+    timeZone: SESSION_LOCAL_ZONE, hour: "2-digit", minute: "2-digit", hourCycle: "h23",
+  });
+  const boxes: TimeRangeBox[] = [];
+  for (const c of candles) {
+    const d = new Date(c.timestamp);
+    const parts = fmt.formatToParts(d);
+    const hour   = Number(parts.find(p => p.type === "hour")?.value);
+    const minute = Number(parts.find(p => p.type === "minute")?.value);
+    if (hour === 8 && minute === 0) {
+      const startTime = Math.floor(d.getTime() / 1000) as UTCTimestamp;
+      boxes.push({
+        low: c.low, high: c.high, startTime, endTime: (startTime + 8 * 60 * 60) as UTCTimestamp,
+        fill: EIGHT_AM_BOX_COLOR.fill, stroke: EIGHT_AM_BOX_COLOR.stroke, midLine: true,
+        label: "8AM Box",
+      });
+    }
+  }
+  return boxes;
+}
+
+// ─── Trading session boxes (Tokyo / London / New York) ────────────────────────
+// Hour boundaries are wall-clock in SESSION_LOCAL_ZONE (America/New_York).
+// Tokyo wraps past midnight (19:00 → 03:00 next day).
+type SessionKey = "tokyo" | "london" | "newyork";
+interface SessionDef {
+  key: SessionKey; label: string;
+  startHour: number; endHour: number; // [startHour, endHour), wraps if startHour > endHour
+  fill: string; stroke: string;
+}
+const SESSION_DEFS: SessionDef[] = [
+  { key: "tokyo",   label: "Tokyo",    startHour: 19, endHour: 3,  fill: "rgba(168,85,247,0.14)", stroke: "#a855f7" },
+  { key: "london",  label: "London",   startHour: 3,  endHour: 12, fill: "rgba(59,130,246,0.14)",  stroke: "#3b82f6" },
+  { key: "newyork", label: "New York", startHour: 8,  endHour: 17, fill: "rgba(34,197,94,0.14)",   stroke: "#22c55e" },
+];
+
+function hourInSession(hour: number, def: SessionDef): boolean {
+  return def.startHour < def.endHour
+    ? hour >= def.startHour && hour < def.endHour
+    : hour >= def.startHour || hour < def.endHour;
+}
+
+interface SessionInstance { high: number; low: number; startTime: UTCTimestamp; endTime: UTCTimestamp; isCurrent: boolean; }
+
+// Groups a chronological 1H candle array into contiguous runs that fall
+// inside `def`'s hour window, tracking the session high/low across the run.
+// A run still open at the end of the loaded candles (i.e. "now" is inside
+// the session) is returned last, flagged isCurrent — its box grows live as
+// new candles arrive rather than stopping at the theoretical session end.
+function computeSessionInstances(candles: RawCandleTf[], def: SessionDef): SessionInstance[] {
+  const fmt = new Intl.DateTimeFormat("en-US", { timeZone: SESSION_LOCAL_ZONE, hour: "2-digit", hourCycle: "h23" });
+  const hourOf = (c: RawCandleTf) => {
+    const raw = fmt.formatToParts(new Date(c.timestamp)).find(p => p.type === "hour")?.value;
+    return Number(raw) % 24; // hourCycle h23 can format midnight as "24"
+  };
+  const instances: SessionInstance[] = [];
+  let run: { startIdx: number; high: number; low: number } | null = null;
+  const barSeconds = 3600;
+  for (let i = 0; i < candles.length; i++) {
+    const c = candles[i];
+    if (hourInSession(hourOf(c), def)) {
+      if (!run) run = { startIdx: i, high: c.high, low: c.low };
+      else { run.high = Math.max(run.high, c.high); run.low = Math.min(run.low, c.low); }
+    } else if (run) {
+      const startC = candles[run.startIdx];
+      const endC   = candles[i - 1];
+      instances.push({
+        high: run.high, low: run.low,
+        startTime: Math.floor(new Date(startC.timestamp).getTime() / 1000) as UTCTimestamp,
+        endTime:   (Math.floor(new Date(endC.timestamp).getTime() / 1000) + barSeconds) as UTCTimestamp,
+        isCurrent: false,
+      });
+      run = null;
+    }
+  }
+  if (run) {
+    const startC = candles[run.startIdx];
+    const lastC  = candles[candles.length - 1];
+    instances.push({
+      high: run.high, low: run.low,
+      startTime: Math.floor(new Date(startC.timestamp).getTime() / 1000) as UTCTimestamp,
+      endTime:   (Math.floor(new Date(lastC.timestamp).getTime() / 1000) + barSeconds) as UTCTimestamp,
+      isCurrent: true,
+    });
+  }
+  return instances;
+}
+
+function computeMarketSessionBoxes(
+  candles: RawCandleTf[],
+  visibility: Record<SessionKey, boolean>,
+  backCount: number,
+): TimeRangeBox[] {
+  const boxes: TimeRangeBox[] = [];
+  for (const def of SESSION_DEFS) {
+    if (!visibility[def.key]) continue;
+    const instances = computeSessionInstances(candles, def);
+    const last      = instances[instances.length - 1];
+    const current   = last && last.isCurrent ? last : null;
+    const completed = current ? instances.slice(0, -1) : instances;
+    const picked    = [...completed.slice(-Math.max(0, backCount)), ...(current ? [current] : [])];
+    for (const inst of picked) {
+      boxes.push({
+        low: inst.low, high: inst.high, startTime: inst.startTime, endTime: inst.endTime,
+        fill: def.fill, stroke: def.stroke, label: def.label, midLine: true,
+      });
+    }
+  }
+  return boxes;
 }
 
 // Auto trendline overlay — diagonal support/resistance lines connecting the
@@ -1051,20 +1405,11 @@ class TrendlinePrimitive {
 
 // ─── Price history chart ────────────────────────────────────────────────────────
 
-function PriceHistoryChart({ pair, chartTf, setChartTf, livePrice }: { rows: SheetRow[]; pair: string; chartTf: "1W" | "1D" | "4H" | "1H" | "15M" | "5M" | "1M"; setChartTf: (tf: "1W" | "1D" | "4H" | "1H" | "15M" | "5M" | "1M") => void; livePrice: number | null }) {
+function PriceHistoryChart({ pair, chartTf, setChartTf, livePrice, expandWidth, expandHeight, allPanelsCollapsed, onToggleAllPanels }: { rows: SheetRow[]; pair: string; chartTf: "1W" | "1D" | "4H" | "1H" | "15M" | "5M" | "1M"; setChartTf: (tf: "1W" | "1D" | "4H" | "1H" | "15M" | "5M" | "1M") => void; livePrice: number | null; expandWidth: boolean; expandHeight: boolean; allPanelsCollapsed: boolean; onToggleAllPanels: () => void }) {
   const [viewMode,   setViewMode]   = useState<"candles" | "line">("candles");
   const [tfRows,     setTfRows]     = useState<RawCandleTf[]>([]);
   const [tfLoading,  setTfLoading]  = useState(false);
   const [activeInds, setActiveInds] = useState<Set<IndKey>>(new Set());
-  const [isFullscreen, setIsFullscreen] = useState(false);
-
-  // Escape collapses the fullscreen chart view
-  useEffect(() => {
-    if (!isFullscreen) return;
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setIsFullscreen(false); };
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, [isFullscreen]);
 
   // Supply/demand zone toggles — Daily on by default, 4H/1H opt-in
   const [showDailyZones, setShowDailyZones] = useState(true);
@@ -1090,7 +1435,61 @@ function PriceHistoryChart({ pair, chartTf, setChartTf, livePrice }: { rows: She
     W: 1, D: 1, H4: 1, H1: 1,
   });
   const [showTrendSettings, setShowTrendSettings] = useState(false);
-  const trendSettingsBtnRef = useRef<HTMLButtonElement>(null);
+  const [trendSettingsPos, setTrendSettingsPos] = useState<{ top: number; left: number } | null>(null);
+  const trendSettingsGroupRef = useRef<HTMLDivElement>(null);
+  const trendSettingsPopoverRef = useRef<HTMLDivElement>(null);
+
+  // Supply & Demand zone settings
+  const [showZoneSettings, setShowZoneSettings] = useState(false);
+  const [zoneSettingsPos, setZoneSettingsPos] = useState<{ top: number; left: number } | null>(null);
+  const zoneSettingsGroupRef = useRef<HTMLDivElement>(null);
+  const zoneSettingsPopoverRef = useRef<HTMLDivElement>(null);
+  const [showTappedZone, setShowTappedZone] = useState(true);
+  const [tapFadeCandles, setTapFadeCandles] = useState(DEFAULT_TAP_FADE_CANDLES);
+
+  // Chart + toolbar screenshot → save to a trade's Entry/Exit/Additional slot
+  const captureRef = useRef<HTMLDivElement>(null);
+  const snapshotBtnRef = useRef<HTMLButtonElement>(null);
+  const snapshotPopoverRef = useRef<HTMLDivElement>(null);
+  const [showSnapshotPicker, setShowSnapshotPicker] = useState(false);
+  const [snapshotPos, setSnapshotPos] = useState<{ top: number; left: number } | null>(null);
+  const [snapshotDataUrl, setSnapshotDataUrl] = useState<string | null>(null);
+  const [snapshotTrades, setSnapshotTrades] = useState<TradeWithJournal[]>([]);
+  const [snapshotTradeId, setSnapshotTradeId] = useState<string | null>(null);
+  const [snapshotKind, setSnapshotKind] = useState<"entry" | "exit" | "additional">("entry");
+  const [snapshotSaving, setSnapshotSaving] = useState(false);
+  const [snapshotSaved, setSnapshotSaved] = useState(false);
+
+  // Reversal candle settings — location filters (default off = show every
+  // detected reversal candle, no location gating) and which pattern types
+  // count as a "reversal candle" at all.
+  const [showReversalSettings, setShowReversalSettings] = useState(false);
+  const [reversalSettingsPos, setReversalSettingsPos] = useState<{ top: number; left: number } | null>(null);
+  const reversalBtnRef = useRef<HTMLButtonElement>(null);
+  const reversalSettingsPopoverRef = useRef<HTMLDivElement>(null);
+  const [reversalZoneFilter, setReversalZoneFilter] = useState(() => getReversalSettings(DEFAULT_REVERSAL_GROUPS).zoneFilter);
+  const [reversalEightAmBoxFilter, setReversalEightAmBoxFilter] = useState(() => getReversalSettings(DEFAULT_REVERSAL_GROUPS).eightAmBoxFilter);
+  const [reversalTrendlineFilter, setReversalTrendlineFilter] = useState(() => getReversalSettings(DEFAULT_REVERSAL_GROUPS).trendlineFilter);
+  // Stores selected GROUP labels (one toggle per candle shape, covering both
+  // its bullish and bearish variant) — expanded to raw pattern names for
+  // computeReversalFlags via the mirroring effect below.
+  const [reversalPatternGroups, setReversalPatternGroups] = useState<Set<string>>(() => new Set(getReversalSettings(DEFAULT_REVERSAL_GROUPS).patternGroups));
+  const reversalZoneFilterRef = useRef(false);
+  const reversalEightAmBoxFilterRef = useRef(false);
+  const reversalTrendlineFilterRef = useRef(false);
+  const reversalPatternTypesRef = useRef<Set<string>>(expandReversalGroups(reversalPatternGroups));
+  useEffect(() => { reversalZoneFilterRef.current = reversalZoneFilter; }, [reversalZoneFilter]);
+  useEffect(() => { reversalEightAmBoxFilterRef.current = reversalEightAmBoxFilter; }, [reversalEightAmBoxFilter]);
+  useEffect(() => { reversalTrendlineFilterRef.current = reversalTrendlineFilter; }, [reversalTrendlineFilter]);
+  useEffect(() => { reversalPatternTypesRef.current = expandReversalGroups(reversalPatternGroups); }, [reversalPatternGroups]);
+  useEffect(() => {
+    setReversalSettings({
+      zoneFilter: reversalZoneFilter,
+      eightAmBoxFilter: reversalEightAmBoxFilter,
+      trendlineFilter: reversalTrendlineFilter,
+      patternGroups: [...reversalPatternGroups],
+    });
+  }, [reversalZoneFilter, reversalEightAmBoxFilter, reversalTrendlineFilter, reversalPatternGroups]);
 
   const containerRef  = useRef<HTMLDivElement>(null);
   const chartRef      = useRef<IChartApi | null>(null);
@@ -1104,6 +1503,70 @@ function PriceHistoryChart({ pair, chartTf, setChartTf, livePrice }: { rows: She
   const zoneBoxesRef  = useRef<ZoneBox[]>([]);
   const trendPrimRef  = useRef<TrendlinePrimitive | null>(null);
   const trendLinesRef = useRef<TrendlineSegment[]>([]);
+  const eightAmBoxPrimRef = useRef<TimeRangeBoxPrimitive | null>(null);
+  const eightAmBoxesRef   = useRef<TimeRangeBox[]>([]);
+  const marketSessionPrimRef  = useRef<TimeRangeBoxPrimitive | null>(null);
+  const marketSessionBoxesRef = useRef<TimeRangeBox[]>([]);
+  const reversalMarkerPrimRef = useRef<ReversalMarkerPrimitive | null>(null);
+
+  // 8AM session box — independent 15M candle fetch, mirrors the zone-candle
+  // fetch pattern below, only active while the indicator toggle is on.
+  const [eightAmCandles, setEightAmCandles] = useState<RawCandleTf[]>([]);
+  // 4H/1D/1W have no bar sitting exactly on 8:00/16:00 NY time, so the box
+  // can't anchor to a real candle at those timeframes — hide it above 1H.
+  const eightAmBoxEligibleTf = chartTf === "1H" || chartTf === "15M" || chartTf === "5M" || chartTf === "1M";
+  const showEightAmBox = activeInds.has("session8am") && eightAmBoxEligibleTf;
+  useEffect(() => {
+    if (!showEightAmBox) { setEightAmCandles([]); return; }
+    const load = () => invoke<RawCandleTf[]>("get_live_candles", { pair, tf: "15M" })
+      .then(candles => setEightAmCandles(candles))
+      .catch(() => setEightAmCandles([]));
+    load();
+    const id = setInterval(load, 10_000);
+    return () => clearInterval(id);
+  }, [showEightAmBox, pair]);
+  const eightAmBoxes = useMemo(
+    () => showEightAmBox ? computeEightAmBoxes(eightAmCandles) : [],
+    [showEightAmBox, eightAmCandles]
+  );
+  useEffect(() => {
+    eightAmBoxesRef.current = eightAmBoxes;
+    if (eightAmBoxPrimRef.current) eightAmBoxPrimRef.current._boxes = eightAmBoxes;
+    chartRef.current?.applyOptions({});
+  }, [eightAmBoxes]);
+
+  // Trading session boxes (Tokyo/London/New York) — its own toolbar button +
+  // settings popout, not part of the Indicators dropdown. Independent 1H
+  // candle fetch (hour boundaries all align to whole UTC hours), only active
+  // while the Sessions button is toggled on.
+  const [showSessions, setShowSessions] = useState(false);
+  const [sessionVisibility, setSessionVisibility] = useState<Record<SessionKey, boolean>>({
+    tokyo: true, london: true, newyork: true,
+  });
+  const [sessionBackCount, setSessionBackCount] = useState(5);
+  const [sessionCandles, setSessionCandles] = useState<RawCandleTf[]>([]);
+  // 4H/1D/1W hour boundaries don't align to the session start/end hours, so
+  // session boxes can't anchor to a real candle above 1H — hide them there.
+  const sessionBoxEligibleTf = chartTf === "1H" || chartTf === "15M" || chartTf === "5M" || chartTf === "1M";
+  const sessionsActive = showSessions && sessionBoxEligibleTf;
+  useEffect(() => {
+    if (!sessionsActive) { setSessionCandles([]); return; }
+    const load = () => invoke<RawCandleTf[]>("get_live_candles", { pair, tf: "1H" })
+      .then(candles => setSessionCandles(candles))
+      .catch(() => setSessionCandles([]));
+    load();
+    const id = setInterval(load, 10_000);
+    return () => clearInterval(id);
+  }, [sessionsActive, pair]);
+  const marketSessionBoxes = useMemo(
+    () => sessionsActive ? computeMarketSessionBoxes(sessionCandles, sessionVisibility, sessionBackCount) : [],
+    [sessionsActive, sessionCandles, sessionVisibility, sessionBackCount]
+  );
+  useEffect(() => {
+    marketSessionBoxesRef.current = marketSessionBoxes;
+    if (marketSessionPrimRef.current) marketSessionPrimRef.current._boxes = marketSessionBoxes;
+    chartRef.current?.applyOptions({});
+  }, [marketSessionBoxes]);
 
   useEffect(() => { tfRowsRef.current    = tfRows;     }, [tfRows]);
   useEffect(() => { viewModeRef.current  = viewMode;   }, [viewMode]);
@@ -1215,11 +1678,12 @@ function PriceHistoryChart({ pair, chartTf, setChartTf, livePrice }: { rows: She
   // treated as tapped right away, instead of waiting for the next candle
   // poll to catch up.
   useEffect(() => {
-    const toBox = (tfLabel: string, z: SupplyDemandZone, tapped: boolean, insideTapped = false): ZoneBox => ({
+    const toBox = (tfLabel: string, z: SupplyDemandZone, tapped: boolean, insideTapped = false, tapFade = 0): ZoneBox => ({
       type: z.type, low: z.zoneLow, high: z.zoneHigh,
       originTime: Math.floor(new Date(z.originTimestamp).getTime() / 1000) as UTCTimestamp,
       label: `${tfLabel} ${z.type === "supply" ? "Supply" : "Demand"}${tapped ? " (Tapped)" : insideTapped ? " (Inside Tapped)" : ""} ${z.zoneLow.toFixed(5)}–${z.zoneHigh.toFixed(5)}`,
       tapped,
+      tapFade,
       insideTapped,
     });
     const currentPrice = livePrice ?? (tfRows.length > 0 ? tfRows[tfRows.length - 1].close : null);
@@ -1270,9 +1734,19 @@ function PriceHistoryChart({ pair, chartTf, setChartTf, livePrice }: { rows: She
         freshBoxes = [...closest4("supply"), ...closest4("demand")];
       }
 
+      // Fade ramps from 0 (just tapped) to 1 (fully grey) over
+      // tapFadeCandles candles on the zone's own timeframe. A zone tapped
+      // this instant by the live price (tapIndex still null) starts the
+      // ramp fresh at 0.
+      let tapFade = 0;
+      if (tapped && tapped.tapIndex !== null) {
+        const candlesSinceTap = (candles.length - 1) - tapped.tapIndex;
+        tapFade = Math.min(1, Math.max(0, candlesSinceTap / Math.max(1, tapFadeCandles)));
+      }
+
       return {
         fresh: freshBoxes,
-        tapped: tapped ? [toBox(tfLabel, tapped, true)] : [],
+        tapped: tapped ? [toBox(tfLabel, tapped, true, false, tapFade)] : [],
       };
     };
 
@@ -1282,13 +1756,13 @@ function PriceHistoryChart({ pair, chartTf, setChartTf, livePrice }: { rows: She
     if (show4HZones)    { const r = processTf("4H", h4ZonesAll,    h4ZoneCandles);    freshBoxes = freshBoxes.concat(r.fresh); tappedBoxes = tappedBoxes.concat(r.tapped); }
     if (show1HZones)    { const r = processTf("1H", h1ZonesAll,    h1ZoneCandles);    freshBoxes = freshBoxes.concat(r.fresh); tappedBoxes = tappedBoxes.concat(r.tapped); }
 
-    const boxes = [...freshBoxes, ...tappedBoxes];
+    const boxes = showTappedZone ? [...freshBoxes, ...tappedBoxes] : freshBoxes;
     zoneBoxesRef.current = boxes;
     if (zonePrimRef.current) zonePrimRef.current._zones = boxes;
     chartRef.current?.applyOptions({});
   }, [showDailyZones, show4HZones, show1HZones,
       dailyZoneCandles, h4ZoneCandles, h1ZoneCandles,
-      dailyZonesAll, h4ZonesAll, h1ZonesAll, tfRows, livePrice]);
+      dailyZonesAll, h4ZonesAll, h1ZonesAll, tfRows, livePrice, showTappedZone, tapFadeCandles]);
 
   // ── Indicator series helpers ────────────────────────────────────────────────
 
@@ -1301,6 +1775,7 @@ function PriceHistoryChart({ pair, chartTf, setChartTf, livePrice }: { rows: She
   }, []);
 
   const addIndSeries = useCallback((key: IndKey, candles: RawCandleTf[]) => {
+    if (key === "reversal" || key === "session8am") return; // driven by their own effects, not a line series
     const chart = chartRef.current;
     if (!chart || candles.length === 0) return;
     removeIndSeries(key);
@@ -1396,27 +1871,61 @@ function PriceHistoryChart({ pair, chartTf, setChartTf, livePrice }: { rows: She
     }
   }, [removeIndSeries]);
 
-  const toggleInd = useCallback((key: IndKey) => {
-    setActiveInds(prev => {
-      const next = new Set(prev);
-      if (next.has(key)) { next.delete(key); removeIndSeries(key); }
-      else               { next.add(key);    addIndSeries(key, tfRowsRef.current); }
-      return next;
-    });
-  }, [addIndSeries, removeIndSeries]);
-
   // ── Price series helpers ────────────────────────────────────────────────────
 
-  const applyData = useCallback((candles: RawCandleTf[], mode: string) => {
+  // resetView must only be true for a genuine new instrument/timeframe load
+  // (see the tfRows-changed effect below) — NOT for routine recolors
+  // (reversal-candle toggle, zone-sync recolor, viewMode toggle). Those call
+  // applyData with the SAME underlying candles just to refresh point colors,
+  // and resetting the visible time range / price autoscale on every one of
+  // those (e.g. every 5s live-price tick while zones are showing) yanked the
+  // chart back to its default view out from under the user mid-look.
+  const applyData = useCallback((candles: RawCandleTf[], mode: string, resetView: boolean) => {
     const chart  = chartRef.current;
     const series = seriesRef.current;
     if (!chart || !series || candles.length === 0) return;
+    if (resetView) {
+      // Re-enable price-axis autoscale on a fresh load — a prior manual drag
+      // of the price axis (on whatever instrument was showing before)
+      // otherwise pins the old fixed range, which is meaningless once the
+      // data switches to a different instrument that trades at a completely
+      // different price magnitude (e.g. sub-1 vs. several thousand).
+      chart.priceScale("right").applyOptions({ autoScale: true });
+    }
     if (mode === "candles") {
-      series.setData(candles.map(r => ({
-        time:  Math.floor(new Date(r.timestamp).getTime() / 1000) as UTCTimestamp,
-        open: r.open, high: r.high, low: r.low, close: r.close,
-      })));
+      const showReversals = activeIndsRef.current.has("reversal");
+      const reversalFlags = showReversals ? computeReversalFlags(
+        candles, zoneBoxesRef.current, eightAmBoxesRef.current, trendLinesRef.current,
+        reversalPatternTypesRef.current, reversalZoneFilterRef.current,
+        reversalEightAmBoxFilterRef.current, reversalTrendlineFilterRef.current,
+      ) : null;
+      series.setData(candles.map((r, i) => {
+        const point: any = {
+          time:  Math.floor(new Date(r.timestamp).getTime() / 1000) as UTCTimestamp,
+          open: r.open, high: r.high, low: r.low, close: r.close,
+        };
+        if (reversalFlags && reversalFlags[i]) {
+          point.color = "#eab308"; point.borderColor = "#eab308"; point.wickColor = "#eab308";
+        }
+        return point;
+      }));
+      if (reversalMarkerPrimRef.current) {
+        reversalMarkerPrimRef.current._markers = reversalFlags
+          ? candles.flatMap((r, i): ReversalMarkerData[] => {
+              const info = reversalFlags[i];
+              if (!info) return [];
+              const bullish = info.bias === "bullish";
+              return [{
+                time: Math.floor(new Date(r.timestamp).getTime() / 1000) as UTCTimestamp,
+                anchorPrice: bullish ? r.low : r.high,
+                bias: info.bias,
+                text: `${info.name} (${bullish ? "Bullish" : "Bearish"})`,
+              }];
+            })
+          : [];
+      }
     } else {
+      if (reversalMarkerPrimRef.current) reversalMarkerPrimRef.current._markers = [];
       series.setData(candles.map(r => ({
         time:  Math.floor(new Date(r.timestamp).getTime() / 1000) as UTCTimestamp,
         value: r.close,
@@ -1432,18 +1941,43 @@ function PriceHistoryChart({ pair, chartTf, setChartTf, livePrice }: { rows: She
       priceLineRef.current = series.createPriceLine({ price: last.close, color: isUp ? "#60a5fa" : "#a78bfa",
         lineWidth: 1, lineStyle: LineStyle.Dashed, axisLabelVisible: true, title: "" });
     }
-    // Zoom to the most recent 120 candles rather than fitting the full
-    // (up to 5000-bar) loaded history.
-    const n = candles.length;
-    if (n > 120) {
-      chart.timeScale().setVisibleLogicalRange({ from: n - 120, to: n + 2 });
-    } else {
-      chart.timeScale().fitContent();
+    if (resetView) {
+      // Zoom to the most recent 120 candles rather than fitting the full
+      // (up to 5000-bar) loaded history.
+      const n = candles.length;
+      if (n > 120) {
+        chart.timeScale().setVisibleLogicalRange({ from: n - 120, to: n + 2 });
+      } else {
+        chart.timeScale().fitContent();
+      }
     }
   }, []);
 
+  // Reversal-candle highlighting is gated by which supply/demand zones and
+  // the 8am box are currently visible (see computeReversalFlags), but those
+  // changes normally only repaint their own primitive, not the candle
+  // series. Re-run applyData whenever the qualifying context could have
+  // changed so the yellow highlights stay in sync.
+  useEffect(() => {
+    if (activeInds.has("reversal") && tfRows.length > 0) applyData(tfRows, viewModeRef.current, false);
+  }, [showDailyZones, show4HZones, show1HZones, dailyZonesAll, h4ZonesAll, h1ZonesAll,
+      dailyZoneCandles, h4ZoneCandles, h1ZoneCandles, livePrice, activeInds, tfRows, applyData,
+      showEightAmBox, eightAmBoxes,
+      showWeeklyTrend, showDailyTrend, show4HTrend, show1HTrend,
+      weeklyTrendCandles, dailyTrendCandles, h4TrendCandles, h1TrendCandles, trendCounts,
+      reversalZoneFilter, reversalEightAmBoxFilter, reversalTrendlineFilter, reversalPatternGroups, showTappedZone]);
+
+  const toggleInd = useCallback((key: IndKey) => {
+    const next = new Set(activeIndsRef.current);
+    if (next.has(key)) { next.delete(key); removeIndSeries(key); }
+    else               { next.add(key);    addIndSeries(key, tfRowsRef.current); }
+    activeIndsRef.current = next;
+    setActiveInds(next);
+    if (key === "reversal") applyData(tfRowsRef.current, viewModeRef.current, false);
+  }, [addIndSeries, removeIndSeries, applyData]);
+
   const createSeries = useCallback((chart: IChartApi, mode: string) => {
-    if (seriesRef.current) { chart.removeSeries(seriesRef.current); seriesRef.current = null; priceLineRef.current = null; zonePrimRef.current = null; trendPrimRef.current = null; }
+    if (seriesRef.current) { chart.removeSeries(seriesRef.current); seriesRef.current = null; priceLineRef.current = null; zonePrimRef.current = null; trendPrimRef.current = null; eightAmBoxPrimRef.current = null; marketSessionPrimRef.current = null; reversalMarkerPrimRef.current = null; }
     if (mode === "candles") {
       const s = chart.addSeries(CandlestickSeries, {
         upColor: "#60a5fa", downColor: "#a78bfa",
@@ -1466,7 +2000,19 @@ function PriceHistoryChart({ pair, chartTf, setChartTf, livePrice }: { rows: She
     const trendPrim = new TrendlinePrimitive(trendLinesRef.current);
     (seriesRef.current as any).attachPrimitive(trendPrim);
     trendPrimRef.current = trendPrim;
-    if (tfRowsRef.current.length > 0) applyData(tfRowsRef.current, mode);
+    const eightAmBoxPrim = new TimeRangeBoxPrimitive(eightAmBoxesRef.current);
+    (seriesRef.current as any).attachPrimitive(eightAmBoxPrim);
+    eightAmBoxPrimRef.current = eightAmBoxPrim;
+    const marketSessionPrim = new TimeRangeBoxPrimitive(marketSessionBoxesRef.current);
+    (seriesRef.current as any).attachPrimitive(marketSessionPrim);
+    marketSessionPrimRef.current = marketSessionPrim;
+    const reversalMarkerPrim = new ReversalMarkerPrimitive([]);
+    (seriesRef.current as any).attachPrimitive(reversalMarkerPrim);
+    reversalMarkerPrimRef.current = reversalMarkerPrim;
+    // False: this fires on mount (no data yet, so a no-op) and on viewMode
+    // toggle (candles/line) — the series is recreated, but the user's
+    // existing pan/zoom on this same instrument's data shouldn't reset.
+    if (tfRowsRef.current.length > 0) applyData(tfRowsRef.current, mode, false);
   }, [applyData]);
 
   // Init chart once
@@ -1477,7 +2023,11 @@ function PriceHistoryChart({ pair, chartTf, setChartTf, livePrice }: { rows: She
       layout: { background: { type: ColorType.Solid, color: "#0f1117" }, textColor: "#94a3b8", fontSize: 11 },
       grid: { vertLines: { color: "rgba(148,163,184,0.06)" }, horzLines: { color: "rgba(148,163,184,0.06)" } },
       crosshair: { mode: CrosshairMode.Normal },
-      timeScale: { borderColor: "rgba(148,163,184,0.15)", timeVisible: true, secondsVisible: false },
+      timeScale: {
+        borderColor: "rgba(148,163,184,0.15)", timeVisible: true, secondsVisible: false,
+        tickMarkFormatter: formatNyTickMark,
+      },
+      localization: { timeFormatter: formatNyCrosshairTime },
       rightPriceScale: { borderColor: "rgba(148,163,184,0.15)", scaleMargins: { top: 0.08, bottom: 0.08 } },
     });
     chartRef.current = chart;
@@ -1489,13 +2039,22 @@ function PriceHistoryChart({ pair, chartTf, setChartTf, livePrice }: { rows: She
       const h = containerRef.current.clientHeight;
       if (w === 0 || h === 0) return;
       chart.applyOptions({ width: w, height: h });
-      if (prevWidth === 0) chart.timeScale().fitContent();
+      if (prevWidth === 0) {
+        // Same "most recent 120 candles" default as applyData — this first
+        // resize can land after data has already loaded (async panels above
+        // the chart reflow layout), which would otherwise stomp that zoom
+        // with a full-history fitContent() and land on the whole multi-year
+        // range instead of a recent window.
+        const n = tfRowsRef.current.length;
+        if (n > 120) chart.timeScale().setVisibleLogicalRange({ from: n - 120, to: n + 2 });
+        else         chart.timeScale().fitContent();
+      }
       prevWidth = w;
     });
     ro.observe(containerRef.current);
     return () => {
       ro.disconnect(); chart.remove();
-      chartRef.current = null; seriesRef.current = null; indSeriesRef.current = {}; zonePrimRef.current = null; trendPrimRef.current = null;
+      chartRef.current = null; seriesRef.current = null; indSeriesRef.current = {}; zonePrimRef.current = null; trendPrimRef.current = null; eightAmBoxPrimRef.current = null; marketSessionPrimRef.current = null;
     };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -1505,10 +2064,13 @@ function PriceHistoryChart({ pair, chartTf, setChartTf, livePrice }: { rows: She
     createSeries(chartRef.current, viewMode);
   }, [viewMode, createSeries]);
 
-  // Apply price data + refresh all active indicators when data arrives
+  // Apply price data + refresh all active indicators when data arrives.
+  // tfRows only changes via the fetch effect keyed on [chartTf, pair], so
+  // this is always a genuine new instrument/timeframe (or first) load —
+  // the one case that should reset the visible range and price autoscale.
   useEffect(() => {
     if (tfRows.length === 0) return;
-    applyData(tfRows, viewModeRef.current);
+    applyData(tfRows, viewModeRef.current, true);
     activeIndsRef.current.forEach(key => addIndSeries(key, tfRows));
     // Track the oldest loaded bar's time and the loaded high/low series
     // itself, so the trendline primitive can resolve each pivot anchor to
@@ -1539,47 +2101,153 @@ function PriceHistoryChart({ pair, chartTf, setChartTf, livePrice }: { rows: She
   useEffect(() => {
     if (!showTrendSettings) return;
     const close = (e: MouseEvent) => {
-      if (trendSettingsBtnRef.current && !trendSettingsBtnRef.current.closest("[data-trend-settings-panel]")?.contains(e.target as Node))
-        setShowTrendSettings(false);
+      const target = e.target as Node;
+      const insideGroup   = trendSettingsGroupRef.current?.contains(target);
+      const insidePopover = trendSettingsPopoverRef.current?.contains(target);
+      if (!insideGroup && !insidePopover) setShowTrendSettings(false);
     };
     document.addEventListener("mousedown", close);
     return () => document.removeEventListener("mousedown", close);
   }, [showTrendSettings]);
 
-  const anyActive = activeInds.size > 0;
+  useEffect(() => {
+    if (!showReversalSettings) return;
+    const close = (e: MouseEvent) => {
+      const target = e.target as Node;
+      const insideButton  = reversalBtnRef.current?.contains(target);
+      const insidePopover = reversalSettingsPopoverRef.current?.contains(target);
+      if (!insideButton && !insidePopover) setShowReversalSettings(false);
+    };
+    document.addEventListener("mousedown", close);
+    return () => document.removeEventListener("mousedown", close);
+  }, [showReversalSettings]);
+
+  useEffect(() => {
+    if (!showZoneSettings) return;
+    const close = (e: MouseEvent) => {
+      const target = e.target as Node;
+      const insideGroup   = zoneSettingsGroupRef.current?.contains(target);
+      const insidePopover = zoneSettingsPopoverRef.current?.contains(target);
+      if (!insideGroup && !insidePopover) setShowZoneSettings(false);
+    };
+    document.addEventListener("mousedown", close);
+    return () => document.removeEventListener("mousedown", close);
+  }, [showZoneSettings]);
+
+  useEffect(() => {
+    if (!showSnapshotPicker) return;
+    const close = (e: MouseEvent) => {
+      const target = e.target as Node;
+      const insideButton  = snapshotBtnRef.current?.contains(target);
+      const insidePopover = snapshotPopoverRef.current?.contains(target);
+      if (!insideButton && !insidePopover) setShowSnapshotPicker(false);
+    };
+    document.addEventListener("mousedown", close);
+    return () => document.removeEventListener("mousedown", close);
+  }, [showSnapshotPicker]);
+
+  const handleSnapshotClick = useCallback(async () => {
+    const rect = snapshotBtnRef.current?.getBoundingClientRect();
+    if (rect) setSnapshotPos({ top: rect.bottom + 6, left: rect.left });
+    setSnapshotSaved(false);
+    setSnapshotTradeId(null);
+    setSnapshotKind("entry");
+    setSnapshotDataUrl(null);
+    setShowSnapshotPicker(true);
+    if (captureRef.current) {
+      try {
+        const dataUrl = await toPng(captureRef.current, { pixelRatio: 2, backgroundColor: "#0f1117" });
+        setSnapshotDataUrl(dataUrl);
+      } catch (err) {
+        console.error("[PriceHistoryChart] screenshot capture failed:", err);
+      }
+    }
+    try {
+      const settings = await getSettings();
+      const trades = await getAllTradesWithJournal(settings?.selectedAccountId ?? "acc-1");
+      setSnapshotTrades(trades);
+    } catch (err) {
+      console.error("[PriceHistoryChart] failed to load trades for snapshot picker:", err);
+    }
+  }, []);
+
+  const handleSaveSnapshot = useCallback(async () => {
+    if (!snapshotDataUrl || !snapshotTradeId) return;
+    setSnapshotSaving(true);
+    try {
+      const base64 = snapshotDataUrl.split(",")[1] ?? "";
+      const savedPath = await invoke<string>("save_chart_screenshot", { dataBase64: base64, kind: snapshotKind });
+      await addTradeImage(snapshotTradeId, snapshotKind, savedPath);
+      setSnapshotSaved(true);
+      setTimeout(() => setShowSnapshotPicker(false), 1000);
+    } catch (err) {
+      console.error("[PriceHistoryChart] failed to save snapshot:", err);
+    } finally {
+      setSnapshotSaving(false);
+    }
+  }, [snapshotDataUrl, snapshotTradeId, snapshotKind]);
+
+  const [showSessionSettings, setShowSessionSettings] = useState(false);
+  const [sessionSettingsPos, setSessionSettingsPos] = useState<{ top: number; left: number } | null>(null);
+  const sessionSettingsBtnRef = useRef<HTMLButtonElement>(null);
+  const sessionSettingsPopoverRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!showSessionSettings) return;
+    const close = (e: MouseEvent) => {
+      const target = e.target as Node;
+      const insideButton  = sessionSettingsBtnRef.current?.closest("[data-sessions-panel]")?.contains(target);
+      const insidePopover = sessionSettingsPopoverRef.current?.contains(target);
+      if (!insideButton && !insidePopover) setShowSessionSettings(false);
+    };
+    document.addEventListener("mousedown", close);
+    return () => document.removeEventListener("mousedown", close);
+  }, [showSessionSettings]);
+
+  // Count only indicators actually listed in the Indicators dropdown —
+  // Reversal and 8AM Box are standalone toolbar buttons that happen to share
+  // the same activeInds Set, but shouldn't inflate this badge.
+  const activeIndDefsCount = IND_DEFS.filter((d) => activeInds.has(d.key)).length;
+  const anyActive = activeIndDefsCount > 0;
 
   return (
-    <div style={isFullscreen ? {
-      position: "fixed", inset: 0, zIndex: 200, background: "#0f1117",
-      padding: 16, display: "flex", flexDirection: "column",
-    } : { width: "66.667%", marginBottom: 10, flexShrink: 0 }}>
+    <div ref={captureRef} style={{
+      // width is the flex-basis (flex-basis:auto defers to it); flexShrink
+      // must stay 1 whenever expandWidth is true so the row can still make
+      // room for the divider next to it instead of overflowing past it and
+      // under the page's scrollbar.
+      width: expandWidth ? "100%" : "66.667%", marginBottom: 10,
+      flexShrink: expandWidth ? 1 : 0,
+      ...(expandHeight ? { display: "flex", flexDirection: "column", flex: "1 1 auto", minHeight: 0 } : {}),
+    }}>
       {/* Toolbar: timeframes · Indicators button · view mode */}
-      <div style={{ display: "flex", alignItems: "center", marginBottom: 4, flexShrink: 0 }}>
+      <div style={{ display: "flex", alignItems: "center", marginBottom: 4, flexShrink: 0, overflowX: "auto" }}>
         <div style={{ display: "flex", gap: 4, alignItems: "center", flexShrink: 0 }}>
           <span style={{
             fontSize: 9, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em",
-            color: "var(--text-muted)", marginRight: 2,
+            color: "var(--text-muted)", marginRight: 2, whiteSpace: "nowrap",
           }}>
             Chart
           </span>
           {(["1W","1D","4H","1H","15M","5M","1M"] as const).map(tf => (
             <button key={tf} onClick={() => setChartTf(tf)} style={{
-              fontSize: 9, fontWeight: 700, padding: "4px 6px",
+              fontSize: 9, fontWeight: 700, padding: "4px 4px",
               textTransform: "uppercase", letterSpacing: "0.08em",
               background: chartTf === tf ? "var(--accent-dim)"    : "var(--bg-panel-alt)",
               border:     chartTf === tf ? "1px solid var(--accent-border)" : "1px solid var(--border-medium)",
-              color:      chartTf === tf ? "var(--accent-text)"   : "var(--text-secondary)",
+              color:      chartTf === tf   ? "var(--accent-text)"   : "var(--text-secondary)",
               borderRadius: 8, cursor: "pointer",
             }}>{tf}</button>
           ))}
         </div>
-        {/* Zone + trendline toggles — centered in the gap between 1M and Indicators */}
-        <div style={{ flex: 1, display: "flex", justifyContent: "center" }}>
-          <div style={{ display: "flex", gap: 32, alignItems: "center" }}>
-            <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+        <div style={{ width: 1, height: 18, background: "var(--border-medium)", flexShrink: 0, margin: "0 8px" }} />
+        {/* Zone + trendline toggles */}
+        <div style={{ display: "flex", flexShrink: 0 }}>
+          <div style={{ display: "flex", gap: 8, alignItems: "center", flexShrink: 0 }}>
+            <div ref={zoneSettingsGroupRef} style={{ display: "flex", gap: 4, alignItems: "center", flexShrink: 0 }} data-zone-settings-panel>
               <span style={{
                 fontSize: 9, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em",
-                color: "var(--text-muted)", marginRight: 2,
+                color: "var(--text-muted)", marginRight: 2, whiteSpace: "nowrap",
               }}>
                 Supply & Demand Zones
               </span>
@@ -1588,20 +2256,84 @@ function PriceHistoryChart({ pair, chartTf, setChartTf, livePrice }: { rows: She
                 ["4H", show4HZones,    setShow4HZones],
                 ["1H", show1HZones,    setShow1HZones],
               ] as const).map(([label, active, setter]) => (
-                <button key={label} onClick={() => setter(v => !v)} style={{
-                  fontSize: 9, fontWeight: 700, padding: "4px 6px",
-                  textTransform: "uppercase", letterSpacing: "0.08em",
-                  background: active ? "var(--accent-dim)"    : "var(--bg-panel-alt)",
-                  border:     active ? "1px solid var(--accent-border)" : "1px solid var(--border-medium)",
-                  color:      active ? "var(--accent-text)"   : "var(--text-secondary)",
-                  borderRadius: 8, cursor: "pointer",
-                }}>{label}</button>
+                <button
+                  key={label}
+                  onClick={() => setter(v => !v)}
+                  onDoubleClick={(e) => {
+                    const rect = e.currentTarget.getBoundingClientRect();
+                    setZoneSettingsPos({ top: rect.bottom + 6, left: rect.left });
+                    setShowZoneSettings(v => !v);
+                  }}
+                  title="Click to toggle, double-click for settings"
+                  style={{
+                    fontSize: 9, fontWeight: 700, padding: "4px 6px",
+                    textTransform: "uppercase", letterSpacing: "0.08em",
+                    background: active ? "var(--accent-dim)"    : "var(--bg-panel-alt)",
+                    border:     active ? "1px solid var(--accent-border)" : "1px solid var(--border-medium)",
+                    color:      active ? "var(--accent-text)"   : "var(--text-secondary)",
+                    borderRadius: 8, cursor: "pointer",
+                  }}>{label}</button>
               ))}
+              {showZoneSettings && zoneSettingsPos && createPortal(
+                <div ref={zoneSettingsPopoverRef} style={{
+                  position: "fixed", top: zoneSettingsPos.top, left: zoneSettingsPos.left, zIndex: 1000,
+                  background: "var(--bg-panel)", border: "1px solid var(--border-medium)",
+                  borderRadius: 10, padding: "10px 12px", width: 220,
+                  boxShadow: "0 8px 24px rgba(0,0,0,0.45)",
+                }}>
+                  <div style={{ fontSize: 9, fontWeight: 700, textTransform: "uppercase",
+                    letterSpacing: "0.08em", color: "var(--text-muted)", marginBottom: 6 }}>
+                    Settings:
+                  </div>
+                  <button
+                    onClick={() => setShowTappedZone(v => !v)}
+                    style={{
+                      fontSize: 9, fontWeight: 700, padding: "4px 6px", width: "100%",
+                      textTransform: "uppercase", letterSpacing: "0.06em",
+                      background: showTappedZone ? "var(--accent-dim)" : "var(--bg-panel-alt)",
+                      border:     showTappedZone ? "1px solid var(--accent-border)" : "1px solid var(--border-medium)",
+                      color:      showTappedZone ? "var(--accent-text)" : "var(--text-secondary)",
+                      borderRadius: 6, cursor: "pointer",
+                    }}
+                  >
+                    Show Most Recently Tapped Zone
+                  </button>
+                  <div style={{
+                    display: "flex", alignItems: "center", justifyContent: "space-between",
+                    marginTop: 10, paddingTop: 8, borderTop: "1px solid var(--border-subtle)",
+                  }}>
+                    <span style={{ fontSize: 11, color: "var(--text-secondary)" }}>Fade over (candles)</span>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                      <button
+                        onClick={() => setTapFadeCandles(n => Math.max(1, n - 1))}
+                        style={{
+                          width: 18, height: 18, borderRadius: 4, cursor: "pointer",
+                          background: "var(--bg-panel-alt)", border: "1px solid var(--border-medium)",
+                          color: "var(--text-secondary)", fontSize: 11, lineHeight: 1,
+                        }}
+                      >−</button>
+                      <span style={{ fontSize: 11, fontWeight: 700, color: "var(--text-primary)", width: 18, textAlign: "center" }}>
+                        {tapFadeCandles}
+                      </span>
+                      <button
+                        onClick={() => setTapFadeCandles(n => Math.min(50, n + 1))}
+                        style={{
+                          width: 18, height: 18, borderRadius: 4, cursor: "pointer",
+                          background: "var(--bg-panel-alt)", border: "1px solid var(--border-medium)",
+                          color: "var(--text-secondary)", fontSize: 11, lineHeight: 1,
+                        }}
+                      >+</button>
+                    </div>
+                  </div>
+                </div>,
+                document.body
+              )}
             </div>
-            <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+            <div style={{ width: 1, height: 18, background: "var(--border-medium)", flexShrink: 0 }} />
+            <div ref={trendSettingsGroupRef} style={{ display: "flex", gap: 4, alignItems: "center", flexShrink: 0 }} data-trend-settings-panel>
               <span style={{
                 fontSize: 9, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em",
-                color: "var(--text-muted)", marginRight: 2,
+                color: "var(--text-muted)", marginRight: 2, whiteSpace: "nowrap",
               }}>
                 Trend Lines
               </span>
@@ -1611,81 +2343,274 @@ function PriceHistoryChart({ pair, chartTf, setChartTf, livePrice }: { rows: She
                 ["4H", show4HTrend,     setShow4HTrend],
                 ["1H", show1HTrend,     setShow1HTrend],
               ] as const).map(([label, active, setter]) => (
-                <button key={label} onClick={() => setter(v => !v)} style={{
-                  fontSize: 9, fontWeight: 700, padding: "4px 6px",
-                  textTransform: "uppercase", letterSpacing: "0.08em",
-                  background: active ? "rgba(59,130,246,0.16)" : "var(--bg-panel-alt)",
-                  border:     active ? "1px solid #3b82f6" : "1px solid var(--border-medium)",
-                  color:      active ? "#3b82f6" : "var(--text-secondary)",
-                  borderRadius: 8, cursor: "pointer",
-                }}>{label}</button>
-              ))}
-              {/* Trendline count settings */}
-              <div style={{ position: "relative" }} data-trend-settings-panel>
                 <button
-                  ref={trendSettingsBtnRef}
-                  onClick={() => setShowTrendSettings(v => !v)}
-                  title="Trendline count per timeframe"
-                  style={{
-                    display: "flex", alignItems: "center", justifyContent: "center",
-                    width: 22, height: 22, padding: 0,
-                    background: showTrendSettings ? "rgba(59,130,246,0.16)" : "var(--bg-panel-alt)",
-                    border:     showTrendSettings ? "1px solid #3b82f6" : "1px solid var(--border-medium)",
-                    borderRadius: 8, cursor: "pointer",
-                    color: showTrendSettings ? "#3b82f6" : "var(--text-secondary)",
+                  key={label}
+                  onClick={() => setter(v => !v)}
+                  onDoubleClick={(e) => {
+                    const rect = e.currentTarget.getBoundingClientRect();
+                    setTrendSettingsPos({ top: rect.bottom + 6, left: rect.left });
+                    setShowTrendSettings(v => !v);
                   }}
-                >
-                  <Settings size={12} />
-                </button>
-                {showTrendSettings && (
-                  <div style={{
-                    position: "absolute", top: "calc(100% + 6px)", left: 0, zIndex: 50,
-                    background: "var(--bg-panel)", border: "1px solid var(--border-medium)",
-                    borderRadius: 10, padding: "10px 12px", minWidth: 190,
-                    boxShadow: "0 8px 24px rgba(0,0,0,0.45)",
-                  }}>
-                    <div style={{ fontSize: 9, fontWeight: 800, textTransform: "uppercase",
-                      letterSpacing: "0.1em", color: "var(--text-muted)", marginBottom: 8 }}>
-                      Trendlines per timeframe
-                    </div>
-                    {([
-                      ["W",  "Weekly"] as const,
-                      ["D",  "Daily"]  as const,
-                      ["H4", "4H"]     as const,
-                      ["H1", "1H"]     as const,
-                    ]).map(([key, label]) => (
-                      <div key={key} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "4px 0" }}>
-                        <span style={{ fontSize: 11, color: "var(--text-secondary)" }}>{label}</span>
-                        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                          <button
-                            onClick={() => setTrendCounts(c => ({ ...c, [key]: Math.max(0, c[key] - 1) }))}
-                            style={{
-                              width: 18, height: 18, borderRadius: 4, cursor: "pointer",
-                              background: "var(--bg-panel-alt)", border: "1px solid var(--border-medium)",
-                              color: "var(--text-secondary)", fontSize: 11, lineHeight: 1,
-                            }}
-                          >−</button>
-                          <span style={{ fontSize: 11, fontWeight: 700, color: "var(--text-primary)", width: 14, textAlign: "center" }}>
-                            {trendCounts[key]}
-                          </span>
-                          <button
-                            onClick={() => setTrendCounts(c => ({ ...c, [key]: Math.min(10, c[key] + 1) }))}
-                            style={{
-                              width: 18, height: 18, borderRadius: 4, cursor: "pointer",
-                              background: "var(--bg-panel-alt)", border: "1px solid var(--border-medium)",
-                              color: "var(--text-secondary)", fontSize: 11, lineHeight: 1,
-                            }}
-                          >+</button>
-                        </div>
-                      </div>
-                    ))}
+                  title="Click to toggle, double-click for settings"
+                  style={{
+                    fontSize: 9, fontWeight: 700, padding: "4px 6px",
+                    textTransform: "uppercase", letterSpacing: "0.08em",
+                    background: active ? "rgba(59,130,246,0.16)" : "var(--bg-panel-alt)",
+                    border:     active ? "1px solid #3b82f6" : "1px solid var(--border-medium)",
+                    color:      active ? "#3b82f6" : "var(--text-secondary)",
+                    borderRadius: 8, cursor: "pointer",
+                  }}>{label}</button>
+              ))}
+              {showTrendSettings && trendSettingsPos && createPortal(
+                <div ref={trendSettingsPopoverRef} style={{
+                  position: "fixed", top: trendSettingsPos.top, left: trendSettingsPos.left, zIndex: 1000,
+                  background: "var(--bg-panel)", border: "1px solid var(--border-medium)",
+                  borderRadius: 10, padding: "10px 12px", minWidth: 190,
+                  boxShadow: "0 8px 24px rgba(0,0,0,0.45)",
+                }}>
+                  <div style={{ fontSize: 9, fontWeight: 800, textTransform: "uppercase",
+                    letterSpacing: "0.1em", color: "var(--text-muted)", marginBottom: 8 }}>
+                    Trendlines per timeframe
                   </div>
-                )}
-              </div>
+                  {([
+                    ["W",  "Weekly"] as const,
+                    ["D",  "Daily"]  as const,
+                    ["H4", "4H"]     as const,
+                    ["H1", "1H"]     as const,
+                  ]).map(([key, label]) => (
+                    <div key={key} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "4px 0" }}>
+                      <span style={{ fontSize: 11, color: "var(--text-secondary)" }}>{label}</span>
+                      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                        <button
+                          onClick={() => setTrendCounts(c => ({ ...c, [key]: Math.max(0, c[key] - 1) }))}
+                          style={{
+                            width: 18, height: 18, borderRadius: 4, cursor: "pointer",
+                            background: "var(--bg-panel-alt)", border: "1px solid var(--border-medium)",
+                            color: "var(--text-secondary)", fontSize: 11, lineHeight: 1,
+                          }}
+                        >−</button>
+                        <span style={{ fontSize: 11, fontWeight: 700, color: "var(--text-primary)", width: 14, textAlign: "center" }}>
+                          {trendCounts[key]}
+                        </span>
+                        <button
+                          onClick={() => setTrendCounts(c => ({ ...c, [key]: Math.min(10, c[key] + 1) }))}
+                          style={{
+                            width: 18, height: 18, borderRadius: 4, cursor: "pointer",
+                            background: "var(--bg-panel-alt)", border: "1px solid var(--border-medium)",
+                            color: "var(--text-secondary)", fontSize: 11, lineHeight: 1,
+                          }}
+                        >+</button>
+                      </div>
+                    </div>
+                  ))}
+                </div>,
+                document.body
+              )}
             </div>
           </div>
         </div>
+        <div style={{ width: 1, height: 18, background: "var(--border-medium)", flexShrink: 0, margin: "0 8px" }} />
         <div style={{ display: "flex", gap: 6, alignItems: "center", flexShrink: 0 }}>
+          {/* Reversal Candles toggle — double-click for settings */}
+          <button
+            ref={reversalBtnRef}
+            onClick={() => toggleInd("reversal")}
+            onDoubleClick={() => {
+              const rect = reversalBtnRef.current?.getBoundingClientRect();
+              if (rect) setReversalSettingsPos({ top: rect.bottom + 6, left: rect.left });
+              setShowReversalSettings(v => !v);
+            }}
+            title="Click to toggle, double-click for settings"
+            style={{
+              fontSize: 9, fontWeight: 700, padding: "4px 6px",
+              textTransform: "uppercase", letterSpacing: "0.08em",
+              background: activeInds.has("reversal") ? "var(--accent-dim)"    : "var(--bg-panel-alt)",
+              border:     activeInds.has("reversal") ? "1px solid var(--accent-border)" : "1px solid var(--border-medium)",
+              color:      activeInds.has("reversal") ? "var(--accent-text)"   : "var(--text-secondary)",
+              borderRadius: 8, cursor: "pointer",
+            }}
+          >
+            Reversal
+          </button>
+          {showReversalSettings && reversalSettingsPos && createPortal(
+            <div ref={reversalSettingsPopoverRef} style={{
+              position: "fixed", top: reversalSettingsPos.top, left: reversalSettingsPos.left, zIndex: 1000,
+              background: "var(--bg-panel)", border: "1px solid var(--border-medium)",
+              borderRadius: 10, padding: "10px 12px", width: 280,
+              boxShadow: "0 8px 24px rgba(0,0,0,0.45)",
+            }}>
+              <div style={{ fontSize: 9, fontWeight: 700, textTransform: "uppercase",
+                letterSpacing: "0.08em", color: "var(--text-muted)", marginBottom: 6 }}>
+                Filter By:
+              </div>
+              <div style={{ display: "flex", gap: 6, marginBottom: 12 }}>
+                <button
+                  onClick={() => setReversalZoneFilter(v => !v)}
+                  title="Bearish reversals inside/on a supply zone, bullish inside/on a demand zone — no cross-bias"
+                  style={{
+                    fontSize: 9, fontWeight: 700, padding: "4px 6px", flex: 1,
+                    textTransform: "uppercase", letterSpacing: "0.06em",
+                    background: reversalZoneFilter ? "var(--accent-dim)" : "var(--bg-panel-alt)",
+                    border:     reversalZoneFilter ? "1px solid var(--accent-border)" : "1px solid var(--border-medium)",
+                    color:      reversalZoneFilter ? "var(--accent-text)" : "var(--text-secondary)",
+                    borderRadius: 6, cursor: "pointer",
+                  }}
+                >
+                  Zone
+                </button>
+                <button
+                  onClick={() => setReversalEightAmBoxFilter(v => !v)}
+                  title="Either bias, inside/on the 8am box"
+                  style={{
+                    fontSize: 9, fontWeight: 700, padding: "4px 6px", flex: 1,
+                    textTransform: "uppercase", letterSpacing: "0.06em",
+                    background: reversalEightAmBoxFilter ? "var(--accent-dim)" : "var(--bg-panel-alt)",
+                    border:     reversalEightAmBoxFilter ? "1px solid var(--accent-border)" : "1px solid var(--border-medium)",
+                    color:      reversalEightAmBoxFilter ? "var(--accent-text)" : "var(--text-secondary)",
+                    borderRadius: 6, cursor: "pointer",
+                  }}
+                >
+                  8AM Box
+                </button>
+                <button
+                  onClick={() => setReversalTrendlineFilter(v => !v)}
+                  style={{
+                    fontSize: 9, fontWeight: 700, padding: "4px 6px", flex: 1,
+                    textTransform: "uppercase", letterSpacing: "0.06em",
+                    background: reversalTrendlineFilter ? "var(--accent-dim)" : "var(--bg-panel-alt)",
+                    border:     reversalTrendlineFilter ? "1px solid var(--accent-border)" : "1px solid var(--border-medium)",
+                    color:      reversalTrendlineFilter ? "var(--accent-text)" : "var(--text-secondary)",
+                    borderRadius: 6, cursor: "pointer",
+                  }}
+                >
+                  Trend Line
+                </button>
+              </div>
+              <div style={{ fontSize: 9, fontWeight: 700, textTransform: "uppercase",
+                letterSpacing: "0.08em", color: "var(--text-muted)", marginBottom: 6 }}>
+                Candle Type:
+              </div>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+                {REVERSAL_PATTERN_GROUPS.map(({ label }) => {
+                  const on = reversalPatternGroups.has(label);
+                  return (
+                    <button
+                      key={label}
+                      onClick={() => setReversalPatternGroups(prev => {
+                        const next = new Set(prev);
+                        if (next.has(label)) next.delete(label); else next.add(label);
+                        return next;
+                      })}
+                      style={{
+                        fontSize: 9, fontWeight: 600, padding: "3px 6px",
+                        background: on ? "rgba(234,179,8,0.16)" : "var(--bg-panel-alt)",
+                        border:     on ? "1px solid #eab308" : "1px solid var(--border-medium)",
+                        color:      on ? "#eab308" : "var(--text-secondary)",
+                        borderRadius: 6, cursor: "pointer",
+                      }}
+                    >
+                      {label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>,
+            document.body
+          )}
+          {/* 8AM Box toggle — standalone button, not part of the Indicators dropdown */}
+          <button
+            onClick={() => toggleInd("session8am")}
+            style={{
+              fontSize: 9, fontWeight: 700, padding: "4px 6px",
+              textTransform: "uppercase", letterSpacing: "0.08em",
+              background: activeInds.has("session8am") ? "var(--accent-dim)"    : "var(--bg-panel-alt)",
+              border:     activeInds.has("session8am") ? "1px solid var(--accent-border)" : "1px solid var(--border-medium)",
+              color:      activeInds.has("session8am") ? "var(--accent-text)"   : "var(--text-secondary)",
+              borderRadius: 8, cursor: "pointer",
+            }}
+          >
+            8AM Box
+          </button>
+          {/* Sessions button — double-click for settings */}
+          <div style={{ position: "relative", display: "flex", gap: 4, alignItems: "center" }} data-sessions-panel>
+            <button
+              ref={sessionSettingsBtnRef}
+              onClick={() => setShowSessions(v => !v)}
+              onDoubleClick={() => {
+                const rect = sessionSettingsBtnRef.current?.getBoundingClientRect();
+                if (rect) setSessionSettingsPos({ top: rect.bottom + 6, left: rect.left });
+                setShowSessionSettings(v => !v);
+              }}
+              title="Click to toggle, double-click for settings"
+              style={{
+                fontSize: 9, fontWeight: 700, padding: "4px 6px",
+                textTransform: "uppercase", letterSpacing: "0.08em",
+                background: showSessions ? "var(--accent-dim)"    : "var(--bg-panel-alt)",
+                border:     showSessions ? "1px solid var(--accent-border)" : "1px solid var(--border-medium)",
+                color:      showSessions ? "var(--accent-text)"   : "var(--text-secondary)",
+                borderRadius: 8, cursor: "pointer",
+              }}
+            >
+              Sessions
+            </button>
+            {showSessionSettings && sessionSettingsPos && createPortal(
+              <div ref={sessionSettingsPopoverRef} style={{
+                position: "fixed", top: sessionSettingsPos.top, left: sessionSettingsPos.left, zIndex: 1000,
+                background: "var(--bg-panel)", border: "1px solid var(--border-medium)",
+                borderRadius: 10, padding: "10px 12px", minWidth: 190,
+                boxShadow: "0 8px 24px rgba(0,0,0,0.45)",
+              }}>
+                <div style={{ fontSize: 9, fontWeight: 800, textTransform: "uppercase",
+                  letterSpacing: "0.1em", color: "var(--text-muted)", marginBottom: 8 }}>
+                  Sessions
+                </div>
+                {SESSION_DEFS.map(def => (
+                  <div key={def.key} onClick={() => setSessionVisibility(v => ({ ...v, [def.key]: !v[def.key] }))} style={{
+                    display: "flex", alignItems: "center", justifyContent: "space-between",
+                    padding: "5px 0", cursor: "pointer",
+                  }}>
+                    <span style={{ fontSize: 11, color: "var(--text-secondary)", display: "flex", alignItems: "center", gap: 8 }}>
+                      <span style={{ width: 18, height: 2, background: def.stroke, borderRadius: 1, flexShrink: 0 }} />
+                      {def.label}
+                    </span>
+                    <span style={{
+                      width: 14, height: 14, borderRadius: 3, flexShrink: 0,
+                      border: `2px solid ${def.stroke}`,
+                      background: sessionVisibility[def.key] ? def.stroke : "transparent",
+                    }} />
+                  </div>
+                ))}
+                <div style={{
+                  display: "flex", alignItems: "center", justifyContent: "space-between",
+                  padding: "8px 0 0", marginTop: 4, borderTop: "1px solid var(--border-subtle)",
+                }}>
+                  <span style={{ fontSize: 11, color: "var(--text-secondary)" }}>Back sessions</span>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                    <button
+                      onClick={() => setSessionBackCount(n => Math.max(0, n - 1))}
+                      style={{
+                        width: 18, height: 18, borderRadius: 4, cursor: "pointer",
+                        background: "var(--bg-panel-alt)", border: "1px solid var(--border-medium)",
+                        color: "var(--text-secondary)", fontSize: 11, lineHeight: 1,
+                      }}
+                    >−</button>
+                    <span style={{ fontSize: 11, fontWeight: 700, color: "var(--text-primary)", width: 14, textAlign: "center" }}>
+                      {sessionBackCount}
+                    </span>
+                    <button
+                      onClick={() => setSessionBackCount(n => Math.min(20, n + 1))}
+                      style={{
+                        width: 18, height: 18, borderRadius: 4, cursor: "pointer",
+                        background: "var(--bg-panel-alt)", border: "1px solid var(--border-medium)",
+                        color: "var(--text-secondary)", fontSize: 11, lineHeight: 1,
+                      }}
+                    >+</button>
+                  </div>
+                </div>
+              </div>,
+              document.body
+            )}
+          </div>
           {/* Indicators button + dropdown */}
           <div style={{ position: "relative" }} data-ind-panel>
             <button
@@ -1700,7 +2625,7 @@ function PriceHistoryChart({ pair, chartTf, setChartTf, livePrice }: { rows: She
                 borderRadius: 8, cursor: "pointer",
               }}
             >
-              Indicators{anyActive ? ` (${activeInds.size})` : ""}
+              Indicators{anyActive ? ` (${activeIndDefsCount})` : ""}
             </button>
             {showIndPanel && (
               <div style={{
@@ -1749,30 +2674,138 @@ function PriceHistoryChart({ pair, chartTf, setChartTf, livePrice }: { rows: She
             background: "var(--bg-panel-alt)", border: "1px solid var(--border-medium)",
             borderRadius: 8, color: "var(--text-secondary)", cursor: "pointer",
           }}>{viewMode}</button>
-          {/* Expand/collapse fullscreen chart view */}
+          {/* Snapshot — captures chart + this toolbar, saves to a trade's Entry/Exit/Additional slot */}
           <button
-            onClick={() => setIsFullscreen(v => !v)}
-            title={isFullscreen ? "Collapse" : "Expand"}
+            ref={snapshotBtnRef}
+            onClick={handleSnapshotClick}
+            title="Save a snapshot of the chart + toolbar to a trade"
             style={{
               display: "flex", alignItems: "center", justifyContent: "center",
               width: 22, height: 22, padding: 0,
-              background: isFullscreen ? "var(--accent-dim)" : "var(--bg-panel-alt)",
-              border:     isFullscreen ? "1px solid var(--accent-border)" : "1px solid var(--border-medium)",
-              borderRadius: 8, cursor: "pointer",
-              color: isFullscreen ? "var(--accent-text)" : "var(--text-secondary)",
+              background: showSnapshotPicker ? "var(--accent-dim)" : "var(--bg-panel-alt)",
+              border:     showSnapshotPicker ? "1px solid var(--accent-border)" : "1px solid var(--border-medium)",
+              borderRadius: 8, color: showSnapshotPicker ? "var(--accent-text)" : "var(--text-secondary)", cursor: "pointer",
             }}
           >
-            {isFullscreen ? <Minimize2 size={12} /> : <Maximize2 size={12} />}
+            <Camera size={12} />
           </button>
+          {/* Master collapse/expand — toggles the three panel dividers around the chart together */}
+          <button
+            onClick={onToggleAllPanels}
+            title={allPanelsCollapsed ? "Expand panels around chart" : "Collapse panels around chart"}
+            style={{
+              display: "flex", alignItems: "center", justifyContent: "center",
+              width: 22, height: 22, padding: 0,
+              background: "var(--bg-panel-alt)", border: "1px solid var(--border-medium)",
+              borderRadius: 8, color: "var(--text-secondary)", cursor: "pointer",
+            }}
+          >
+            {allPanelsCollapsed ? <Maximize2 size={12} /> : <Minimize2 size={12} />}
+          </button>
+          {showSnapshotPicker && snapshotPos && createPortal(
+            <div ref={snapshotPopoverRef} style={{
+              position: "fixed", top: snapshotPos.top, left: snapshotPos.left, zIndex: 1000,
+              background: "var(--bg-panel)", border: "1px solid var(--border-medium)",
+              borderRadius: 10, padding: "10px 12px", width: 260,
+              boxShadow: "0 8px 24px rgba(0,0,0,0.45)",
+            }}>
+              {snapshotDataUrl ? (
+                <img src={snapshotDataUrl} alt="Chart snapshot preview" style={{
+                  width: "100%", borderRadius: 6, marginBottom: 10,
+                  border: "1px solid var(--border-subtle)", display: "block",
+                }} />
+              ) : (
+                <div style={{
+                  height: 100, display: "flex", alignItems: "center", justifyContent: "center",
+                  fontSize: 11, color: "var(--text-muted)", marginBottom: 10,
+                  background: "var(--bg-panel-alt)", borderRadius: 6,
+                }}>
+                  Capturing…
+                </div>
+              )}
+
+              <div style={{ fontSize: 9, fontWeight: 700, textTransform: "uppercase",
+                letterSpacing: "0.08em", color: "var(--text-muted)", marginBottom: 6 }}>
+                Trade:
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 2, maxHeight: 140, overflowY: "auto", marginBottom: 10 }}>
+                {snapshotTrades.length === 0 ? (
+                  <span style={{ fontSize: 11, color: "var(--text-muted)" }}>No trades found</span>
+                ) : snapshotTrades.map(t => {
+                  const active = t.id === snapshotTradeId;
+                  const when = (t.closedAt ?? t.openedAt).slice(0, 16).replace("T", " ");
+                  return (
+                    <button
+                      key={t.id}
+                      onClick={() => setSnapshotTradeId(t.id)}
+                      style={{
+                        fontSize: 11, fontWeight: 600, padding: "5px 8px", textAlign: "left",
+                        background: active ? "var(--accent-dim)" : "var(--bg-panel-alt)",
+                        border:     active ? "1px solid var(--accent-border)" : "1px solid var(--border-medium)",
+                        color:      active ? "var(--accent-text)" : "var(--text-secondary)",
+                        borderRadius: 6, cursor: "pointer",
+                      }}
+                    >
+                      {t.instrument} {t.side.toUpperCase()} — {when}
+                    </button>
+                  );
+                })}
+              </div>
+
+              <div style={{ fontSize: 9, fontWeight: 700, textTransform: "uppercase",
+                letterSpacing: "0.08em", color: "var(--text-muted)", marginBottom: 6 }}>
+                Slot:
+              </div>
+              <div style={{ display: "flex", gap: 6, marginBottom: 12 }}>
+                {(["entry", "exit", "additional"] as const).map(kind => {
+                  const active = kind === snapshotKind;
+                  return (
+                    <button
+                      key={kind}
+                      onClick={() => setSnapshotKind(kind)}
+                      style={{
+                        fontSize: 9, fontWeight: 700, padding: "4px 6px", flex: 1,
+                        textTransform: "uppercase", letterSpacing: "0.06em",
+                        background: active ? "var(--accent-dim)" : "var(--bg-panel-alt)",
+                        border:     active ? "1px solid var(--accent-border)" : "1px solid var(--border-medium)",
+                        color:      active ? "var(--accent-text)" : "var(--text-secondary)",
+                        borderRadius: 6, cursor: "pointer",
+                      }}
+                    >
+                      {kind}
+                    </button>
+                  );
+                })}
+              </div>
+
+              <button
+                onClick={handleSaveSnapshot}
+                disabled={!snapshotDataUrl || !snapshotTradeId || snapshotSaving}
+                style={{
+                  fontSize: 10, fontWeight: 700, padding: "6px 8px", width: "100%",
+                  textTransform: "uppercase", letterSpacing: "0.06em",
+                  background: snapshotSaved ? "rgba(34,197,94,0.16)" : "var(--accent-dim)",
+                  border:     snapshotSaved ? "1px solid #22c55e" : "1px solid var(--accent-border)",
+                  color:      snapshotSaved ? "#22c55e" : "var(--accent-text)",
+                  borderRadius: 6,
+                  cursor: (!snapshotDataUrl || !snapshotTradeId || snapshotSaving) ? "not-allowed" : "pointer",
+                  opacity: (!snapshotDataUrl || !snapshotTradeId) && !snapshotSaved ? 0.5 : 1,
+                }}
+              >
+                {snapshotSaved ? "Saved" : snapshotSaving ? "Saving…" : "Save to Trade"}
+              </button>
+            </div>,
+            document.body
+          )}
         </div>
       </div>
-      <div style={{ borderRadius: 14, overflow: "hidden", position: "relative", ...(isFullscreen ? { flex: 1, minHeight: 0 } : {}) }}>
+      <div style={{ borderRadius: 14, overflow: "hidden", position: "relative", ...(expandHeight ? { flex: 1, minHeight: 0 } : {}) }}>
         {tfLoading && (
           <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", zIndex: 10, pointerEvents: "none" }}>
             <span style={{ fontSize: 11, color: "var(--text-muted)", letterSpacing: "0.05em" }}>Loading…</span>
           </div>
         )}
-        <div ref={containerRef} style={{ height: isFullscreen ? "100%" : 480, opacity: tfLoading ? 0.3 : 1 }} />
+        <div ref={containerRef} style={{ height: expandHeight ? "100%" : 480, opacity: tfLoading ? 0.3 : 1 }} />
       </div>
     </div>
   );
@@ -7467,6 +8500,12 @@ function detectCandlePatterns(candles: CandleCtxRow[]): CandlePattern[] {
       out.push({ name: "Hanging Man", bias: "bearish", tier: 2, description: "Same shape as a hammer but after an uptrend. Sellers briefly overwhelmed buyers intraday — a warning the rally may be losing steam." });
   }
 
+  // Dragonfly Doji — doji-bodied hammer: near-zero body pinned to the top of
+  // the range, negligible upper wick, long lower wick after a downtrend.
+  const c0Range = c0.high - c0.low;
+  if (c0Range > 0 && _isDojiBody(c0) && (c0UW / c0Range) <= 0.10 && (c0LW / c0Range) >= 0.60 && trendDownBeforeC0)
+    out.push({ name: "Dragonfly Doji", bias: "bullish", tier: 2, description: "A doji with a long lower wick and virtually no upper wick after a downtrend — sellers drove price down but buyers reclaimed it entirely by the close. A bullish reversal signal awaiting confirmation." });
+
   // Inverted Hammer / Shooting Star — long upper wick, body pinned to lower third
   if (c0Body > 0 && c0UW >= 2 * c0Body && c0LW <= c0Body && _bodyInLowerThird(c0)) {
     if (trendDownBeforeC0)
@@ -7506,6 +8545,106 @@ function detectCandlePatterns(candles: CandleCtxRow[]): CandlePattern[] {
   }
 
   return out.sort((a, b) => a.tier - b.tier);
+}
+
+// Flags every candle that is the final bar of a detected reversal pattern,
+// using the same sliding window the tail-only callers already use (slice(-12)).
+// Which pattern names count as a "reversal candle" for chart highlighting is
+// user-configurable from the Reversal button's settings popup — the other
+// detectCandlePatterns() types (stars, tweezers, harami, etc.) still exist
+// for the panel's signal badge elsewhere regardless of this selection.
+// Grouped by candle SHAPE rather than by bias — a bullish and bearish
+// pattern that are the same shape in opposite trend context (Hammer /
+// Hanging Man, Inverted Hammer / Shooting Star, etc.) share one toggle
+// instead of forcing the user to pick each bias separately.
+const REVERSAL_PATTERN_GROUPS: { label: string; patterns: string[] }[] = [
+  { label: "Engulfing",                        patterns: ["Bullish Engulfing", "Bearish Engulfing"] },
+  { label: "Engulfing Variant",                patterns: ["Bullish Engulfing Variant", "Bearish Engulfing Variant"] },
+  { label: "Piercing / Dark Cloud",             patterns: ["Piercing Line", "Dark Cloud Cover"] },
+  { label: "Star",                              patterns: ["Morning Star", "Evening Star"] },
+  { label: "Doji Star",                         patterns: ["Doji Morning Star", "Doji Evening Star"] },
+  { label: "Hammer / Hanging Man",              patterns: ["Hammer", "Hanging Man"] },
+  { label: "Dragonfly Doji",                    patterns: ["Dragonfly Doji"] },
+  { label: "Inverted Hammer / Shooting Star",   patterns: ["Inverted Hammer", "Shooting Star"] },
+  { label: "Tweezers",                          patterns: ["Tweezers Bottom", "Tweezers Top"] },
+  { label: "Harami",                            patterns: ["Bullish Harami", "Bearish Harami"] },
+  { label: "Harami Cross",                      patterns: ["Bullish Harami Cross", "Bearish Harami Cross"] },
+];
+const DEFAULT_REVERSAL_GROUPS = [
+  "Engulfing", "Engulfing Variant", "Hammer / Hanging Man", "Dragonfly Doji", "Inverted Hammer / Shooting Star",
+];
+function expandReversalGroups(groupLabels: Set<string>): Set<string> {
+  const names = new Set<string>();
+  for (const g of REVERSAL_PATTERN_GROUPS) if (groupLabels.has(g.label)) for (const n of g.patterns) names.add(n);
+  return names;
+}
+
+// A candle "lives inside or on" a zone if its high/low range touches the
+// zone's price band at all, and the zone had already originated by that
+// candle's time (a zone can't gate a candle that predates it).
+function candleTouchesZone(low: number, high: number, time: number, zone: ZoneBox): boolean {
+  return time >= zone.originTime && low <= zone.high && high >= zone.low;
+}
+
+// Same idea for a time-and-price-bounded box (the 8am box) — the candle must
+// also fall within the box's own time window, since unlike a zone it doesn't
+// stay open-ended to the right.
+function candleTouchesTimeRangeBox(low: number, high: number, time: number, box: TimeRangeBox): boolean {
+  return time >= box.startTime && time < box.endTime && low <= box.high && high >= box.low;
+}
+
+// A candle "lives on" a trend line if the line's price at that candle's time
+// (same slope equation the chart renderer extends past its anchors with)
+// falls within the candle's own high/low range. Only valid from the line's
+// earlier anchor (t1) forward — it doesn't exist before that.
+function candleTouchesTrendline(low: number, high: number, time: number, line: TrendlineSegment): boolean {
+  if (time < line.t1 || line.t2 === line.t1) return false;
+  const slope = (line.p2 - line.p1) / (line.t2 - line.t1);
+  const price = line.p1 + slope * (time - line.t1);
+  return low <= price && high >= price;
+}
+
+interface ReversalInfo { name: string; bias: "bullish" | "bearish" }
+
+function computeReversalFlags(
+  rows: { date: string; timestamp: string; open: number; high: number; low: number; close: number }[],
+  zones: ZoneBox[],
+  eightAmBoxes: TimeRangeBox[],
+  trendlines: TrendlineSegment[],
+  enabledPatterns: Set<string>,
+  zoneFilterOn: boolean,
+  eightAmBoxFilterOn: boolean,
+  trendlineFilterOn: boolean,
+): (ReversalInfo | null)[] {
+  const flags: (ReversalInfo | null)[] = new Array(rows.length).fill(null);
+  if (enabledPatterns.size === 0) return flags;
+  const demandZones = zones.filter(z => z.type === "demand");
+  const supplyZones = zones.filter(z => z.type === "supply");
+  const anyFilterOn = zoneFilterOn || eightAmBoxFilterOn || trendlineFilterOn;
+  for (let i = 1; i < rows.length; i++) {
+    const window = rows.slice(Math.max(0, i - 11), i + 1);
+    const patterns = detectCandlePatterns(window).filter(p => enabledPatterns.has(p.name));
+    if (patterns.length === 0) continue;
+    const r = rows[i];
+    const t = Math.floor(new Date(r.timestamp).getTime() / 1000);
+    // No filter active (default): every detected + enabled pattern qualifies
+    // regardless of location. With a filter active: Zone strictly requires
+    // bullish reversals inside/on a currently-viewed demand zone and bearish
+    // inside/on supply (no cross-bias); 8AM Box and Trend Line count either
+    // bias, per whichever filters are on.
+    const qualifying = !anyFilterOn
+      ? patterns[0]
+      : patterns.find(p => {
+          const zoneMatch = zoneFilterOn && (p.bias === "bullish"
+            ? demandZones.some(z => candleTouchesZone(r.low, r.high, t, z))
+            : supplyZones.some(z => candleTouchesZone(r.low, r.high, t, z)));
+          const boxMatch   = eightAmBoxFilterOn && eightAmBoxes.some(b => candleTouchesTimeRangeBox(r.low, r.high, t, b));
+          const trendMatch = trendlineFilterOn && trendlines.some(l => candleTouchesTrendline(r.low, r.high, t, l));
+          return zoneMatch || boxMatch || trendMatch;
+        });
+    if (qualifying) flags[i] = { name: qualifying.name, bias: qualifying.bias as "bullish" | "bearish" };
+  }
+  return flags;
 }
 
 // ─── Regime Detection Panel ───────────────────────────────────────────────────
@@ -8708,6 +9847,19 @@ export function AnalyticsV3() {
   const [error, setError]       = useState<string | null>(null);
   const [synthesis, setSynthesis] = useState<Synthesis | null>(null);
   const [selectedPair, setSelectedPair] = useState("EUR/USD");
+  // Lets a Sidebar favorite click switch this (already-mounted, possibly
+  // hidden) page to the requested pair without prop-drilling through AppShell.
+  useEffect(() => pairSelectionEvents.subscribe((pair) => setSelectedPair(pair)), []);
+  const [aisRowCollapsed, setAisRowCollapsed] = useState(false);
+  const [belowChartCollapsed, setBelowChartCollapsed] = useState(false);
+  const [rightOfChartCollapsed, setRightOfChartCollapsed] = useState(false);
+  const allPanelsCollapsed = aisRowCollapsed && belowChartCollapsed && rightOfChartCollapsed;
+  const toggleAllPanels = useCallback(() => {
+    const collapse = !allPanelsCollapsed;
+    setAisRowCollapsed(collapse);
+    setBelowChartCollapsed(collapse);
+    setRightOfChartCollapsed(collapse);
+  }, [allPanelsCollapsed]);
   const [alerts, setAlerts] = useState<Alert[]>([]);
   const [toasts, setToasts] = useState<AlertToast[]>([]);
   const seenStatuses = useRef<Record<string, string>>({});
@@ -9917,6 +11069,7 @@ export function AnalyticsV3() {
         }}
       >
         {/* ── Pinned top row (AI Synthesis + Price) ── */}
+        {!aisRowCollapsed && (
         <div style={{
           display:             "grid",
           gridTemplateColumns: "repeat(4, 1fr)",
@@ -9967,18 +11120,68 @@ export function AnalyticsV3() {
             );
           })}
         </div>
+        )}
 
-        {/* ── Divider ── */}
-        <div style={{ height: 1, background: "var(--border-medium)", flexShrink: 0 }} />
+        {/* ── Divider — doubles as the collapse/expand handle for the AI
+            Synthesis + Alerts row above ── */}
+        <div style={{ position: "relative", height: 1, background: "var(--border-medium)", flexShrink: 0 }}>
+          <button
+            onClick={() => setAisRowCollapsed(v => !v)}
+            title={aisRowCollapsed ? "Expand AI Synthesis & Alerts" : "Collapse AI Synthesis & Alerts"}
+            style={{
+              position: "absolute", top: "50%", left: "50%", transform: "translate(-50%, -50%)",
+              width: 22, height: 14, padding: 0, display: "flex", alignItems: "center", justifyContent: "center",
+              background: "transparent", border: "1px solid var(--border-medium)", borderRadius: 4,
+              cursor: "pointer", color: "var(--text-secondary)", zIndex: 5,
+            }}
+          >
+            <span style={{
+              width: 0, height: 0,
+              borderLeft: "4px solid transparent", borderRight: "4px solid transparent",
+              ...(aisRowCollapsed
+                ? { borderTop: "5px solid currentColor" }
+                : { borderBottom: "5px solid currentColor" }),
+            }} />
+          </button>
+        </div>
 
         {/* ── Scrollable bottom rows — category container panels ──
             paddingTop intentionally 0 so the sticky Indicator Timeframe row
             can rest flush with the container top edge; the first child
             below carries the 10px of initial spacing instead. */}
-        <div className="flex-1 min-h-0" style={{ overflowY: "auto", paddingTop: "0", paddingRight: "10px" }}>
+        <div className="flex-1 min-h-0" style={{
+          display: "flex", flexDirection: "column",
+          overflowY: belowChartCollapsed ? "hidden" : "auto", paddingTop: "0", paddingRight: "10px",
+        }}>
           {sheetRows.length > 0 && (
-            <div style={{ display: "flex", alignItems: "flex-start", marginTop: 10 }}>
-              <PriceHistoryChart rows={sheetRows} pair={selectedPair} chartTf={chartTf} setChartTf={setChartTf} livePrice={livePrice} />
+            <div style={{
+              display: "flex", alignItems: belowChartCollapsed ? "stretch" : "flex-start", marginTop: 10,
+              ...(belowChartCollapsed ? { flex: 1, minHeight: 0 } : { flexShrink: 0 }),
+            }}>
+              <PriceHistoryChart rows={sheetRows} pair={selectedPair} chartTf={chartTf} setChartTf={setChartTf} livePrice={livePrice} expandWidth={rightOfChartCollapsed} expandHeight={belowChartCollapsed} allPanelsCollapsed={allPanelsCollapsed} onToggleAllPanels={toggleAllPanels} />
+              {/* ── Vertical divider — doubles as the collapse/expand handle
+                  for the price/news panel right of the chart ── */}
+              <div style={{ position: "relative", width: 1, alignSelf: "stretch", background: "var(--border-medium)", flexShrink: 0, marginLeft: 12 }}>
+                <button
+                  onClick={() => setRightOfChartCollapsed(v => !v)}
+                  title={rightOfChartCollapsed ? "Expand panel right of chart" : "Collapse panel right of chart"}
+                  style={{
+                    position: "absolute", top: "50%", left: "50%", transform: "translate(-50%, -50%)",
+                    width: 14, height: 22, padding: 0, display: "flex", alignItems: "center", justifyContent: "center",
+                    background: "transparent", border: "1px solid var(--border-medium)", borderRadius: 4,
+                    cursor: "pointer", color: "var(--text-secondary)", zIndex: 5,
+                  }}
+                >
+                  <span style={{
+                    width: 0, height: 0,
+                    borderTop: "4px solid transparent", borderBottom: "4px solid transparent",
+                    ...(rightOfChartCollapsed
+                      ? { borderRight: "5px solid currentColor" }
+                      : { borderLeft: "5px solid currentColor" }),
+                  }} />
+                </button>
+              </div>
+              {!rightOfChartCollapsed && (
               <div style={{ flex: 1, paddingLeft: 24, marginTop: 4, position: "relative" }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 32 }}>
                   <div style={{ display: "flex", alignItems: "flex-start" }}>
@@ -10037,9 +11240,32 @@ export function AnalyticsV3() {
                 )}
                 <ForexNewsPanel news={newsItems} loading={newsLoading} pair={selectedPair} />
               </div>
+              )}
             </div>
           )}
-          <div style={{ height: 2, background: "rgba(255,255,255,0.12)", margin: "10px 0 10px" }} />
+          {/* ── Divider — doubles as the collapse/expand handle for
+              everything below the chart (Strategies + category panels) ── */}
+          <div style={{ position: "relative", height: 2, background: "rgba(255,255,255,0.12)", margin: "10px 0 10px", flexShrink: 0 }}>
+            <button
+              onClick={() => setBelowChartCollapsed(v => !v)}
+              title={belowChartCollapsed ? "Expand panels below chart" : "Collapse panels below chart"}
+              style={{
+                position: "absolute", top: "50%", left: "50%", transform: "translate(-50%, -50%)",
+                width: 22, height: 14, padding: 0, display: "flex", alignItems: "center", justifyContent: "center",
+                background: "transparent", border: "1px solid var(--border-medium)", borderRadius: 4,
+                cursor: "pointer", color: "var(--text-secondary)", zIndex: 5,
+              }}
+            >
+              <span style={{
+                width: 0, height: 0,
+                borderLeft: "4px solid transparent", borderRight: "4px solid transparent",
+                ...(belowChartCollapsed
+                  ? { borderTop: "5px solid currentColor" }
+                  : { borderBottom: "5px solid currentColor" }),
+              }} />
+            </button>
+          </div>
+          {!belowChartCollapsed && (
           <div style={{ display: "flex", flexDirection: "row", flexWrap: "wrap", columnGap: 10, rowGap: 0, alignItems: "flex-start", paddingTop: 10 }}>
             {(() => {
               let offset = 0;
@@ -10181,6 +11407,7 @@ export function AnalyticsV3() {
               });
             })()}
           </div>
+          )}
         </div>
       </div>
 

@@ -97,6 +97,70 @@ export function setQuotesIdx(idx: number): void {
   localStorage.setItem("tm_quotes_idx", String(idx));
 }
 
+const FAVORITE_PAIRS_KEY = "tm_favorite_pairs";
+
+export function getFavoritePairs(): string[] {
+  try {
+    const raw = localStorage.getItem(FAVORITE_PAIRS_KEY);
+    if (!raw) return [];
+    const parsed: unknown = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.filter((p): p is string => typeof p === "string") : [];
+  } catch {
+    return [];
+  }
+}
+export function isFavoritePair(pair: string): boolean {
+  return getFavoritePairs().includes(pair);
+}
+export function addFavoritePair(pair: string): void {
+  const cur = getFavoritePairs();
+  if (cur.includes(pair)) return;
+  localStorage.setItem(FAVORITE_PAIRS_KEY, JSON.stringify([...cur, pair]));
+  window.dispatchEvent(new CustomEvent("tm:prefs-changed"));
+}
+export function removeFavoritePair(pair: string): void {
+  localStorage.setItem(FAVORITE_PAIRS_KEY, JSON.stringify(getFavoritePairs().filter((p) => p !== pair)));
+  window.dispatchEvent(new CustomEvent("tm:prefs-changed"));
+}
+export function toggleFavoritePair(pair: string): void {
+  if (isFavoritePair(pair)) removeFavoritePair(pair); else addFavoritePair(pair);
+}
+
+// Reversal Candles chart indicator — location filters + which candle-shape
+// groups are enabled, remembered across app restarts.
+export interface ReversalSettings {
+  zoneFilter: boolean;
+  eightAmBoxFilter: boolean;
+  trendlineFilter: boolean;
+  patternGroups: string[];
+}
+const REVERSAL_SETTINGS_KEY = "tm_reversal_settings";
+
+export function getReversalSettings(defaultPatternGroups: string[]): ReversalSettings {
+  const fallback: ReversalSettings = {
+    zoneFilter: false, eightAmBoxFilter: false, trendlineFilter: false,
+    patternGroups: [...defaultPatternGroups],
+  };
+  try {
+    const raw = localStorage.getItem(REVERSAL_SETTINGS_KEY);
+    if (!raw) return fallback;
+    const parsed = JSON.parse(raw) as Partial<ReversalSettings>;
+    return {
+      zoneFilter:       typeof parsed.zoneFilter === "boolean" ? parsed.zoneFilter : fallback.zoneFilter,
+      eightAmBoxFilter: typeof parsed.eightAmBoxFilter === "boolean" ? parsed.eightAmBoxFilter : fallback.eightAmBoxFilter,
+      trendlineFilter:  typeof parsed.trendlineFilter === "boolean" ? parsed.trendlineFilter : fallback.trendlineFilter,
+      patternGroups:    Array.isArray(parsed.patternGroups) && parsed.patternGroups.every((g) => typeof g === "string")
+        ? parsed.patternGroups
+        : fallback.patternGroups,
+    };
+  } catch {
+    return fallback;
+  }
+}
+export function setReversalSettings(settings: ReversalSettings): void {
+  localStorage.setItem(REVERSAL_SETTINGS_KEY, JSON.stringify(settings));
+}
+
 export function getAnalyticsPanelOrder(defaultOrder: string[]): string[] {
   try {
     const raw = localStorage.getItem("tm_analytics_panel_order_v10");

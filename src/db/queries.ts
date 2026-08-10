@@ -913,6 +913,20 @@ export interface TradeImageDraftInput {
   description?: string;
 }
 
+// Attach a single image to a trade outside of the full TradeForm edit session
+// (e.g. a chart screenshot). Entry/Exit are single-slot — saving a new one
+// replaces whatever was there; Additional always appends.
+export async function addTradeImage(tradeId: string, kind: "entry" | "exit" | "additional", path: string): Promise<void> {
+  const db = getDb();
+  if (kind !== "additional") {
+    await db.delete(tradeImages).where(and(eq(tradeImages.tradeId, tradeId), eq(tradeImages.kind, kind)));
+  }
+  const sortOrder = (await getImagesByTradeId(tradeId)).length;
+  await db.insert(tradeImages).values({
+    id: crypto.randomUUID(), tradeId, kind, path, description: null, sortOrder,
+  });
+}
+
 // Reconcile the full image set for a trade in one pass: insert drafts that
 // aren't in the DB yet, update ones that are, delete rows no longer present.
 export async function syncTradeImages(tradeId: string, images: TradeImageDraftInput[]): Promise<void> {

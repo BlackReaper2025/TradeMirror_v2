@@ -74,6 +74,25 @@ fn save_trade_screenshot(app: tauri::AppHandle, source_path: String, kind: Strin
     Ok(dest.to_string_lossy().to_string())
 }
 
+// ─── Save an in-memory chart screenshot (base64 PNG) into the app's data dir ──
+
+#[tauri::command]
+fn save_chart_screenshot(app: tauri::AppHandle, data_base64: String, kind: String) -> Result<String, String> {
+    use base64::{engine::general_purpose::STANDARD, Engine as _};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let dir = app.path().app_data_dir().map_err(|e| e.to_string())?.join("screenshots");
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+
+    let bytes = STANDARD.decode(data_base64.as_bytes()).map_err(|e| e.to_string())?;
+    let now = SystemTime::now().duration_since(UNIX_EPOCH).map_err(|e| e.to_string())?;
+    let file_name = format!("{}-{}-{}.png", kind, now.as_millis(), now.subsec_nanos());
+    let dest = dir.join(file_name);
+
+    std::fs::write(&dest, bytes).map_err(|e| e.to_string())?;
+    Ok(dest.to_string_lossy().to_string())
+}
+
 // ─── Send Telegram test notification ─────────────────────────────────────────
 
 #[tauri::command]
@@ -690,7 +709,7 @@ pub fn run() {
 
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![list_images, read_credentials_file, write_text_file, save_trade_screenshot, get_candles_v3, get_ichi_rows_v3, sync_oanda_candles_v3, send_test_notification, send_telegram_message, get_forex_news, get_live_price, get_live_candles, get_live_candles_computed, get_synthesis])
+        .invoke_handler(tauri::generate_handler![list_images, read_credentials_file, write_text_file, save_trade_screenshot, save_chart_screenshot, get_candles_v3, get_ichi_rows_v3, sync_oanda_candles_v3, send_test_notification, send_telegram_message, get_forex_news, get_live_price, get_live_candles, get_live_candles_computed, get_synthesis])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

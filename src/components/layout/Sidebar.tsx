@@ -1,16 +1,17 @@
 import { useEffect, useState } from "react";
 import {
   LayoutDashboard, ScrollText, CalendarDays, BarChart2,
-  Calculator, Settings,
+  Calculator, Settings, Star, X,
   PanelLeftClose, PanelLeftOpen, ExternalLink, Music,
 } from "lucide-react";
 import { PieChart, Pie, Cell, ResponsiveContainer } from "recharts";
 import { clsx } from "clsx";
 import { useDatabase } from "../../db/DatabaseProvider";
 import { tradeEvents } from "../../lib/tradeEvents";
+import { pairSelectionEvents } from "../../lib/pairSelection";
 import { getSettings, getAccount, getPortfolio, type Account } from "../../db/queries";
 import { logoSrc } from "../../config/branding";
-import { getMusicUrl, getAccountBrokerUrl } from "../../lib/preferences";
+import { getMusicUrl, getAccountBrokerUrl, getFavoritePairs, removeFavoritePair } from "../../lib/preferences";
 import { useTheme } from "../../theme/ThemeContext";
 import { openUrl as openExternal } from "@tauri-apps/plugin-opener";
 
@@ -233,6 +234,59 @@ function PortfolioWidget({ portfolio, activeAccountName }: { portfolio: Portfoli
   );
 }
 
+// ─── Favorites panel — quick-select instruments, shown when expanded ─────────
+
+function FavoritesPanel({
+  favorites, onSelect, onRemove,
+}: {
+  favorites: string[]; onSelect: (pair: string) => void; onRemove: (pair: string) => void;
+}) {
+  if (favorites.length === 0) return null;
+  return (
+    <div className="px-2 pb-2">
+      <div
+        className="rounded-xl overflow-hidden"
+        style={{ background: "var(--bg-panel)", border: "1px solid var(--border-subtle)" }}
+      >
+        <div className="flex items-center gap-1.5 px-3 pt-2.5 pb-1.5">
+          <Star size={12} style={{ color: "var(--text-muted)" }} />
+          <span className="text-[11px] font-semibold uppercase tracking-widest" style={{ color: "var(--text-muted)" }}>
+            Favorites
+          </span>
+        </div>
+        <div className="flex flex-col gap-0.5 px-2 pb-2">
+          {favorites.map((pair) => (
+            <div
+              key={pair}
+              onClick={() => onSelect(pair)}
+              className="group flex items-center justify-between rounded-lg px-2 py-1.5 cursor-pointer transition-colors min-w-0"
+              style={{ color: "var(--text-secondary)" }}
+              onMouseEnter={(e) => {
+                (e.currentTarget as HTMLElement).style.background = "var(--bg-hover)";
+                (e.currentTarget as HTMLElement).style.color = "var(--text-primary)";
+              }}
+              onMouseLeave={(e) => {
+                (e.currentTarget as HTMLElement).style.background = "transparent";
+                (e.currentTarget as HTMLElement).style.color = "var(--text-secondary)";
+              }}
+            >
+              <span className="text-[12px] font-medium truncate">{pair}</span>
+              <button
+                onClick={(e) => { e.stopPropagation(); onRemove(pair); }}
+                title="Remove from favorites"
+                className="opacity-0 group-hover:opacity-100 transition-opacity shrink-0"
+                style={{ color: "var(--text-muted)", lineHeight: 0 }}
+              >
+                <X size={12} />
+              </button>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Sidebar ──────────────────────────────────────────────────────────────────
 
 export function Sidebar({ activePage, onNavigate, collapsed, onToggleCollapse }: SidebarProps) {
@@ -240,6 +294,7 @@ export function Sidebar({ activePage, onNavigate, collapsed, onToggleCollapse }:
   const [account,      setAccount]      = useState<Account | null>(null);
   const [portfolio,    setPortfolio]    = useState<PortfolioItem[]>([]);
   const [musicUrl,     setMusicUrl]     = useState(getMusicUrl);
+  const [favorites,    setFavorites]    = useState<string[]>(getFavoritePairs);
 
   const loadData = async () => {
     if (!ready) return;
@@ -260,7 +315,7 @@ export function Sidebar({ activePage, onNavigate, collapsed, onToggleCollapse }:
   useEffect(() => { if (!ready) return; return tradeEvents.subscribe(loadData); }, [ready]);
 
   useEffect(() => {
-    const handler = () => setMusicUrl(getMusicUrl());
+    const handler = () => { setMusicUrl(getMusicUrl()); setFavorites(getFavoritePairs()); };
     window.addEventListener("tm:prefs-changed", handler);
     return () => window.removeEventListener("tm:prefs-changed", handler);
   }, []);
@@ -366,6 +421,15 @@ export function Sidebar({ activePage, onNavigate, collapsed, onToggleCollapse }:
             neutral={id === "analytics-v3"}
           />
         ))}
+        {!collapsed && (
+          <div className="mt-2">
+            <FavoritesPanel
+              favorites={favorites}
+              onSelect={(pair) => { onNavigate("analytics-v3"); pairSelectionEvents.select(pair); }}
+              onRemove={removeFavoritePair}
+            />
+          </div>
+        )}
       </nav>
 
       {/* ── Bottom section ── */}

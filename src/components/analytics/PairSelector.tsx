@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { ChevronDown, Search, X } from "lucide-react";
+import { ChevronDown, Search, Star, X } from "lucide-react";
+import { getFavoritePairs, toggleFavoritePair } from "../../lib/preferences";
 
 type Category = "Forex" | "Stocks" | "ETFs" | "Crypto";
 
@@ -46,6 +47,14 @@ export function PairSelector({ value, onPairChange }: PairSelectorProps) {
   const [query,      setQuery]      = useState("");
   const [searchOpen, setSearchOpen] = useState(false);
   const searchRef = useRef<HTMLDivElement>(null);
+
+  const [favorites, setFavorites] = useState<string[]>(getFavoritePairs);
+  useEffect(() => {
+    const handler = () => setFavorites(getFavoritePairs());
+    window.addEventListener("tm:prefs-changed", handler);
+    return () => window.removeEventListener("tm:prefs-changed", handler);
+  }, []);
+  const isFavorite = favorites.includes(displayedPair);
 
   const results = query.trim()
     ? ALL_ASSETS.filter((a) => normalize(a.pair).includes(normalize(query))).slice(0, 40)
@@ -192,6 +201,20 @@ export function PairSelector({ value, onPairChange }: PairSelectorProps) {
               transform:  open ? "rotate(180deg)" : "rotate(0deg)",
               transition: "transform 0.18s",
             }}
+          />
+        </button>
+
+        {/* Favorite toggle — separate from the trigger so it doesn't open/close the dropdown */}
+        <button
+          onClick={() => toggleFavoritePair(displayedPair)}
+          title={isFavorite ? "Remove from favorites" : "Add to favorites"}
+          className="h-full flex items-center px-2 shrink-0"
+          style={{ lineHeight: 0 }}
+        >
+          <Star
+            size={14}
+            fill={isFavorite ? "currentColor" : "none"}
+            style={{ color: isFavorite ? "var(--accent-text)" : "var(--text-muted)" }}
           />
         </button>
 

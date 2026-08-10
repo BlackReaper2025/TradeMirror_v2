@@ -1,62 +1,52 @@
 [
   {
-    "id": "gbpusd_above_13700",
-    "name": "GBPUSD above 1.3700",
+    "id": "52175407-eeb9-4dc6-b4cf-deadd9bb1669",
+    "name": "GBP/USD D SUPPLY",
     "instrument": "GBP_USD",
     "direction": "above",
-    "price": 1.37,
+    "price": 1.34125,
     "active": true,
     "status": "watching",
-    "notifications": {
-      "in_app": true,
-      "telegram": true
-    },
-    "created_at_utc": "2026-05-03T00:00:00+00:00",
-    "triggered_at_utc": null,
-    "last_hit_price": null
-  },
-  {
-    "id": "69eefe08-14e0-4101-b988-21bb4866bd75",
-    "name": "New Alert",
-    "instrument": "EUR_USD",
-    "direction": "rsi_macd_cross",
-    "price": 0,
-    "active": true,
-    "status": "triggered",
     "notifications": {
       "in_app": true,
       "telegram": true
     },
     "sound": "chime",
-    "created_at_utc": "2026-05-18T19:24:51.076Z",
-    "triggered_at_utc": "2026-05-21T18:30:28.438Z",
-    "last_hit_price": null,
-    "rsiMacdConfig": {
-      "directionBias": "both",
-      "timeframes": [
-        "1D",
-        "1M",
-        "5M",
-        "15M",
-        "4H",
-        "1H"
-      ]
-    }
+    "created_at_utc": "2026-07-28T03:24:21.004Z",
+    "triggered_at_utc": null,
+    "last_hit_price": null
   },
   {
-    "id": "65fcbdb0-2464-4b26-8486-5d543d84be1b",
-    "name": "New Alert",
-    "instrument": "EUR_USD",
+    "id": "fd0538a4-b856-4b69-abcb-0fcbe993b453",
+    "name": "GBP/USD D DEMAND",
+    "instrument": "GBP_USD",
     "direction": "below",
-    "price": 1.159,
+    "price": 1.3118,
     "active": true,
     "status": "watching",
     "notifications": {
       "in_app": true,
       "telegram": true
     },
-    "sound": "pulse",
-    "created_at_utc": "2026-05-21T07:31:48.133Z",
+    "sound": "chime",
+    "created_at_utc": "2026-07-28T03:25:28.820Z",
+    "triggered_at_utc": null,
+    "last_hit_price": null
+  },
+  {
+    "id": "69bf603a-5354-4dc6-b559-94af5813df79",
+    "name": "USD/JPY D DEMAND",
+    "instrument": "USD_JPY",
+    "direction": "below",
+    "price": 163.228,
+    "active": true,
+    "status": "watching",
+    "notifications": {
+      "in_app": true,
+      "telegram": true
+    },
+    "sound": "chime",
+    "created_at_utc": "2026-07-28T03:27:51.315Z",
     "triggered_at_utc": null,
     "last_hit_price": null
   }
