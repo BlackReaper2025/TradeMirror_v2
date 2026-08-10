@@ -366,6 +366,35 @@ fn get_forex_news() -> Vec<NewsItem> {
     all
 }
 
+// ─── Economic calendar — unofficial ForexFactory JSON feed ───────────────────
+// No official free economic-calendar API exists with impact ratings; this feed
+// is undocumented and unauthenticated (used widely by open-source calendar
+// widgets) and is rate-limited, so the frontend polls it infrequently.
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
+struct EconomicEvent {
+    title: String,
+    country: String,
+    date: String,
+    impact: String,
+    forecast: String,
+    previous: String,
+    #[serde(default)]
+    actual: String,
+}
+
+#[tauri::command]
+fn get_economic_calendar() -> Result<Vec<EconomicEvent>, String> {
+    reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(8))
+        .user_agent("Mozilla/5.0 (compatible; TradeMirror/1.0)")
+        .build()
+        .map_err(|e| e.to_string())?
+        .get("https://nfs.faireconomy.media/ff_calendar_thisweek.json")
+        .send().map_err(|e| format!("request: {}", e))?
+        .json::<Vec<EconomicEvent>>()
+        .map_err(|e| format!("parse: {}", e))
+}
+
 // ─── OANDA live price streaming ───────────────────────────────────────────────
 
 /// Fetch the latest mid price for the given pair (defaults to EUR_USD).
@@ -709,7 +738,7 @@ pub fn run() {
 
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![list_images, read_credentials_file, write_text_file, save_trade_screenshot, save_chart_screenshot, get_candles_v3, get_ichi_rows_v3, sync_oanda_candles_v3, send_test_notification, send_telegram_message, get_forex_news, get_live_price, get_live_candles, get_live_candles_computed, get_synthesis])
+        .invoke_handler(tauri::generate_handler![list_images, read_credentials_file, write_text_file, save_trade_screenshot, save_chart_screenshot, get_candles_v3, get_ichi_rows_v3, sync_oanda_candles_v3, send_test_notification, send_telegram_message, get_forex_news, get_economic_calendar, get_live_price, get_live_candles, get_live_candles_computed, get_synthesis])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

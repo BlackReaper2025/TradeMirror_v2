@@ -13,12 +13,13 @@ import {
 } from "recharts";
 import { Maximize2, Minimize2, X, GripVertical, Settings, Camera } from "lucide-react";
 import { toPng } from "html-to-image";
-import { getSettings, getAllTradesWithJournal, addTradeImage, type TradeWithJournal } from "../db/queries";
+import { getSettings, getAllTradesWithJournal, addTradeImage, localDateStr, type TradeWithJournal } from "../db/queries";
 import { VerdictPanel }          from "../components/analytics/VerdictPanel";
 import { EvidenceCards }         from "../components/analytics/EvidenceCards";
 import { EntryExitPanel }        from "../components/analytics/EntryExitPanel";
 import { HistoryDotsPanel }      from "../components/analytics/HistoryDotsPanel";
 import { PairSelector }          from "../components/analytics/PairSelector";
+import { AnalyticsClock }        from "../components/analytics/AnalyticsClock";
 import { useAnalytics, setLiveAnalytics, hasLiveAnalytics, signalHistory, historicalAccuracy,
   analysisResult as defaultAnalysisResult, signalTags, evidenceCards,
   emaStackData, macdChartData, momentumChartData, volatilityChartData, directionalChartData,
@@ -131,6 +132,16 @@ interface NewsArticle {
   link: string;
   pub_date: string;
   source: string;
+}
+
+interface EconomicEvent {
+  title: string;
+  country: string;
+  date: string;
+  impact: string;
+  forecast: string;
+  previous: string;
+  actual?: string;
 }
 
 function formatDataDate(dateStr: string): string {
@@ -1265,36 +1276,83 @@ class TrendlineRenderer {
       const w  = scope.bitmapSize.width;
       const ts = chart.timeScale();
       const loaded = this._p._loadedCandles;
-      if (loaded.length < 2) return;
+      const n = loaded.length;
+      if (n < 2) return;
 
-      // Resolves a pivot to whichever *currently loaded* bar actually
-      // touched that pivot's price, searched within one source-bar width of
-      // the pivot's own (bar-open) time — e.g. a Weekly pivot's high/low
-      // usually didn't happen on the week's opening bar, so matching by
-      // price against the Daily/4H/1H bars underneath finds the real wick.
-      // Falls back to the nearest loaded bar to the pivot's own time if no
-      // price match is found. Returns null only when the pivot's time is
-      // entirely outside the loaded window.
-      const resolveAnchor = (t: number, p: number, type: "support" | "resistance", srcDur: number)
-        : { xRaw: number; idx: number; arrIdx: number } | null => {
-        let matchArrIdx = -1;
-        if (srcDur > 0) {
-          let bestDiff = Infinity;
-          for (let i = 0; i < loaded.length; i++) {
-            const c = loaded[i];
-            if (c.t < t - srcDur || c.t > t + srcDur) continue;
-            const val = type === "resistance" ? c.h : c.l;
-            const diff = Math.abs(val - p);
-            if (diff < bestDiff) { bestDiff = diff; matchArrIdx = i; }
-          }
-        }
-        const bestTime = matchArrIdx >= 0 ? loaded[matchArrIdx].t : (t >= this._p._oldestLoadedTime ? t : null);
-        if (bestTime === null) return null;
-        const idx = ts.timeToIndex(bestTime, true);
+      // Real chart x-coordinate of the loaded bar at array position i —
+      // looked up via the bar's own time rather than assumed to equal its
+      // array index, so it stays correct however the chart numbers logical
+      // indices internally.
+      const xOfLoadedBar = (i: number): number | null => {
+        const idx = ts.timeToIndex(loaded[i].t, true);
         if (idx === null) return null;
-        const xRaw = ts.logicalToCoordinate(idx as any);
-        if (xRaw === null) return null;
-        return { xRaw, idx, arrIdx: matchArrIdx };
+        return ts.logicalToCoordinate(idx as any);
+      };
+
+      // Maps ANY unix-second timestamp to a pixel x-coordinate on the
+      // chart's actual (gap-aware) time scale — linearly interpolated
+      // between the two real loaded bars bracketing it (or extrapolated
+      // from the two bars nearest whichever edge it's beyond). This is the
+      // whole fix: earlier versions tried to guess which specific loaded
+      // bar "really" produced a source-timeframe pivot (by nearest price,
+      // then by local pixel-per-second rate) and both were wrong in
+      // different ways once the displayed timeframe got much finer than the
+      // pivot's source timeframe (e.g. a Weekly pivot shown on a 1H chart).
+      // Interpolating against the chart's own real bar positions sidesteps
+      // that guessing game entirely — it's exact by construction, and
+      // naturally accounts for weekend/holiday gaps because it's built from
+      // the actual pixel spacing between real bars, not an assumed rate.
+      const timeToX = (t: number): number | null => {
+        let loIdx: number, hiIdx: number;
+        if (t <= loaded[0].t) { loIdx = 0; hiIdx = 1; }
+        else if (t >= loaded[n - 1].t) { loIdx = n - 2; hiIdx = n - 1; }
+        else {
+          let lo = 0, hi = n - 1;
+          while (hi - lo > 1) {
+            const mid = (lo + hi) >> 1;
+            if (loaded[mid].t <= t) lo = mid; else hi = mid;
+          }
+          loIdx = lo; hiIdx = hi;
+        }
+        const xLo = xOfLoadedBar(loIdx);
+        const xHi = xOfLoadedBar(hiIdx);
+        if (xLo === null || xHi === null) return null;
+        const dt = loaded[hiIdx].t - loaded[loIdx].t;
+        if (dt === 0) return xLo;
+        return xLo + (xHi - xLo) * ((t - loaded[loIdx].t) / dt);
+      };
+
+      // Finds the loaded bar that IS the true local extreme (highest high /
+      // lowest low) within the pivot's own source bar span [t, t+srcDur) —
+      // i.e. the actual bar the wick happened on, found by definition
+      // rather than by closest-price guessing (which breaks down near
+      // re-tested support/resistance levels, where several bars can share a
+      // near-identical price). Returns -1 if that span isn't covered by the
+      // loaded window at all.
+      const findWickBarIdx = (t: number, type: "support" | "resistance", srcDur: number): number => {
+        if (srcDur <= 0) return -1;
+        let bestVal = type === "resistance" ? -Infinity : Infinity;
+        let bestI = -1;
+        for (let i = 0; i < n; i++) {
+          const c = loaded[i];
+          if (c.t < t || c.t >= t + srcDur) continue;
+          const val = type === "resistance" ? c.h : c.l;
+          const better = type === "resistance" ? val > bestVal : val < bestVal;
+          if (better) { bestVal = val; bestI = i; }
+        }
+        return bestI;
+      };
+
+      // Resolves a pivot's x-coordinate: the exact wick bar when its source
+      // span is covered by the loaded window (the common case — this is
+      // what makes the line actually touch the candle that set the level),
+      // falling back to the gap-aware interpolation above (using the
+      // pivot's own bar-open time) only when that span predates everything
+      // that's loaded, since then there's no real bar to point to at all.
+      const anchorX = (t: number, type: "support" | "resistance", srcDur: number)
+        : { x: number | null; wickIdx: number } => {
+        const wickIdx = findWickBarIdx(t, type, srcDur);
+        return wickIdx >= 0 ? { x: xOfLoadedBar(wickIdx), wickIdx } : { x: timeToX(t), wickIdx: -1 };
       };
 
       for (const l of lines) {
@@ -1303,60 +1361,15 @@ class TrendlineRenderer {
         const y2Raw = series.priceToCoordinate(l.p2);
         if (y1Raw === null || y2Raw === null) continue;
 
-        // t1 < t2 always, and the loaded window is contiguous ending at
-        // "now" — so if the recent pivot (t2) doesn't resolve, the older
-        // one (t1) can't either.
-        const a2 = resolveAnchor(l.t2, l.p2, l.type, l.srcDurationSec);
-        const a1 = a2 !== null ? resolveAnchor(l.t1, l.p1, l.type, l.srcDurationSec) : null;
+        const a1 = anchorX(l.t1, l.type, l.srcDurationSec);
+        const a2 = anchorX(l.t2, l.type, l.srcDurationSec);
+        if (a1.x === null || a2.x === null) continue;
 
-        // Circle markers only render for anchors that actually resolved —
-        // best-effort, skipped when that pivot's bar is outside the loaded
-        // window.
-        const circle1X = a1 !== null ? a1.xRaw : null;
-        const circle2X = a2 !== null ? a2.xRaw : null;
+        const circle1X = a1.wickIdx >= 0 ? a1.x : null;
+        const circle2X = a2.wickIdx >= 0 ? a2.x : null;
 
-        let x1Raw: number, x2Raw: number, y1: number, y2: number;
-
-        if (a2 !== null && a1 !== null) {
-          x1Raw = a1.xRaw; x2Raw = a2.xRaw;
-          y1 = y1Raw * vr; y2 = y2Raw * vr;
-        } else if (a2 !== null) {
-          // Older pivot predates the loaded window — extrapolate its x
-          // position from the recent (resolved) anchor using the LOCAL bar
-          // spacing right next to it, so weekend/session gaps elsewhere in
-          // the window don't distort the slope. The line still passes
-          // exactly through the one anchor that IS visible.
-          const neighborArrIdx = a2.arrIdx > 0 ? a2.arrIdx - 1 : a2.arrIdx + 1;
-          const neighbor = loaded[neighborArrIdx];
-          const localDur = neighbor ? Math.abs(loaded[a2.arrIdx].t - neighbor.t) : 0;
-          const xPrevRaw = ts.logicalToCoordinate((a2.idx - 1) as any);
-          if (xPrevRaw === null || localDur === 0) continue;
-          const pxPerBar = a2.xRaw - xPrevRaw;
-          const pxPerSec  = pxPerBar / localDur;
-          x1Raw = a2.xRaw - pxPerSec * (l.t2 - l.t1);
-          x2Raw = a2.xRaw;
-          y1 = y1Raw * vr; y2 = y2Raw * vr;
-        } else {
-          // Neither pivot resolves at all — draw the ray from the
-          // trendline's exact price equation sampled at the oldest/newest
-          // loaded bars instead. Approximate, but nothing is visible to
-          // mismatch against since no circle renders in this case either.
-          const slope = (l.p2 - l.p1) / (l.t2 - l.t1);
-          const priceAt = (t: number) => l.p1 + slope * (t - l.t1);
-          const tOld = loaded[0].t, tNew = loaded[loaded.length - 1].t;
-          const idxOld = ts.timeToIndex(tOld, true);
-          const idxNew = ts.timeToIndex(tNew, true);
-          if (idxOld === null || idxNew === null) continue;
-          const xOldRaw = ts.logicalToCoordinate(idxOld as any);
-          const xNewRaw = ts.logicalToCoordinate(idxNew as any);
-          const yOldRaw = series.priceToCoordinate(priceAt(tOld));
-          const yNewRaw = series.priceToCoordinate(priceAt(tNew));
-          if (xOldRaw === null || xNewRaw === null || yOldRaw === null || yNewRaw === null) continue;
-          x1Raw = xOldRaw; x2Raw = xNewRaw;
-          y1 = yOldRaw * vr; y2 = yNewRaw * vr;
-        }
-
-        const x1 = x1Raw * hr, x2 = x2Raw * hr;
+        const x1 = a1.x * hr, x2 = a2.x * hr;
+        const y1 = y1Raw * vr, y2 = y2Raw * vr;
 
         // Extend as a ray from the most recent anchor to the right edge of
         // the pane, rather than stopping there.
@@ -1508,6 +1521,11 @@ function PriceHistoryChart({ pair, chartTf, setChartTf, livePrice, expandWidth, 
   const marketSessionPrimRef  = useRef<TimeRangeBoxPrimitive | null>(null);
   const marketSessionBoxesRef = useRef<TimeRangeBox[]>([]);
   const reversalMarkerPrimRef = useRef<ReversalMarkerPrimitive | null>(null);
+  // Whether the next tfRows-driven applyData call should reset the visible
+  // range/autoscale. True only for a genuine new instrument/timeframe load;
+  // false for the background live-candle poll below, so the forming bar's
+  // O/H/L/C can refresh without yanking the user's view.
+  const shouldResetViewRef = useRef(true);
 
   // 8AM session box — independent 15M candle fetch, mirrors the zone-candle
   // fetch pattern below, only active while the indicator toggle is on.
@@ -1578,11 +1596,27 @@ function PriceHistoryChart({ pair, chartTf, setChartTf, livePrice, expandWidth, 
     setTfRows([]);
     if (chartRef.current)
       activeIndsRef.current.forEach(key => removeIndSeries(key));
+    shouldResetViewRef.current = true;
     invoke<RawCandleTf[]>("get_live_candles", { pair, tf: chartTf })
       .then(candles => setTfRows(candles))
       .catch(() => {})
       .finally(() => setTfLoading(false));
   }, [chartTf, pair]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Poll the main chart's candles every 10s (same cadence as the zone/session
+  // candle fetches above) so the forming bar's O/H/L/C tracks live price.
+  // resetView stays false here — only the initial tf/pair load above resets
+  // the visible range/autoscale.
+  useEffect(() => {
+    const poll = () => {
+      shouldResetViewRef.current = false;
+      invoke<RawCandleTf[]>("get_live_candles", { pair, tf: chartTf })
+        .then(candles => setTfRows(candles))
+        .catch(() => {});
+    };
+    const id = setInterval(poll, 10_000);
+    return () => clearInterval(id);
+  }, [chartTf, pair]);
 
   // Daily zone candles — fetched independently of chartTf whenever the Daily
   // zone toggle is on, then polled every 10s so the still-forming candle's
@@ -2065,12 +2099,12 @@ function PriceHistoryChart({ pair, chartTf, setChartTf, livePrice, expandWidth, 
   }, [viewMode, createSeries]);
 
   // Apply price data + refresh all active indicators when data arrives.
-  // tfRows only changes via the fetch effect keyed on [chartTf, pair], so
-  // this is always a genuine new instrument/timeframe (or first) load —
-  // the one case that should reset the visible range and price autoscale.
+  // tfRows changes on the initial [chartTf, pair] load and on the 10s live
+  // poll; shouldResetViewRef distinguishes the two so only the former resets
+  // the visible range and price autoscale.
   useEffect(() => {
     if (tfRows.length === 0) return;
-    applyData(tfRows, viewModeRef.current, true);
+    applyData(tfRows, viewModeRef.current, shouldResetViewRef.current);
     activeIndsRef.current.forEach(key => addIndSeries(key, tfRows));
     // Track the oldest loaded bar's time and the loaded high/low series
     // itself, so the trendline primitive can resolve each pivot anchor to
@@ -2087,12 +2121,16 @@ function PriceHistoryChart({ pair, chartTf, setChartTf, livePrice, expandWidth, 
 
   const [showIndPanel, setShowIndPanel] = useState(false);
   const indBtnRef = useRef<HTMLButtonElement>(null);
+  const indPanelPopoverRef = useRef<HTMLDivElement>(null);
+  const [indPanelPos, setIndPanelPos] = useState<{ top: number; left: number } | null>(null);
 
   useEffect(() => {
     if (!showIndPanel) return;
     const close = (e: MouseEvent) => {
-      if (indBtnRef.current && !indBtnRef.current.closest("[data-ind-panel]")?.contains(e.target as Node))
-        setShowIndPanel(false);
+      const target = e.target as Node;
+      const insideButton  = indBtnRef.current?.contains(target);
+      const insidePopover = indPanelPopoverRef.current?.contains(target);
+      if (!insideButton && !insidePopover) setShowIndPanel(false);
     };
     document.addEventListener("mousedown", close);
     return () => document.removeEventListener("mousedown", close);
@@ -2165,7 +2203,8 @@ function PriceHistoryChart({ pair, chartTf, setChartTf, livePrice, expandWidth, 
     try {
       const settings = await getSettings();
       const trades = await getAllTradesWithJournal(settings?.selectedAccountId ?? "acc-1");
-      setSnapshotTrades(trades);
+      const todayStr = localDateStr();
+      setSnapshotTrades(trades.filter(t => t.openedAt.slice(0, 10) === todayStr));
     } catch (err) {
       console.error("[PriceHistoryChart] failed to load trades for snapshot picker:", err);
     }
@@ -2611,11 +2650,17 @@ function PriceHistoryChart({ pair, chartTf, setChartTf, livePrice, expandWidth, 
               document.body
             )}
           </div>
-          {/* Indicators button + dropdown */}
-          <div style={{ position: "relative" }} data-ind-panel>
+          {/* Indicators button + dropdown — portaled + fixed-positioned (like the
+              Reversal settings popover) so it floats over everything instead of
+              being clipped by the toolbar's small scroll container. */}
+          <div style={{ position: "relative" }}>
             <button
               ref={indBtnRef}
-              onClick={() => setShowIndPanel(v => !v)}
+              onClick={() => {
+                const rect = indBtnRef.current?.getBoundingClientRect();
+                if (rect) setIndPanelPos({ top: rect.bottom + 6, left: rect.left });
+                setShowIndPanel(v => !v);
+              }}
               style={{
                 fontSize: 9, fontWeight: 700, padding: "4px 6px",
                 textTransform: "uppercase", letterSpacing: "0.08em",
@@ -2627,9 +2672,9 @@ function PriceHistoryChart({ pair, chartTf, setChartTf, livePrice, expandWidth, 
             >
               Indicators{anyActive ? ` (${activeIndDefsCount})` : ""}
             </button>
-            {showIndPanel && (
-              <div style={{
-                position: "absolute", top: "calc(100% + 6px)", right: 0, zIndex: 50,
+            {showIndPanel && indPanelPos && createPortal(
+              <div ref={indPanelPopoverRef} style={{
+                position: "fixed", top: indPanelPos.top, left: indPanelPos.left, zIndex: 1000,
                 background: "var(--bg-panel)", border: "1px solid var(--border-medium)",
                 borderRadius: 10, padding: "8px 0", minWidth: 180,
                 boxShadow: "0 8px 24px rgba(0,0,0,0.45)",
@@ -2664,7 +2709,8 @@ function PriceHistoryChart({ pair, chartTf, setChartTf, livePrice, expandWidth, 
                     </button>
                   );
                 })}
-              </div>
+              </div>,
+              document.body
             )}
           </div>
           {/* View mode toggle */}
@@ -2803,6 +2849,21 @@ function PriceHistoryChart({ pair, chartTf, setChartTf, livePrice, expandWidth, 
         {tfLoading && (
           <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", zIndex: 10, pointerEvents: "none" }}>
             <span style={{ fontSize: 11, color: "var(--text-muted)", letterSpacing: "0.05em" }}>Loading…</span>
+          </div>
+        )}
+        {anyActive && (
+          <div style={{
+            position: "absolute", top: 8, left: 12, zIndex: 5, pointerEvents: "none",
+            display: "flex", flexWrap: "wrap", gap: "2px 8px", maxWidth: "70%",
+          }}>
+            {IND_DEFS.filter(d => activeInds.has(d.key)).map(({ key, label, color }) => (
+              <span key={key} style={{
+                fontSize: 10, fontWeight: 600, color, letterSpacing: "0.02em",
+                textShadow: "0 1px 2px rgba(0,0,0,0.6)",
+              }}>
+                {label}
+              </span>
+            ))}
           </div>
         )}
         <div ref={containerRef} style={{ height: expandHeight ? "100%" : 480, opacity: tfLoading ? 0.3 : 1 }} />
@@ -9753,14 +9814,212 @@ function formatNewsDate(dateStr: string): string {
   } catch { return ""; }
 }
 
+function formatCalendarDate(dateStr: string): string {
+  try {
+    const d = new Date(dateStr);
+    if (isNaN(d.getTime())) return "";
+    return d.toLocaleString(undefined, {
+      weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit",
+    });
+  } catch { return ""; }
+}
+
+const CALENDAR_IMPACTS = ["High", "Medium", "Low"] as const;
+type CalendarImpact = typeof CALENDAR_IMPACTS[number];
+const IMPACT_COLORS: Record<string, string> = {
+  High: "#ef4444", Medium: "#f59e0b", Low: "#6b7280", Holiday: "#3b82f6",
+};
+
+// High-impact releases are FTMO's actual restricted-trading rule: no
+// positions opened within 2 minutes before/after any red-folder event.
+function isFtmoProhibited(ev: EconomicEvent): boolean {
+  return ev.impact === "High";
+}
+
+function EconomicCalendarPanel({ events, loading, impactFilter }: {
+  events: EconomicEvent[]; loading: boolean; impactFilter: Set<CalendarImpact>;
+}) {
+  const filtered = events.filter(ev =>
+    !(CALENDAR_IMPACTS as readonly string[]).includes(ev.impact) || impactFilter.has(ev.impact as CalendarImpact)
+  );
+
+  return (
+    <div style={{ height: "100%", overflowY: "auto", padding: "4px 0" }}>
+        {filtered.length === 0 && !loading && (
+          <div style={{ padding: "20px 12px", fontSize: 11, color: "var(--text-muted)", textAlign: "center", lineHeight: 1.5 }}>
+            No calendar events loaded.<br />Check network access.
+          </div>
+        )}
+        {filtered.map((ev, i) => {
+          const prohibited = isFtmoProhibited(ev);
+          const color = IMPACT_COLORS[ev.impact] ?? "var(--text-muted)";
+          return (
+            <div key={i} style={{
+              display: "flex", flexDirection: "column", gap: 3, padding: "8px 10px",
+              borderBottom: i < filtered.length - 1 ? "1px solid var(--border-light)" : "none",
+              borderLeft: prohibited ? "3px solid #ef4444" : "3px solid transparent",
+            }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <span style={{ fontSize: 9, fontWeight: 700, color, textTransform: "uppercase", letterSpacing: "0.06em" }}>
+                  {ev.impact}
+                </span>
+                <span style={{ fontSize: 9, fontWeight: 700, color: "var(--text-muted)" }}>{ev.country}</span>
+                {prohibited && (
+                  <span
+                    title="FTMO: no trading within 2 minutes before/after this release"
+                    style={{
+                      fontSize: 8, fontWeight: 800, color: "#ef4444", background: "#ef444422",
+                      border: "1px solid #ef444455", borderRadius: 4, padding: "1px 5px",
+                      textTransform: "uppercase", letterSpacing: "0.05em", marginLeft: "auto",
+                    }}
+                  >
+                    FTMO Blackout
+                  </span>
+                )}
+              </div>
+              <div style={{ fontSize: 12, fontWeight: 500, color: "var(--text-primary)", lineHeight: 1.3 }}>
+                {ev.title}
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 10, color: "var(--text-muted)" }}>
+                <span>{formatCalendarDate(ev.date)}</span>
+                {ev.forecast && <span>Forecast: <b style={{ color: "var(--text-secondary)" }}>{ev.forecast}</b></span>}
+                {ev.previous && <span>Previous: <b style={{ color: "var(--text-secondary)" }}>{ev.previous}</b></span>}
+              </div>
+            </div>
+          );
+        })}
+    </div>
+  );
+}
+
+function NewsAndCalendarPanel({
+  news, newsLoading, pair, calendarEvents, calendarLoading,
+}: {
+  news: NewsArticle[]; newsLoading: boolean; pair: string;
+  calendarEvents: EconomicEvent[]; calendarLoading: boolean;
+}) {
+  const [tab, setTab] = useState<"news" | "calendar">("news");
+
+  const [impactFilter, setImpactFilter] = useState<Set<CalendarImpact>>(new Set(CALENDAR_IMPACTS));
+  const toggleImpact = (imp: CalendarImpact) => setImpactFilter(prev => {
+    const next = new Set(prev);
+    if (next.has(imp)) next.delete(imp); else next.add(imp);
+    return next;
+  });
+
+  // Settings popover (impact filter) — portaled + fixed-positioned like the
+  // Reversal/Indicators popovers. Lives in the tab strip so it's in line with
+  // the News/Economic Calendar tabs; only shown while the calendar tab is active.
+  const [showSettings, setShowSettings] = useState(false);
+  const settingsBtnRef = useRef<HTMLButtonElement>(null);
+  const settingsPopoverRef = useRef<HTMLDivElement>(null);
+  const [settingsPos, setSettingsPos] = useState<{ top: number; left: number } | null>(null);
+
+  useEffect(() => { setShowSettings(false); }, [tab]);
+
+  useEffect(() => {
+    if (!showSettings) return;
+    const close = (e: MouseEvent) => {
+      const target = e.target as Node;
+      const insideButton  = settingsBtnRef.current?.contains(target);
+      const insidePopover = settingsPopoverRef.current?.contains(target);
+      if (!insideButton && !insidePopover) setShowSettings(false);
+    };
+    document.addEventListener("mousedown", close);
+    return () => document.removeEventListener("mousedown", close);
+  }, [showSettings]);
+
+  return (
+    <div style={{
+      display: "flex", flexDirection: "column", height: 338, marginTop: 14,
+      borderRadius: 12, background: "var(--bg-panel)", border: "1px solid var(--border-medium)",
+      overflow: "hidden",
+    }}>
+      {/* Tab strip — integrated header of the panel, not a separate floating row */}
+      <div style={{ display: "flex", alignItems: "center", gap: 4, flexShrink: 0, padding: "6px 8px 0" }}>
+        {(["news", "calendar"] as const).map(t => {
+          const active = tab === t;
+          return (
+            <button key={t} onClick={() => setTab(t)} style={{
+              fontSize: 9, fontWeight: 700, padding: "6px 10px",
+              textTransform: "uppercase", letterSpacing: "0.08em",
+              background: "transparent", border: "none",
+              borderBottom: active ? "2px solid var(--accent-text)" : "2px solid transparent",
+              color: active ? "var(--accent-text)" : "var(--text-muted)",
+              cursor: "pointer", marginBottom: -1,
+            }}>
+              {t === "news" ? "News" : "Economic Calendar"}
+            </button>
+          );
+        })}
+        {tab === "calendar" && (
+          <button
+            ref={settingsBtnRef}
+            onClick={() => {
+              const rect = settingsBtnRef.current?.getBoundingClientRect();
+              if (rect) setSettingsPos({ top: rect.bottom + 6, left: rect.right - 200 });
+              setShowSettings(v => !v);
+            }}
+            title="Economic calendar settings"
+            style={{
+              display: "flex", alignItems: "center", justifyContent: "center",
+              width: 22, height: 22, padding: 0, marginLeft: "auto", marginBottom: 4,
+              background: showSettings ? "var(--accent-dim)" : "transparent",
+              border:     showSettings ? "1px solid var(--accent-border)" : "1px solid transparent",
+              borderRadius: 6, color: showSettings ? "var(--accent-text)" : "var(--text-muted)", cursor: "pointer",
+            }}
+          >
+            <Settings size={13} />
+          </button>
+        )}
+      </div>
+      {showSettings && settingsPos && createPortal(
+        <div ref={settingsPopoverRef} style={{
+          position: "fixed", top: settingsPos.top, left: settingsPos.left, zIndex: 1000,
+          background: "var(--bg-panel)", border: "1px solid var(--border-medium)",
+          borderRadius: 10, padding: "10px 12px", width: 200,
+          boxShadow: "0 8px 24px rgba(0,0,0,0.45)",
+        }}>
+          <div style={{ fontSize: 9, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.1em",
+            color: "var(--text-muted)", marginBottom: 8 }}>
+            News Impact Filter
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            {CALENDAR_IMPACTS.map(imp => {
+              const on = impactFilter.has(imp);
+              const color = IMPACT_COLORS[imp];
+              return (
+                <button key={imp} onClick={() => toggleImpact(imp)} style={{
+                  display: "flex", alignItems: "center", gap: 8, width: "100%",
+                  background: "none", border: "none", padding: "4px 2px", cursor: "pointer", textAlign: "left",
+                }}>
+                  <span style={{
+                    width: 14, height: 14, borderRadius: 3, flexShrink: 0,
+                    border: `2px solid ${color}`, background: on ? color : "transparent",
+                  }} />
+                  <span style={{ fontSize: 11, fontWeight: 600, color: on ? "var(--text-primary)" : "var(--text-secondary)" }}>
+                    {imp} Impact
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </div>,
+        document.body
+      )}
+      <div style={{ flex: 1, minHeight: 0, borderTop: "1px solid var(--border-medium)" }}>
+        {tab === "news"
+          ? <ForexNewsPanel news={news} loading={newsLoading} pair={pair} />
+          : <EconomicCalendarPanel events={calendarEvents} loading={calendarLoading} impactFilter={impactFilter} />}
+      </div>
+    </div>
+  );
+}
+
 function ForexNewsPanel({ news, loading, pair }: { news: NewsArticle[]; loading: boolean; pair: string }) {
   return (
-    <div style={{ display: "flex", flexDirection: "column", height: 338, marginTop: 14 }}>
-      <div style={{
-        flex: 1, overflowY: "auto", borderRadius: 12,
-        background: "var(--bg-panel)", border: "1px solid var(--border-medium)",
-        padding: "4px 0",
-      }}>
+    <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
+      <div style={{ flex: 1, overflowY: "auto", padding: "4px 0" }}>
         {news.length === 0 && !loading && (
           <div style={{ padding: "20px 12px", fontSize: 11, color: "var(--text-muted)", textAlign: "center", lineHeight: 1.5 }}>
             No news loaded.<br />Check network access.
@@ -9793,7 +10052,10 @@ function ForexNewsPanel({ news, loading, pair }: { news: NewsArticle[]; loading:
           </button>
         ))}
       </div>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 8, marginTop: 5 }}>
+      <div style={{
+        display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 8,
+        padding: "5px 10px", borderTop: "1px solid var(--border-light)", flexShrink: 0,
+      }}>
         {loading && (
           <span style={{ fontSize: 9, color: "var(--text-muted)" }}>Updating…</span>
         )}
@@ -9865,6 +10127,8 @@ export function AnalyticsV3() {
   const seenStatuses = useRef<Record<string, string>>({});
   const [newsItems, setNewsItems]     = useState<NewsArticle[]>([]);
   const [newsLoading, setNewsLoading] = useState(false);
+  const [calendarEvents, setCalendarEvents]   = useState<EconomicEvent[]>([]);
+  const [calendarLoading, setCalendarLoading] = useState(false);
   const [livePrice, setLivePrice]     = useState<number | null>(null);
   const [priceError, setPriceError]   = useState<string | null>(null);
 
@@ -9897,6 +10161,22 @@ export function AnalyticsV3() {
     };
     load();
     const id = setInterval(load, 60_000);
+    return () => clearInterval(id);
+  }, []);
+
+  // Economic calendar — fetch on mount then every 5 min. Slower cadence than
+  // news: the unofficial feed rate-limits, and scheduled events don't need
+  // second-by-second freshness the way headlines do.
+  useEffect(() => {
+    const load = () => {
+      setCalendarLoading(true);
+      invoke<EconomicEvent[]>("get_economic_calendar")
+        .then(items => setCalendarEvents(items))
+        .catch(() => {})
+        .finally(() => setCalendarLoading(false));
+    };
+    load();
+    const id = setInterval(load, 5 * 60_000);
     return () => clearInterval(id);
   }, []);
 
@@ -11056,7 +11336,15 @@ export function AnalyticsV3() {
 
       {/* ── Top bar: Pair Selector + Timeframe + Data date ─────────── */}
       <div className="flex items-center gap-3 shrink-0" style={{ height: "40px" }}>
-        <PairSelector value={selectedPair} onPairChange={(pair) => setSelectedPair(pair)} />
+        {/* flex-1/min-w-0 keeps the (potentially expanded) pair selector from
+            growing over the clock or the app's fixed top-right fullscreen button */}
+        <div className="flex-1 min-w-0 h-full">
+          <PairSelector value={selectedPair} onPairChange={(pair) => setSelectedPair(pair)} />
+        </div>
+        {/* marginRight clears the app-level fixed fullscreen toggle (top:8/right:8, 26px) */}
+        <div className="h-full" style={{ marginRight: 30 }}>
+          <AnalyticsClock />
+        </div>
       </div>
 
       {/* ── Panels ────────────────────────────────────────────────── */}
@@ -11238,7 +11526,10 @@ export function AnalyticsV3() {
                     <div style={{ height: 1, background: "var(--border-medium)", marginTop: 14 }} />
                   </>
                 )}
-                <ForexNewsPanel news={newsItems} loading={newsLoading} pair={selectedPair} />
+                <NewsAndCalendarPanel
+                  news={newsItems} newsLoading={newsLoading} pair={selectedPair}
+                  calendarEvents={calendarEvents} calendarLoading={calendarLoading}
+                />
               </div>
               )}
             </div>
