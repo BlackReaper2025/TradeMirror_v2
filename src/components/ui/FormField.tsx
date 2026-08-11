@@ -12,7 +12,7 @@ interface FormFieldProps {
 export function FormField({ label, hint, required, children, className }: FormFieldProps) {
   return (
     <div className={className}>
-      <label className="block mb-1.5">
+      <label className="block mb-1">
         <span
           className="text-[11px] font-semibold uppercase tracking-widest"
           style={{ color: "var(--text-secondary)" }}
@@ -37,7 +37,7 @@ export function FormField({ label, hint, required, children, className }: FormFi
 // ─── Shared input styles ──────────────────────────────────────────────────────
 
 export const inputClass =
-  "w-full px-3 py-2 rounded-lg text-[13px] transition-colors outline-none";
+  "w-full px-3 py-1.5 rounded-lg text-[13px] transition-colors outline-none";
 
 export const inputStyle = {
   background: "var(--bg-panel-alt)",

@@ -1,5 +1,5 @@
 // ─── Typed query functions ────────────────────────────────────────────────────
-import { eq, desc, and, gte, lte, lt, sql, type SQL } from "drizzle-orm";
+import { eq, desc, and, or, gte, lte, lt, isNull, sql, type SQL } from "drizzle-orm";
 import { getDb } from "./index";
 import {
   accounts,
@@ -252,8 +252,21 @@ export async function getTradesByDate(accountId: string, dateStr: string): Promi
     .where(
       and(
         eq(trades.accountId, accountId),
-        gte(trades.closedAt, dateStr + "T00:00:00"),
-        lte(trades.closedAt, dateStr + "T23:59:59")
+        or(
+          // Closed that day (existing behavior)
+          and(
+            gte(trades.closedAt, dateStr + "T00:00:00"),
+            lte(trades.closedAt, dateStr + "T23:59:59")
+          ),
+          // Still open, opened that day — no closedAt to filter on, so an
+          // open position would otherwise vanish from the day it was
+          // logged the moment closedAt is cleared to mark it open.
+          and(
+            isNull(trades.closedAt),
+            gte(trades.openedAt, dateStr + "T00:00:00"),
+            lte(trades.openedAt, dateStr + "T23:59:59")
+          )
+        )
       )
     )
     .orderBy(desc(trades.closedAt));

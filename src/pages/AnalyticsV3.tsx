@@ -42,6 +42,7 @@ import {
 } from "lightweight-charts";
 import type { IChartApi, UTCTimestamp } from "lightweight-charts";
 const ALERTS_JSON_PATH = "D:\\Dev\\TradeMirror_v2\\TradeMirror\\TradeMirror_Alert_Test\\alerts.json";
+const ECONOMIC_CALENDAR_CACHE_PATH = "D:\\Dev\\TradeMirror_v2\\TradeMirror\\TradeMirror_Alert_Test\\economic_calendar_cache.json";
 
 // ─── V3 backend candle type (Rust snake_case serialization) ──────────────────
 interface RawCandleV3 {
@@ -552,7 +553,7 @@ function CandleShape({ x, width, payload, background, yDomain }: any) {
 
 // ─── Indicator helpers ─────────────────────────────────────────────────────────
 
-type IndKey = "bb" | "ichi" | "ema9" | "ema20" | "ema50" | "ema200" | "reversal" | "session8am";
+type IndKey = "bb" | "ichi" | "ema9" | "ema20" | "ema50" | "ema200" | "reversal" | "session8am" | "pivots";
 
 const IND_DEFS: { key: IndKey; label: string; color: string }[] = [
   { key: "bb",    label: "BB(20,2)", color: "#64b5f6" },
@@ -1091,8 +1092,10 @@ class ReversalMarkerRenderer {
         ctx.closePath();
         ctx.fill();
 
-        ctx.fillStyle = "#eab308";
-        ctx.fillText(m.text, x + arrowR + 4 * hr, y);
+        if (this._p._showLabels) {
+          ctx.fillStyle = "#eab308";
+          ctx.fillText(m.text, x + arrowR + 4 * hr, y);
+        }
       }
     });
   }
@@ -1108,6 +1111,7 @@ class ReversalMarkerPrimitive {
   _chart: any = null;
   _series: any = null;
   _markers: ReversalMarkerData[];
+  _showLabels: boolean = true;
   _views: ReversalMarkerPaneView[] = [];
   constructor(markers: ReversalMarkerData[]) { this._markers = markers; }
   attached({ chart, series }: any) { this._chart = chart; this._series = series; this._views = [new ReversalMarkerPaneView(this)]; }
@@ -1254,6 +1258,52 @@ function computeMarketSessionBoxes(
     }
   }
   return boxes;
+}
+
+// Pivot Points — classic formula from the prior completed period's H/L/C,
+// applied to the current (most recent) period only, matching what the
+// Pivot Points panel below the chart already shows (not a full stepped
+// history — that's both far more visual clutter and far more boxes than
+// this reuses TimeRangeBoxPrimitive well for).
+const PIVOT_COLOR = "#f59e0b";
+
+// Candle color schemes — "default" is this app's own blue/purple up/down
+// convention (used elsewhere for price/change coloring too); "tradingview"
+// is the classic green/red TradingView ships with by default.
+const CANDLE_COLOR_SCHEMES = {
+  default:     { up: "#60a5fa", down: "#a78bfa" },
+  tradingview: { up: "#22c55e", down: "#ef4444" },
+} as const;
+const PIVOT_LEVEL_KEYS = ["r3", "r2", "r1", "pp", "s1", "s2", "s3"] as const;
+
+function computePivotLevels(high: number, low: number, close: number) {
+  const pp = (high + low + close) / 3;
+  return {
+    pp,
+    r1: 2 * pp - low,  r2: pp + (high - low),      r3: high + 2 * (pp - low),
+    s1: 2 * pp - high, s2: pp - (high - low),       s3: low - 2 * (high - pp),
+  };
+}
+
+// Extends the line this many multiples of the period's own duration past
+// the start of the current bar, so it reads as a forward-looking reference
+// level rather than stopping dead at the latest candle.
+const PIVOT_FORWARD_PERIODS = 20;
+
+function computeCurrentPivotBoxes(candles: RawCandleTf[]): TimeRangeBox[] {
+  if (candles.length < 2) return [];
+  const prev = candles[candles.length - 2];
+  const cur  = candles[candles.length - 1];
+  const prevTs = Math.floor(new Date(prev.timestamp).getTime() / 1000);
+  const curTs  = Math.floor(new Date(cur.timestamp).getTime() / 1000);
+  const periodDur = Math.max(1, curTs - prevTs);
+  const startTime = curTs as UTCTimestamp;
+  const endTime = (curTs + periodDur * PIVOT_FORWARD_PERIODS) as UTCTimestamp;
+  const levels = computePivotLevels(prev.high, prev.low, prev.close);
+  return PIVOT_LEVEL_KEYS.map(key => ({
+    low: levels[key], high: levels[key], startTime, endTime,
+    fill: "transparent", stroke: PIVOT_COLOR, label: key.toUpperCase(),
+  }));
 }
 
 // Auto trendline overlay — diagonal support/resistance lines connecting the
@@ -1418,11 +1468,29 @@ class TrendlinePrimitive {
 
 // ─── Price history chart ────────────────────────────────────────────────────────
 
-function PriceHistoryChart({ pair, chartTf, setChartTf, livePrice, expandWidth, expandHeight, allPanelsCollapsed, onToggleAllPanels }: { rows: SheetRow[]; pair: string; chartTf: "1W" | "1D" | "4H" | "1H" | "15M" | "5M" | "1M"; setChartTf: (tf: "1W" | "1D" | "4H" | "1H" | "15M" | "5M" | "1M") => void; livePrice: number | null; expandWidth: boolean; expandHeight: boolean; allPanelsCollapsed: boolean; onToggleAllPanels: () => void }) {
+function PriceHistoryChart({ rows, pair, chartTf, setChartTf, livePrice, expandWidth, expandHeight, heightBoost, allPanelsCollapsed, onToggleAllPanels, rightOfChartCollapsed, onHeightChange }: { rows: SheetRow[]; pair: string; chartTf: "1W" | "1D" | "4H" | "1H" | "15M" | "5M" | "1M"; setChartTf: (tf: "1W" | "1D" | "4H" | "1H" | "15M" | "5M" | "1M") => void; livePrice: number | null; expandWidth: boolean; expandHeight: boolean; heightBoost: number; allPanelsCollapsed: boolean; onToggleAllPanels: () => void; rightOfChartCollapsed: boolean; onHeightChange: (h: number) => void }) {
   const [viewMode,   setViewMode]   = useState<"candles" | "line">("candles");
   const [tfRows,     setTfRows]     = useState<RawCandleTf[]>([]);
   const [tfLoading,  setTfLoading]  = useState(false);
   const [activeInds, setActiveInds] = useState<Set<IndKey>>(new Set());
+
+  // Open positions on the currently viewed instrument, from the Trade Log —
+  // an "open" trade is one with no closedAt yet. Plotted as full-width
+  // entry/SL/TP price lines, same mechanism as the live last-price line.
+  const [openTrades, setOpenTrades] = useState<TradeWithJournal[]>([]);
+
+  // Candle color scheme — "default" is this app's existing blue/purple
+  // up/down scheme; "tradingview" is the classic green/red TradingView
+  // ships with out of the box. Read via a ref inside createSeries (which
+  // can otherwise hold a stale closure across renders) so switching the
+  // view mode back to "candles" later still honors the current choice.
+  const [candleColorScheme, setCandleColorScheme] = useState<"default" | "tradingview">("tradingview");
+  const candleColorSchemeRef = useRef(candleColorScheme);
+  useEffect(() => { candleColorSchemeRef.current = candleColorScheme; }, [candleColorScheme]);
+  const [showCandleSettings, setShowCandleSettings] = useState(false);
+  const [candleSettingsPos, setCandleSettingsPos] = useState<{ top: number; left: number } | null>(null);
+  const viewModeBtnRef = useRef<HTMLButtonElement>(null);
+  const candleSettingsPopoverRef = useRef<HTMLDivElement>(null);
 
   // Supply/demand zone toggles — Daily on by default, 4H/1H opt-in
   const [showDailyZones, setShowDailyZones] = useState(true);
@@ -1432,20 +1500,38 @@ function PriceHistoryChart({ pair, chartTf, setChartTf, livePrice, expandWidth, 
   const [h4ZoneCandles,    setH4ZoneCandles]    = useState<RawCandleTf[]>([]);
   const [h1ZoneCandles,    setH1ZoneCandles]    = useState<RawCandleTf[]>([]);
 
-  // Auto trendline toggles — Weekly on by default, Daily/4H/1H off
+  // Auto trendline toggles — Weekly on by default, Daily/4H/1H/15M off
   const [showWeeklyTrend, setShowWeeklyTrend] = useState(true);
   const [showDailyTrend,  setShowDailyTrend]  = useState(false);
   const [show4HTrend,     setShow4HTrend]     = useState(false);
   const [show1HTrend,     setShow1HTrend]     = useState(false);
+  const [show15MTrend,    setShow15MTrend]    = useState(false);
   const [weeklyTrendCandles, setWeeklyTrendCandles] = useState<RawCandleTf[]>([]);
   const [dailyTrendCandles,  setDailyTrendCandles]  = useState<RawCandleTf[]>([]);
   const [h4TrendCandles,     setH4TrendCandles]     = useState<RawCandleTf[]>([]);
   const [h1TrendCandles,     setH1TrendCandles]     = useState<RawCandleTf[]>([]);
+  const [m15TrendCandles,    setM15TrendCandles]    = useState<RawCandleTf[]>([]);
+
+  // Pivot Points toggles — master on/off lives on activeInds ("pivots"),
+  // same as Reversal/8AM Box; these four control which timeframe(s) render
+  // once the indicator itself is active. Daily on by default, rest opt-in.
+  const [showPivotWeekly, setShowPivotWeekly] = useState(false);
+  const [showPivotDaily,  setShowPivotDaily]  = useState(true);
+  const [showPivot4H,     setShowPivot4H]     = useState(false);
+  const [showPivot1H,     setShowPivot1H]     = useState(false);
+  const [pivotWeeklyCandles, setPivotWeeklyCandles] = useState<RawCandleTf[]>([]);
+  const [pivotDailyCandles,  setPivotDailyCandles]  = useState<RawCandleTf[]>([]);
+  const [pivot4HCandles,     setPivot4HCandles]     = useState<RawCandleTf[]>([]);
+  const [pivot1HCandles,     setPivot1HCandles]     = useState<RawCandleTf[]>([]);
+  const [showPivotSettings, setShowPivotSettings] = useState(false);
+  const [pivotSettingsPos, setPivotSettingsPos] = useState<{ top: number; left: number } | null>(null);
+  const pivotBtnRef = useRef<HTMLButtonElement>(null);
+  const pivotSettingsPopoverRef = useRef<HTMLDivElement>(null);
 
   // Trendline count per timeframe — how many support + resistance rays to
   // draw for each, configurable from the Lines settings panel.
-  const [trendCounts, setTrendCounts] = useState<{ W: number; D: number; H4: number; H1: number }>({
-    W: 1, D: 1, H4: 1, H1: 1,
+  const [trendCounts, setTrendCounts] = useState<{ W: number; D: number; H4: number; H1: number; M15: number }>({
+    W: 1, D: 1, H4: 1, H1: 1, M15: 1,
   });
   const [showTrendSettings, setShowTrendSettings] = useState(false);
   const [trendSettingsPos, setTrendSettingsPos] = useState<{ top: number; left: number } | null>(null);
@@ -1462,6 +1548,16 @@ function PriceHistoryChart({ pair, chartTf, setChartTf, livePrice, expandWidth, 
 
   // Chart + toolbar screenshot → save to a trade's Entry/Exit/Additional slot
   const captureRef = useRef<HTMLDivElement>(null);
+
+  // Reports this component's actual rendered height (toolbar + canvas) up to
+  // the parent, so the news/calendar panel beside it can be sized to
+  // bottom-align with the chart regardless of chartTf/heightBoost/expand mode.
+  useEffect(() => {
+    if (!captureRef.current) return;
+    const ro = new ResizeObserver(([entry]) => onHeightChange(entry.contentRect.height));
+    ro.observe(captureRef.current);
+    return () => ro.disconnect();
+  }, [onHeightChange]);
   const snapshotBtnRef = useRef<HTMLButtonElement>(null);
   const snapshotPopoverRef = useRef<HTMLDivElement>(null);
   const [showSnapshotPicker, setShowSnapshotPicker] = useState(false);
@@ -1487,6 +1583,9 @@ function PriceHistoryChart({ pair, chartTf, setChartTf, livePrice, expandWidth, 
   // its bullish and bearish variant) — expanded to raw pattern names for
   // computeReversalFlags via the mirroring effect below.
   const [reversalPatternGroups, setReversalPatternGroups] = useState<Set<string>>(() => new Set(getReversalSettings(DEFAULT_REVERSAL_GROUPS).patternGroups));
+  // Label text on/off — the red/green arrows always stay, only the
+  // pattern-name text beside them is hidden.
+  const [showReversalLabels, setShowReversalLabels] = useState(() => getReversalSettings(DEFAULT_REVERSAL_GROUPS).showLabels);
   const reversalZoneFilterRef = useRef(false);
   const reversalEightAmBoxFilterRef = useRef(false);
   const reversalTrendlineFilterRef = useRef(false);
@@ -1501,13 +1600,23 @@ function PriceHistoryChart({ pair, chartTf, setChartTf, livePrice, expandWidth, 
       eightAmBoxFilter: reversalEightAmBoxFilter,
       trendlineFilter: reversalTrendlineFilter,
       patternGroups: [...reversalPatternGroups],
+      showLabels: showReversalLabels,
     });
-  }, [reversalZoneFilter, reversalEightAmBoxFilter, reversalTrendlineFilter, reversalPatternGroups]);
+  }, [reversalZoneFilter, reversalEightAmBoxFilter, reversalTrendlineFilter, reversalPatternGroups, showReversalLabels]);
+  // Label visibility doesn't change which candles are flagged as reversals
+  // (unlike the filters above, which do and go through the heavier
+  // applyData/setData path) — just push the flag onto the already-attached
+  // primitive and force a repaint.
+  useEffect(() => {
+    if (reversalMarkerPrimRef.current) reversalMarkerPrimRef.current._showLabels = showReversalLabels;
+    chartRef.current?.applyOptions({});
+  }, [showReversalLabels]);
 
   const containerRef  = useRef<HTMLDivElement>(null);
   const chartRef      = useRef<IChartApi | null>(null);
   const seriesRef     = useRef<any>(null);
   const priceLineRef  = useRef<any>(null);
+  const openTradePriceLinesRef = useRef<any[]>([]);
   const indSeriesRef  = useRef<Partial<Record<IndKey, any[]>>>({});
   const tfRowsRef     = useRef<RawCandleTf[]>([]);
   const viewModeRef   = useRef(viewMode);
@@ -1521,6 +1630,7 @@ function PriceHistoryChart({ pair, chartTf, setChartTf, livePrice, expandWidth, 
   const marketSessionPrimRef  = useRef<TimeRangeBoxPrimitive | null>(null);
   const marketSessionBoxesRef = useRef<TimeRangeBox[]>([]);
   const reversalMarkerPrimRef = useRef<ReversalMarkerPrimitive | null>(null);
+  const pivotPrimRef = useRef<TimeRangeBoxPrimitive | null>(null);
   // Whether the next tfRows-driven applyData call should reset the visible
   // range/autoscale. True only for a genuine new instrument/timeframe load;
   // false for the background live-candle poll below, so the forming bar's
@@ -1693,6 +1803,14 @@ function PriceHistoryChart({ pair, chartTf, setChartTf, livePrice, expandWidth, 
       .catch(() => setH1TrendCandles([]));
   }, [show1HTrend, pair]);
 
+  // 15M trendline candles — fetched only while the 15M trendline toggle is on
+  useEffect(() => {
+    if (!show15MTrend) { setM15TrendCandles([]); return; }
+    invoke<RawCandleTf[]>("get_live_candles", { pair, tf: "15M" })
+      .then(candles => setM15TrendCandles(candles))
+      .catch(() => setM15TrendCandles([]));
+  }, [show15MTrend, pair]);
+
   // Recompute trendline segments + repaint the primitive whenever inputs change
   useEffect(() => {
     let lines: TrendlineSegment[] = [];
@@ -1700,11 +1818,80 @@ function PriceHistoryChart({ pair, chartTf, setChartTf, livePrice, expandWidth, 
     if (showDailyTrend)  lines = lines.concat(computeAutoTrendlines(dailyTrendCandles,  2, trendCounts.D));
     if (show4HTrend)     lines = lines.concat(computeAutoTrendlines(h4TrendCandles,     2, trendCounts.H4));
     if (show1HTrend)     lines = lines.concat(computeAutoTrendlines(h1TrendCandles,     2, trendCounts.H1));
+    if (show15MTrend)    lines = lines.concat(computeAutoTrendlines(m15TrendCandles,    2, trendCounts.M15));
     trendLinesRef.current = lines;
     if (trendPrimRef.current) trendPrimRef.current._lines = lines;
     chartRef.current?.applyOptions({});
-  }, [showWeeklyTrend, showDailyTrend, show4HTrend, show1HTrend,
-      weeklyTrendCandles, dailyTrendCandles, h4TrendCandles, h1TrendCandles, trendCounts]);
+  }, [showWeeklyTrend, showDailyTrend, show4HTrend, show1HTrend, show15MTrend,
+      weeklyTrendCandles, dailyTrendCandles, h4TrendCandles, h1TrendCandles, m15TrendCandles, trendCounts]);
+
+  // Pivot Points candles — one independent fetch per timeframe toggle,
+  // same pattern as the trendline candles above.
+  useEffect(() => {
+    if (!showPivotWeekly) { setPivotWeeklyCandles([]); return; }
+    invoke<RawCandleTf[]>("get_live_candles", { pair, tf: "1W" })
+      .then(candles => setPivotWeeklyCandles(candles))
+      .catch(() => setPivotWeeklyCandles([]));
+  }, [showPivotWeekly, pair]);
+
+  useEffect(() => {
+    if (!showPivotDaily) { setPivotDailyCandles([]); return; }
+    invoke<RawCandleTf[]>("get_live_candles", { pair, tf: "1D" })
+      .then(candles => setPivotDailyCandles(candles))
+      .catch(() => setPivotDailyCandles([]));
+  }, [showPivotDaily, pair]);
+
+  useEffect(() => {
+    if (!showPivot4H) { setPivot4HCandles([]); return; }
+    invoke<RawCandleTf[]>("get_live_candles", { pair, tf: "4H" })
+      .then(candles => setPivot4HCandles(candles))
+      .catch(() => setPivot4HCandles([]));
+  }, [showPivot4H, pair]);
+
+  useEffect(() => {
+    if (!showPivot1H) { setPivot1HCandles([]); return; }
+    invoke<RawCandleTf[]>("get_live_candles", { pair, tf: "1H" })
+      .then(candles => setPivot1HCandles(candles))
+      .catch(() => setPivot1HCandles([]));
+  }, [showPivot1H, pair]);
+
+  // Recompute pivot boxes + repaint whenever the master toggle, a
+  // per-timeframe toggle, or the underlying candles change.
+  useEffect(() => {
+    const pivotsActive = activeInds.has("pivots");
+    let boxes: TimeRangeBox[] = [];
+    if (pivotsActive) {
+      if (showPivotWeekly) boxes = boxes.concat(computeCurrentPivotBoxes(pivotWeeklyCandles));
+      if (showPivotDaily)  boxes = boxes.concat(computeCurrentPivotBoxes(pivotDailyCandles));
+      if (showPivot4H)     boxes = boxes.concat(computeCurrentPivotBoxes(pivot4HCandles));
+      if (showPivot1H)     boxes = boxes.concat(computeCurrentPivotBoxes(pivot1HCandles));
+    }
+    if (pivotPrimRef.current) pivotPrimRef.current._boxes = boxes;
+    chartRef.current?.applyOptions({});
+  }, [activeInds, showPivotWeekly, showPivotDaily, showPivot4H, showPivot1H,
+      pivotWeeklyCandles, pivotDailyCandles, pivot4HCandles, pivot1HCandles]);
+
+  // Open positions for the currently viewed instrument — polled every 30s
+  // (trades are logged manually, not high-frequency, so this is just to
+  // pick up a newly-logged or closed trade without a full page reload).
+  // instrument is stored WITH the "/" (e.g. "NZD/CHF"), matching pair as-is.
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const settings = await getSettings();
+        const accountId = settings?.selectedAccountId ?? "acc-1";
+        const trades = await getAllTradesWithJournal(accountId);
+        const open = trades.filter(t => t.closedAt == null && t.instrument.toUpperCase() === pair.toUpperCase());
+        if (!cancelled) setOpenTrades(open);
+      } catch (err) {
+        console.error("[PriceHistoryChart] failed to load open trades:", err);
+      }
+    };
+    load();
+    const id = setInterval(load, 30_000);
+    return () => { cancelled = true; clearInterval(id); };
+  }, [pair]);
 
   // Recompute zone boxes + repaint the primitive whenever inputs change.
   // Ties zones to the live price ticker: a zone that's still "fresh" per
@@ -1809,7 +1996,7 @@ function PriceHistoryChart({ pair, chartTf, setChartTf, livePrice, expandWidth, 
   }, []);
 
   const addIndSeries = useCallback((key: IndKey, candles: RawCandleTf[]) => {
-    if (key === "reversal" || key === "session8am") return; // driven by their own effects, not a line series
+    if (key === "reversal" || key === "session8am" || key === "pivots") return; // driven by their own effects, not a line series
     const chart = chartRef.current;
     if (!chart || candles.length === 0) return;
     removeIndSeries(key);
@@ -1997,8 +2184,8 @@ function PriceHistoryChart({ pair, chartTf, setChartTf, livePrice, expandWidth, 
   }, [showDailyZones, show4HZones, show1HZones, dailyZonesAll, h4ZonesAll, h1ZonesAll,
       dailyZoneCandles, h4ZoneCandles, h1ZoneCandles, livePrice, activeInds, tfRows, applyData,
       showEightAmBox, eightAmBoxes,
-      showWeeklyTrend, showDailyTrend, show4HTrend, show1HTrend,
-      weeklyTrendCandles, dailyTrendCandles, h4TrendCandles, h1TrendCandles, trendCounts,
+      showWeeklyTrend, showDailyTrend, show4HTrend, show1HTrend, show15MTrend,
+      weeklyTrendCandles, dailyTrendCandles, h4TrendCandles, h1TrendCandles, m15TrendCandles, trendCounts,
       reversalZoneFilter, reversalEightAmBoxFilter, reversalTrendlineFilter, reversalPatternGroups, showTappedZone]);
 
   const toggleInd = useCallback((key: IndKey) => {
@@ -2011,12 +2198,13 @@ function PriceHistoryChart({ pair, chartTf, setChartTf, livePrice, expandWidth, 
   }, [addIndSeries, removeIndSeries, applyData]);
 
   const createSeries = useCallback((chart: IChartApi, mode: string) => {
-    if (seriesRef.current) { chart.removeSeries(seriesRef.current); seriesRef.current = null; priceLineRef.current = null; zonePrimRef.current = null; trendPrimRef.current = null; eightAmBoxPrimRef.current = null; marketSessionPrimRef.current = null; reversalMarkerPrimRef.current = null; }
+    if (seriesRef.current) { chart.removeSeries(seriesRef.current); seriesRef.current = null; priceLineRef.current = null; zonePrimRef.current = null; trendPrimRef.current = null; eightAmBoxPrimRef.current = null; marketSessionPrimRef.current = null; reversalMarkerPrimRef.current = null; pivotPrimRef.current = null; }
     if (mode === "candles") {
+      const { up, down } = CANDLE_COLOR_SCHEMES[candleColorSchemeRef.current];
       const s = chart.addSeries(CandlestickSeries, {
-        upColor: "#60a5fa", downColor: "#a78bfa",
-        borderUpColor: "#60a5fa", borderDownColor: "#a78bfa",
-        wickUpColor:   "#60a5fa", wickDownColor:   "#a78bfa",
+        upColor: up, downColor: down,
+        borderUpColor: up, borderDownColor: down,
+        wickUpColor:   up, wickDownColor:   down,
       });
       s.applyOptions({ priceFormat: { type: "price", precision: 5, minMove: 0.00001 } });
       seriesRef.current = s;
@@ -2043,11 +2231,29 @@ function PriceHistoryChart({ pair, chartTf, setChartTf, livePrice, expandWidth, 
     const reversalMarkerPrim = new ReversalMarkerPrimitive([]);
     (seriesRef.current as any).attachPrimitive(reversalMarkerPrim);
     reversalMarkerPrimRef.current = reversalMarkerPrim;
+    const pivotPrim = new TimeRangeBoxPrimitive([]);
+    (seriesRef.current as any).attachPrimitive(pivotPrim);
+    pivotPrimRef.current = pivotPrim;
     // False: this fires on mount (no data yet, so a no-op) and on viewMode
     // toggle (candles/line) — the series is recreated, but the user's
     // existing pan/zoom on this same instrument's data shouldn't reset.
     if (tfRowsRef.current.length > 0) applyData(tfRowsRef.current, mode, false);
   }, [applyData]);
+
+  // Live color-scheme swap for the already-attached candlestick series —
+  // no need to tear down/recreate the series (that would reset zoom/pan)
+  // just to change colors. createSeries (above) reads the same scheme via
+  // a ref for when the series gets recreated some other way (e.g. the
+  // candles/line view-mode toggle).
+  useEffect(() => {
+    if (!seriesRef.current || viewMode !== "candles") return;
+    const { up, down } = CANDLE_COLOR_SCHEMES[candleColorScheme];
+    seriesRef.current.applyOptions({
+      upColor: up, downColor: down,
+      borderUpColor: up, borderDownColor: down,
+      wickUpColor:   up, wickDownColor:   down,
+    });
+  }, [candleColorScheme, viewMode]);
 
   // Init chart once
   useEffect(() => {
@@ -2088,7 +2294,7 @@ function PriceHistoryChart({ pair, chartTf, setChartTf, livePrice, expandWidth, 
     ro.observe(containerRef.current);
     return () => {
       ro.disconnect(); chart.remove();
-      chartRef.current = null; seriesRef.current = null; indSeriesRef.current = {}; zonePrimRef.current = null; trendPrimRef.current = null; eightAmBoxPrimRef.current = null; marketSessionPrimRef.current = null;
+      chartRef.current = null; seriesRef.current = null; indSeriesRef.current = {}; zonePrimRef.current = null; trendPrimRef.current = null; eightAmBoxPrimRef.current = null; marketSessionPrimRef.current = null; openTradePriceLinesRef.current = [];
     };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -2097,6 +2303,41 @@ function PriceHistoryChart({ pair, chartTf, setChartTf, livePrice, expandWidth, 
     if (!chartRef.current) return;
     createSeries(chartRef.current, viewMode);
   }, [viewMode, createSeries]);
+
+  // Draw open-position entry/SL/TP lines — full-width price lines, same
+  // mechanism as the live last-price line, since an open position is still
+  // active now rather than bound to a historical time range. Runs after the
+  // viewMode series-recreation effect above so it always targets the
+  // current series, not one about to be torn down.
+  useEffect(() => {
+    const series = seriesRef.current;
+    if (!series) return;
+    for (const line of openTradePriceLinesRef.current) {
+      try { series.removePriceLine(line); } catch (_) {}
+    }
+    openTradePriceLinesRef.current = [];
+    for (const t of openTrades) {
+      const isLong = t.side === "long";
+      if (t.entryPrice != null) {
+        openTradePriceLinesRef.current.push(series.createPriceLine({
+          price: t.entryPrice, color: "#eab308", lineWidth: 2, lineStyle: LineStyle.Solid,
+          axisLabelVisible: true, title: isLong ? "LONG Entry" : "SHORT Entry",
+        }));
+      }
+      if (t.stopPrice != null) {
+        openTradePriceLinesRef.current.push(series.createPriceLine({
+          price: t.stopPrice, color: "#ef4444", lineWidth: 1, lineStyle: LineStyle.Dashed,
+          axisLabelVisible: true, title: "SL",
+        }));
+      }
+      if (t.targetPrice != null) {
+        openTradePriceLinesRef.current.push(series.createPriceLine({
+          price: t.targetPrice, color: "#22c55e", lineWidth: 1, lineStyle: LineStyle.Dashed,
+          axisLabelVisible: true, title: "TP",
+        }));
+      }
+    }
+  }, [openTrades, viewMode]);
 
   // Apply price data + refresh all active indicators when data arrives.
   // tfRows changes on the initial [chartTf, pair] load and on the 10s live
@@ -2159,6 +2400,30 @@ function PriceHistoryChart({ pair, chartTf, setChartTf, livePrice, expandWidth, 
     document.addEventListener("mousedown", close);
     return () => document.removeEventListener("mousedown", close);
   }, [showReversalSettings]);
+
+  useEffect(() => {
+    if (!showPivotSettings) return;
+    const close = (e: MouseEvent) => {
+      const target = e.target as Node;
+      const insideButton  = pivotBtnRef.current?.contains(target);
+      const insidePopover = pivotSettingsPopoverRef.current?.contains(target);
+      if (!insideButton && !insidePopover) setShowPivotSettings(false);
+    };
+    document.addEventListener("mousedown", close);
+    return () => document.removeEventListener("mousedown", close);
+  }, [showPivotSettings]);
+
+  useEffect(() => {
+    if (!showCandleSettings) return;
+    const close = (e: MouseEvent) => {
+      const target = e.target as Node;
+      const insideButton  = viewModeBtnRef.current?.contains(target);
+      const insidePopover = candleSettingsPopoverRef.current?.contains(target);
+      if (!insideButton && !insidePopover) setShowCandleSettings(false);
+    };
+    document.addEventListener("mousedown", close);
+    return () => document.removeEventListener("mousedown", close);
+  }, [showCandleSettings]);
 
   useEffect(() => {
     if (!showZoneSettings) return;
@@ -2249,6 +2514,48 @@ function PriceHistoryChart({ pair, chartTf, setChartTf, livePrice, expandWidth, 
   const activeIndDefsCount = IND_DEFS.filter((d) => activeInds.has(d.key)).length;
   const anyActive = activeIndDefsCount > 0;
 
+  // Mirrors the instrument/price header in the (now-collapsed) panel right
+  // of the chart, so identity + price stay visible in the toolbar.
+  const latestRow = rows[rows.length - 1];
+
+  // Snapshot — same relocate-when-expanded treatment as the master
+  // collapse button below; sits just to its left in the expanded spot.
+  const snapshotButton = (
+    <button
+      ref={snapshotBtnRef}
+      onClick={handleSnapshotClick}
+      title="Save a snapshot of the chart + toolbar to a trade"
+      style={{
+        display: "flex", alignItems: "center", justifyContent: "center",
+        width: 22, height: 22, padding: 0, flexShrink: 0,
+        background: showSnapshotPicker ? "var(--accent-dim)" : "var(--bg-panel-alt)",
+        border:     showSnapshotPicker ? "1px solid var(--accent-border)" : "1px solid var(--border-medium)",
+        borderRadius: 8, color: showSnapshotPicker ? "var(--accent-text)" : "var(--text-secondary)", cursor: "pointer",
+      }}
+    >
+      <Camera size={12} />
+    </button>
+  );
+
+  // Master collapse/expand — rendered in one of two spots depending on
+  // rightOfChartCollapsed: its usual place in the button cluster, or (once
+  // the chart is expanded and the instrument/price label appears in the
+  // toolbar) to the right of that label instead.
+  const masterCollapseButton = (
+    <button
+      onClick={onToggleAllPanels}
+      title={allPanelsCollapsed ? "Expand panels around chart" : "Collapse panels around chart"}
+      style={{
+        display: "flex", alignItems: "center", justifyContent: "center",
+        width: 22, height: 22, padding: 0, flexShrink: 0,
+        background: "var(--bg-panel-alt)", border: "1px solid var(--border-medium)",
+        borderRadius: 8, color: "var(--text-secondary)", cursor: "pointer",
+      }}
+    >
+      {allPanelsCollapsed ? <Maximize2 size={12} /> : <Minimize2 size={12} />}
+    </button>
+  );
+
   return (
     <div ref={captureRef} style={{
       // width is the flex-basis (flex-basis:auto defers to it); flexShrink
@@ -2260,8 +2567,8 @@ function PriceHistoryChart({ pair, chartTf, setChartTf, livePrice, expandWidth, 
       ...(expandHeight ? { display: "flex", flexDirection: "column", flex: "1 1 auto", minHeight: 0 } : {}),
     }}>
       {/* Toolbar: timeframes · Indicators button · view mode */}
-      <div style={{ display: "flex", alignItems: "center", marginBottom: 4, flexShrink: 0, overflowX: "auto" }}>
-        <div style={{ display: "flex", gap: 4, alignItems: "center", flexShrink: 0 }}>
+      <div style={{ display: "flex", alignItems: "center", marginBottom: 4, flexShrink: 0, overflowX: "auto", minHeight: 34 }}>
+        <div style={{ display: "flex", gap: 3, alignItems: "center", flexShrink: 0 }}>
           <span style={{
             fontSize: 9, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em",
             color: "var(--text-muted)", marginRight: 2, whiteSpace: "nowrap",
@@ -2270,7 +2577,7 @@ function PriceHistoryChart({ pair, chartTf, setChartTf, livePrice, expandWidth, 
           </span>
           {(["1W","1D","4H","1H","15M","5M","1M"] as const).map(tf => (
             <button key={tf} onClick={() => setChartTf(tf)} style={{
-              fontSize: 9, fontWeight: 700, padding: "4px 4px",
+              fontSize: 9, fontWeight: 700, padding: "4px 3px",
               textTransform: "uppercase", letterSpacing: "0.08em",
               background: chartTf === tf ? "var(--accent-dim)"    : "var(--bg-panel-alt)",
               border:     chartTf === tf ? "1px solid var(--accent-border)" : "1px solid var(--border-medium)",
@@ -2279,11 +2586,11 @@ function PriceHistoryChart({ pair, chartTf, setChartTf, livePrice, expandWidth, 
             }}>{tf}</button>
           ))}
         </div>
-        <div style={{ width: 1, height: 18, background: "var(--border-medium)", flexShrink: 0, margin: "0 8px" }} />
+        <div style={{ width: 1, height: 18, background: "var(--border-medium)", flexShrink: 0, margin: "0 6px" }} />
         {/* Zone + trendline toggles */}
         <div style={{ display: "flex", flexShrink: 0 }}>
-          <div style={{ display: "flex", gap: 8, alignItems: "center", flexShrink: 0 }}>
-            <div ref={zoneSettingsGroupRef} style={{ display: "flex", gap: 4, alignItems: "center", flexShrink: 0 }} data-zone-settings-panel>
+          <div style={{ display: "flex", gap: 6, alignItems: "center", flexShrink: 0 }}>
+            <div ref={zoneSettingsGroupRef} style={{ display: "flex", gap: 3, alignItems: "center", flexShrink: 0 }} data-zone-settings-panel>
               <span style={{
                 fontSize: 9, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em",
                 color: "var(--text-muted)", marginRight: 2, whiteSpace: "nowrap",
@@ -2305,7 +2612,7 @@ function PriceHistoryChart({ pair, chartTf, setChartTf, livePrice, expandWidth, 
                   }}
                   title="Click to toggle, double-click for settings"
                   style={{
-                    fontSize: 9, fontWeight: 700, padding: "4px 6px",
+                    fontSize: 9, fontWeight: 700, padding: "4px 5px",
                     textTransform: "uppercase", letterSpacing: "0.08em",
                     background: active ? "var(--accent-dim)"    : "var(--bg-panel-alt)",
                     border:     active ? "1px solid var(--accent-border)" : "1px solid var(--border-medium)",
@@ -2369,7 +2676,7 @@ function PriceHistoryChart({ pair, chartTf, setChartTf, livePrice, expandWidth, 
               )}
             </div>
             <div style={{ width: 1, height: 18, background: "var(--border-medium)", flexShrink: 0 }} />
-            <div ref={trendSettingsGroupRef} style={{ display: "flex", gap: 4, alignItems: "center", flexShrink: 0 }} data-trend-settings-panel>
+            <div ref={trendSettingsGroupRef} style={{ display: "flex", gap: 3, alignItems: "center", flexShrink: 0 }} data-trend-settings-panel>
               <span style={{
                 fontSize: 9, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em",
                 color: "var(--text-muted)", marginRight: 2, whiteSpace: "nowrap",
@@ -2381,6 +2688,7 @@ function PriceHistoryChart({ pair, chartTf, setChartTf, livePrice, expandWidth, 
                 ["D",  showDailyTrend,  setShowDailyTrend],
                 ["4H", show4HTrend,     setShow4HTrend],
                 ["1H", show1HTrend,     setShow1HTrend],
+                ["15M", show15MTrend,   setShow15MTrend],
               ] as const).map(([label, active, setter]) => (
                 <button
                   key={label}
@@ -2392,7 +2700,7 @@ function PriceHistoryChart({ pair, chartTf, setChartTf, livePrice, expandWidth, 
                   }}
                   title="Click to toggle, double-click for settings"
                   style={{
-                    fontSize: 9, fontWeight: 700, padding: "4px 6px",
+                    fontSize: 9, fontWeight: 700, padding: "4px 5px",
                     textTransform: "uppercase", letterSpacing: "0.08em",
                     background: active ? "rgba(59,130,246,0.16)" : "var(--bg-panel-alt)",
                     border:     active ? "1px solid #3b82f6" : "1px solid var(--border-medium)",
@@ -2412,10 +2720,11 @@ function PriceHistoryChart({ pair, chartTf, setChartTf, livePrice, expandWidth, 
                     Trendlines per timeframe
                   </div>
                   {([
-                    ["W",  "Weekly"] as const,
-                    ["D",  "Daily"]  as const,
-                    ["H4", "4H"]     as const,
-                    ["H1", "1H"]     as const,
+                    ["W",   "Weekly"] as const,
+                    ["D",   "Daily"]  as const,
+                    ["H4",  "4H"]     as const,
+                    ["H1",  "1H"]     as const,
+                    ["M15", "15M"]    as const,
                   ]).map(([key, label]) => (
                     <div key={key} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "4px 0" }}>
                       <span style={{ fontSize: 11, color: "var(--text-secondary)" }}>{label}</span>
@@ -2448,8 +2757,8 @@ function PriceHistoryChart({ pair, chartTf, setChartTf, livePrice, expandWidth, 
             </div>
           </div>
         </div>
-        <div style={{ width: 1, height: 18, background: "var(--border-medium)", flexShrink: 0, margin: "0 8px" }} />
-        <div style={{ display: "flex", gap: 6, alignItems: "center", flexShrink: 0 }}>
+        <div style={{ width: 1, height: 18, background: "var(--border-medium)", flexShrink: 0, margin: "0 6px" }} />
+        <div style={{ display: "flex", gap: 5, alignItems: "center", flexShrink: 0 }}>
           {/* Reversal Candles toggle — double-click for settings */}
           <button
             ref={reversalBtnRef}
@@ -2461,7 +2770,7 @@ function PriceHistoryChart({ pair, chartTf, setChartTf, livePrice, expandWidth, 
             }}
             title="Click to toggle, double-click for settings"
             style={{
-              fontSize: 9, fontWeight: 700, padding: "4px 6px",
+              fontSize: 9, fontWeight: 700, padding: "4px 5px",
               textTransform: "uppercase", letterSpacing: "0.08em",
               background: activeInds.has("reversal") ? "var(--accent-dim)"    : "var(--bg-panel-alt)",
               border:     activeInds.has("reversal") ? "1px solid var(--accent-border)" : "1px solid var(--border-medium)",
@@ -2553,6 +2862,23 @@ function PriceHistoryChart({ pair, chartTf, setChartTf, livePrice, expandWidth, 
                   );
                 })}
               </div>
+              <div style={{ height: 1, background: "var(--border-medium)", margin: "10px 0 8px" }} />
+              <button
+                onClick={() => setShowReversalLabels(v => !v)}
+                title="Arrows always stay — this only hides the pattern-name text beside them"
+                style={{
+                  display: "flex", alignItems: "center", gap: 8, width: "100%",
+                  background: "none", border: "none", padding: "4px 2px", cursor: "pointer", textAlign: "left",
+                }}
+              >
+                <span style={{
+                  width: 14, height: 14, borderRadius: 3, flexShrink: 0,
+                  border: "2px solid #eab308", background: showReversalLabels ? "#eab308" : "transparent",
+                }} />
+                <span style={{ fontSize: 11, fontWeight: 600, color: showReversalLabels ? "var(--text-primary)" : "var(--text-secondary)" }}>
+                  Show Labels
+                </span>
+              </button>
             </div>,
             document.body
           )}
@@ -2560,7 +2886,7 @@ function PriceHistoryChart({ pair, chartTf, setChartTf, livePrice, expandWidth, 
           <button
             onClick={() => toggleInd("session8am")}
             style={{
-              fontSize: 9, fontWeight: 700, padding: "4px 6px",
+              fontSize: 9, fontWeight: 700, padding: "4px 5px",
               textTransform: "uppercase", letterSpacing: "0.08em",
               background: activeInds.has("session8am") ? "var(--accent-dim)"    : "var(--bg-panel-alt)",
               border:     activeInds.has("session8am") ? "1px solid var(--accent-border)" : "1px solid var(--border-medium)",
@@ -2571,7 +2897,7 @@ function PriceHistoryChart({ pair, chartTf, setChartTf, livePrice, expandWidth, 
             8AM Box
           </button>
           {/* Sessions button — double-click for settings */}
-          <div style={{ position: "relative", display: "flex", gap: 4, alignItems: "center" }} data-sessions-panel>
+          <div style={{ position: "relative", display: "flex", gap: 3, alignItems: "center" }} data-sessions-panel>
             <button
               ref={sessionSettingsBtnRef}
               onClick={() => setShowSessions(v => !v)}
@@ -2582,7 +2908,7 @@ function PriceHistoryChart({ pair, chartTf, setChartTf, livePrice, expandWidth, 
               }}
               title="Click to toggle, double-click for settings"
               style={{
-                fontSize: 9, fontWeight: 700, padding: "4px 6px",
+                fontSize: 9, fontWeight: 700, padding: "4px 5px",
                 textTransform: "uppercase", letterSpacing: "0.08em",
                 background: showSessions ? "var(--accent-dim)"    : "var(--bg-panel-alt)",
                 border:     showSessions ? "1px solid var(--accent-border)" : "1px solid var(--border-medium)",
@@ -2650,10 +2976,66 @@ function PriceHistoryChart({ pair, chartTf, setChartTf, livePrice, expandWidth, 
               document.body
             )}
           </div>
+          {/* Pivots toggle — double-click for settings, same pattern as Reversal */}
+          <button
+            ref={pivotBtnRef}
+            onClick={() => toggleInd("pivots")}
+            onDoubleClick={() => {
+              const rect = pivotBtnRef.current?.getBoundingClientRect();
+              if (rect) setPivotSettingsPos({ top: rect.bottom + 6, left: rect.left });
+              setShowPivotSettings(v => !v);
+            }}
+            title="Click to toggle, double-click for settings"
+            style={{
+              fontSize: 9, fontWeight: 700, padding: "4px 5px",
+              textTransform: "uppercase", letterSpacing: "0.08em",
+              background: activeInds.has("pivots") ? "var(--accent-dim)"    : "var(--bg-panel-alt)",
+              border:     activeInds.has("pivots") ? "1px solid var(--accent-border)" : "1px solid var(--border-medium)",
+              color:      activeInds.has("pivots") ? "var(--accent-text)"   : "var(--text-secondary)",
+              borderRadius: 8, cursor: "pointer",
+            }}
+          >
+            Pivots
+          </button>
+          {showPivotSettings && pivotSettingsPos && createPortal(
+            <div ref={pivotSettingsPopoverRef} style={{
+              position: "fixed", top: pivotSettingsPos.top, left: pivotSettingsPos.left, zIndex: 1000,
+              background: "var(--bg-panel)", border: "1px solid var(--border-medium)",
+              borderRadius: 10, padding: "10px 12px", width: 160,
+              boxShadow: "0 8px 24px rgba(0,0,0,0.45)",
+            }}>
+              <div style={{ fontSize: 9, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.1em",
+                color: "var(--text-muted)", marginBottom: 8 }}>
+                Pivot Timeframes
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                {([
+                  ["Weekly", showPivotWeekly, setShowPivotWeekly],
+                  ["Daily",  showPivotDaily,  setShowPivotDaily],
+                  ["4H",     showPivot4H,     setShowPivot4H],
+                  ["1H",     showPivot1H,     setShowPivot1H],
+                ] as const).map(([label, on, setter]) => (
+                  <button key={label} onClick={() => setter(v => !v)} style={{
+                    display: "flex", alignItems: "center", gap: 8, width: "100%",
+                    background: "none", border: "none", padding: "4px 2px", cursor: "pointer", textAlign: "left",
+                  }}>
+                    <span style={{
+                      width: 14, height: 14, borderRadius: 3, flexShrink: 0,
+                      border: `2px solid ${PIVOT_COLOR}`, background: on ? PIVOT_COLOR : "transparent",
+                    }} />
+                    <span style={{ fontSize: 11, fontWeight: 600, color: on ? "var(--text-primary)" : "var(--text-secondary)" }}>
+                      {label}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </div>,
+            document.body
+          )}
           {/* Indicators button + dropdown — portaled + fixed-positioned (like the
               Reversal settings popover) so it floats over everything instead of
               being clipped by the toolbar's small scroll container. */}
-          <div style={{ position: "relative" }}>
+          <div style={{ position: "relative", display: "flex", alignItems: "center" }}>
             <button
               ref={indBtnRef}
               onClick={() => {
@@ -2662,7 +3044,7 @@ function PriceHistoryChart({ pair, chartTf, setChartTf, livePrice, expandWidth, 
                 setShowIndPanel(v => !v);
               }}
               style={{
-                fontSize: 9, fontWeight: 700, padding: "4px 6px",
+                fontSize: 9, fontWeight: 700, padding: "4px 5px",
                 textTransform: "uppercase", letterSpacing: "0.08em",
                 background: anyActive ? "var(--accent-dim)"    : "var(--bg-panel-alt)",
                 border:     anyActive ? "1px solid var(--accent-border)" : "1px solid var(--border-medium)",
@@ -2713,41 +3095,68 @@ function PriceHistoryChart({ pair, chartTf, setChartTf, livePrice, expandWidth, 
               document.body
             )}
           </div>
-          {/* View mode toggle */}
-          <button onClick={() => setViewMode(v => v === "candles" ? "line" : "candles")} style={{
-            fontSize: 9, fontWeight: 700, padding: "4px 6px",
-            textTransform: "uppercase", letterSpacing: "0.08em",
-            background: "var(--bg-panel-alt)", border: "1px solid var(--border-medium)",
-            borderRadius: 8, color: "var(--text-secondary)", cursor: "pointer",
-          }}>{viewMode}</button>
-          {/* Snapshot — captures chart + this toolbar, saves to a trade's Entry/Exit/Additional slot */}
+          {/* View mode toggle — double-click for candle color settings */}
           <button
-            ref={snapshotBtnRef}
-            onClick={handleSnapshotClick}
-            title="Save a snapshot of the chart + toolbar to a trade"
-            style={{
-              display: "flex", alignItems: "center", justifyContent: "center",
-              width: 22, height: 22, padding: 0,
-              background: showSnapshotPicker ? "var(--accent-dim)" : "var(--bg-panel-alt)",
-              border:     showSnapshotPicker ? "1px solid var(--accent-border)" : "1px solid var(--border-medium)",
-              borderRadius: 8, color: showSnapshotPicker ? "var(--accent-text)" : "var(--text-secondary)", cursor: "pointer",
+            ref={viewModeBtnRef}
+            onClick={() => setViewMode(v => v === "candles" ? "line" : "candles")}
+            onDoubleClick={() => {
+              const rect = viewModeBtnRef.current?.getBoundingClientRect();
+              if (rect) setCandleSettingsPos({ top: rect.bottom + 6, left: rect.left });
+              setShowCandleSettings(v => !v);
             }}
-          >
-            <Camera size={12} />
-          </button>
-          {/* Master collapse/expand — toggles the three panel dividers around the chart together */}
-          <button
-            onClick={onToggleAllPanels}
-            title={allPanelsCollapsed ? "Expand panels around chart" : "Collapse panels around chart"}
+            title="Click to toggle candles/line, double-click for settings"
             style={{
-              display: "flex", alignItems: "center", justifyContent: "center",
-              width: 22, height: 22, padding: 0,
+              fontSize: 9, fontWeight: 700, padding: "4px 5px",
+              textTransform: "uppercase", letterSpacing: "0.08em",
               background: "var(--bg-panel-alt)", border: "1px solid var(--border-medium)",
               borderRadius: 8, color: "var(--text-secondary)", cursor: "pointer",
             }}
-          >
-            {allPanelsCollapsed ? <Maximize2 size={12} /> : <Minimize2 size={12} />}
-          </button>
+          >{viewMode}</button>
+          {showCandleSettings && candleSettingsPos && createPortal(
+            <div ref={candleSettingsPopoverRef} style={{
+              position: "fixed", top: candleSettingsPos.top, left: candleSettingsPos.left, zIndex: 1000,
+              background: "var(--bg-panel)", border: "1px solid var(--border-medium)",
+              borderRadius: 10, padding: "10px 12px", width: 200,
+              boxShadow: "0 8px 24px rgba(0,0,0,0.45)",
+            }}>
+              <div style={{ fontSize: 9, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.1em",
+                color: "var(--text-muted)", marginBottom: 8 }}>
+                Candle Colors
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                {([
+                  ["default",     "Default (Blue / Purple)"],
+                  ["tradingview", "TradingView (Green / Red)"],
+                ] as const).map(([key, label]) => {
+                  const on = candleColorScheme === key;
+                  const { up, down } = CANDLE_COLOR_SCHEMES[key];
+                  return (
+                    <button key={key} onClick={() => setCandleColorScheme(key)} style={{
+                      display: "flex", alignItems: "center", gap: 8, width: "100%",
+                      background: on ? "var(--accent-dim)" : "none",
+                      border: on ? "1px solid var(--accent-border)" : "1px solid transparent",
+                      borderRadius: 6, padding: "4px 6px", cursor: "pointer", textAlign: "left",
+                    }}>
+                      <span style={{ display: "flex", gap: 2, flexShrink: 0 }}>
+                        <span style={{ width: 8, height: 14, borderRadius: 1, background: up }} />
+                        <span style={{ width: 8, height: 14, borderRadius: 1, background: down }} />
+                      </span>
+                      <span style={{ fontSize: 11, fontWeight: 600, color: on ? "var(--text-primary)" : "var(--text-secondary)" }}>
+                        {label}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>,
+            document.body
+          )}
+          {/* Snapshot — captures chart + this toolbar, saves to a trade's Entry/Exit/Additional slot.
+              Moves to the right of the instrument/price label once the chart is expanded — see below. */}
+          {!rightOfChartCollapsed && snapshotButton}
+          {/* Master collapse/expand — toggles the three panel dividers around the chart together.
+              Moves to the right of the instrument/price label once the chart is expanded — see below. */}
+          {!rightOfChartCollapsed && masterCollapseButton}
           {showSnapshotPicker && snapshotPos && createPortal(
             <div ref={snapshotPopoverRef} style={{
               position: "fixed", top: snapshotPos.top, left: snapshotPos.left, zIndex: 1000,
@@ -2844,6 +3253,34 @@ function PriceHistoryChart({ pair, chartTf, setChartTf, livePrice, expandWidth, 
             document.body
           )}
         </div>
+        {rightOfChartCollapsed && (
+          <>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, flexShrink: 0, marginLeft: "auto", marginRight: 30, paddingLeft: 10, borderLeft: "1px solid var(--border-medium)" }}>
+            <span style={{ fontSize: 20, lineHeight: 1, fontWeight: 800, color: "#ffffff", letterSpacing: "-0.01em", whiteSpace: "nowrap" }}>
+              {pair}
+            </span>
+            {latestRow && (() => {
+              const display = livePrice ?? latestRow.close;
+              const isUp = display >= latestRow.open;
+              const pct = (latestRow.close - latestRow.open) / latestRow.open * 100;
+              return (
+                <>
+                  <span style={{ fontSize: 18, lineHeight: 1, fontWeight: 700, fontVariantNumeric: "tabular-nums", color: isUp ? "#60a5fa" : "#a78bfa", whiteSpace: "nowrap" }}>
+                    {display.toFixed(5)}
+                  </span>
+                  <span style={{ fontSize: 10, lineHeight: 1, fontWeight: 600, fontVariantNumeric: "tabular-nums", color: pct >= 0 ? "#60a5fa" : "#a78bfa", whiteSpace: "nowrap" }}>
+                    {pct >= 0 ? "+" : ""}{pct.toFixed(3)}%
+                  </span>
+                </>
+              );
+            })()}
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 5, flexShrink: 0 }}>
+            {snapshotButton}
+            {masterCollapseButton}
+          </div>
+          </>
+        )}
       </div>
       <div style={{ borderRadius: 14, overflow: "hidden", position: "relative", ...(expandHeight ? { flex: 1, minHeight: 0 } : {}) }}>
         {tfLoading && (
@@ -2866,7 +3303,7 @@ function PriceHistoryChart({ pair, chartTf, setChartTf, livePrice, expandWidth, 
             ))}
           </div>
         )}
-        <div ref={containerRef} style={{ height: expandHeight ? "100%" : 480, opacity: tfLoading ? 0.3 : 1 }} />
+        <div ref={containerRef} style={{ height: expandHeight ? "100%" : 480 + heightBoost, opacity: tfLoading ? 0.3 : 1 }} />
       </div>
     </div>
   );
@@ -9830,17 +10267,47 @@ const IMPACT_COLORS: Record<string, string> = {
   High: "#ef4444", Medium: "#f59e0b", Low: "#6b7280", Holiday: "#3b82f6",
 };
 
-// High-impact releases are FTMO's actual restricted-trading rule: no
-// positions opened within 2 minutes before/after any red-folder event.
-function isFtmoProhibited(ev: EconomicEvent): boolean {
-  return ev.impact === "High";
+// FTMO's restricted-news list (https://ftmo.com/en/faq/can-i-trade-news/) is
+// NOT the same set as ForexFactory's generic "High" impact flag — it's a
+// specific subset of releases per currency that FTMO bars trading within 2
+// minutes before/after. Keep these two concepts separate: "impact" is
+// ForexFactory's own classification, "restricted" is FTMO's trading rule.
+const RESTRICTED_EVENT_KEYWORDS: Record<string, string[]> = {
+  USD: [
+    "federal funds rate", "fomc statement", "fomc meeting minutes", "fomc press conference",
+    "non-farm employment change", "unemployment rate", "average hourly earnings",
+    "advance gdp", "cpi y/y", "crude oil inventories",
+  ],
+  EUR: ["main refinancing rate", "ecb press conference", "monetary policy statement"],
+  GBP: ["official bank rate", "mpc", "cpi y/y"],
+  CAD: ["overnight rate", "boc rate statement", "cpi m/m", "employment change", "unemployment rate"],
+  AUD: ["cash rate", "rba rate statement", "rba monetary policy statement", "employment change", "unemployment rate", "cpi m/m", "cpi q/q", "cpi y/y", "gdp q/q"],
+  NZD: ["official cash rate", "rbnz rate statement", "employment change", "unemployment rate", "cpi q/q", "gdp q/q"],
+  CHF: ["snb policy rate"],
+};
+
+function isFtmoRestricted(ev: EconomicEvent): boolean {
+  const keywords = RESTRICTED_EVENT_KEYWORDS[ev.country?.toUpperCase()];
+  if (!keywords) return false;
+  const title = ev.title.toLowerCase();
+  return keywords.some(kw => title.includes(kw));
 }
 
-function EconomicCalendarPanel({ events, loading, impactFilter }: {
-  events: EconomicEvent[]; loading: boolean; impactFilter: Set<CalendarImpact>;
+function EconomicCalendarPanel({ events, loading, impactFilter, restrictedOnly, filterByInstrument, pair }: {
+  events: EconomicEvent[]; loading: boolean; impactFilter: Set<CalendarImpact>; restrictedOnly: boolean;
+  filterByInstrument: boolean; pair: string;
 }) {
+  const pairCurrencies = pair.split("/").map(c => c.toUpperCase());
+  // Restricted Events Only bypasses the impact checkboxes rather than
+  // AND-ing with them — restricted events span High and Low impact (e.g.
+  // Crude Oil Inventories is Low), so requiring the matching impact box to
+  // also be checked made it trivially easy to filter restricted events out
+  // by accident.
   const filtered = events.filter(ev =>
-    !(CALENDAR_IMPACTS as readonly string[]).includes(ev.impact) || impactFilter.has(ev.impact as CalendarImpact)
+    (restrictedOnly
+      ? isFtmoRestricted(ev)
+      : (!(CALENDAR_IMPACTS as readonly string[]).includes(ev.impact) || impactFilter.has(ev.impact as CalendarImpact)))
+    && (!filterByInstrument || pairCurrencies.includes(ev.country?.toUpperCase()))
   );
 
   return (
@@ -9851,19 +10318,42 @@ function EconomicCalendarPanel({ events, loading, impactFilter }: {
           </div>
         )}
         {filtered.map((ev, i) => {
-          const prohibited = isFtmoProhibited(ev);
-          const color = IMPACT_COLORS[ev.impact] ?? "var(--text-muted)";
+          const prohibited = isFtmoRestricted(ev);
+          // Restricted *and* on a currency actually in the instrument being
+          // viewed — a stronger cue than the generic left-border accent
+          // below, which just marks "restricted somewhere."
+          const affectsInstrument = prohibited && pairCurrencies.includes(ev.country?.toUpperCase());
+          // Consecutive highlighted rows read as one group with a single
+          // border around the whole run, not a border per row — only the
+          // outer edges of the run get the red border.
+          const prevAffects = i > 0 && isFtmoRestricted(filtered[i - 1]) && pairCurrencies.includes(filtered[i - 1].country?.toUpperCase());
+          const nextAffects = i < filtered.length - 1 && isFtmoRestricted(filtered[i + 1]) && pairCurrencies.includes(filtered[i + 1].country?.toUpperCase());
+          const isGroupStart = affectsInstrument && !prevAffects;
+          const isGroupEnd   = affectsInstrument && !nextAffects;
+          // The dark/muted greys used everywhere else lose all contrast
+          // against the red highlight, so a highlighted row swaps them for
+          // near-white instead of reusing the theme's low-contrast tones.
+          const color = affectsInstrument ? "#ffffff" : (IMPACT_COLORS[ev.impact] ?? "var(--text-muted)");
+          const mutedColor     = affectsInstrument ? "rgba(255,255,255,0.75)" : "var(--text-muted)";
+          const secondaryColor = affectsInstrument ? "#ffffff" : "var(--text-secondary)";
           return (
             <div key={i} style={{
               display: "flex", flexDirection: "column", gap: 3, padding: "8px 10px",
-              borderBottom: i < filtered.length - 1 ? "1px solid var(--border-light)" : "none",
-              borderLeft: prohibited ? "3px solid #ef4444" : "3px solid transparent",
+              borderLeft: affectsInstrument ? "1px solid #ef4444" : "none",
+              borderRight: affectsInstrument ? "1px solid #ef4444" : "none",
+              borderTop: isGroupStart ? "1px solid #ef4444" : "none",
+              borderBottom: isGroupEnd ? "1px solid #ef4444" : (i < filtered.length - 1 ? "1px solid var(--border-light)" : "none"),
+              borderTopLeftRadius: isGroupStart ? 6 : 0,
+              borderTopRightRadius: isGroupStart ? 6 : 0,
+              borderBottomLeftRadius: isGroupEnd ? 6 : 0,
+              borderBottomRightRadius: isGroupEnd ? 6 : 0,
+              background: affectsInstrument ? "rgba(239,68,68,0.32)" : "transparent",
             }}>
               <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                 <span style={{ fontSize: 9, fontWeight: 700, color, textTransform: "uppercase", letterSpacing: "0.06em" }}>
                   {ev.impact}
                 </span>
-                <span style={{ fontSize: 9, fontWeight: 700, color: "var(--text-muted)" }}>{ev.country}</span>
+                <span style={{ fontSize: 9, fontWeight: 800, color: "#ffffff" }}>{ev.country}</span>
                 {prohibited && (
                   <span
                     title="FTMO: no trading within 2 minutes before/after this release"
@@ -9873,17 +10363,17 @@ function EconomicCalendarPanel({ events, loading, impactFilter }: {
                       textTransform: "uppercase", letterSpacing: "0.05em", marginLeft: "auto",
                     }}
                   >
-                    FTMO Blackout
+                    Restricted Event
                   </span>
                 )}
               </div>
               <div style={{ fontSize: 12, fontWeight: 500, color: "var(--text-primary)", lineHeight: 1.3 }}>
                 {ev.title}
               </div>
-              <div style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 10, color: "var(--text-muted)" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 10, color: mutedColor }}>
                 <span>{formatCalendarDate(ev.date)}</span>
-                {ev.forecast && <span>Forecast: <b style={{ color: "var(--text-secondary)" }}>{ev.forecast}</b></span>}
-                {ev.previous && <span>Previous: <b style={{ color: "var(--text-secondary)" }}>{ev.previous}</b></span>}
+                {ev.forecast && <span>Forecast: <b style={{ color: secondaryColor }}>{ev.forecast}</b></span>}
+                {ev.previous && <span>Previous: <b style={{ color: secondaryColor }}>{ev.previous}</b></span>}
               </div>
             </div>
           );
@@ -9898,14 +10388,16 @@ function NewsAndCalendarPanel({
   news: NewsArticle[]; newsLoading: boolean; pair: string;
   calendarEvents: EconomicEvent[]; calendarLoading: boolean;
 }) {
-  const [tab, setTab] = useState<"news" | "calendar">("news");
+  const [tab, setTab] = useState<"news" | "calendar">("calendar");
 
-  const [impactFilter, setImpactFilter] = useState<Set<CalendarImpact>>(new Set(CALENDAR_IMPACTS));
+  const [impactFilter, setImpactFilter] = useState<Set<CalendarImpact>>(new Set(["High"]));
   const toggleImpact = (imp: CalendarImpact) => setImpactFilter(prev => {
     const next = new Set(prev);
     if (next.has(imp)) next.delete(imp); else next.add(imp);
     return next;
   });
+  const [restrictedOnly, setRestrictedOnly] = useState(false);
+  const [filterByInstrument, setFilterByInstrument] = useState(false);
 
   // Settings popover (impact filter) — portaled + fixed-positioned like the
   // Reversal/Indicators popovers. Lives in the tab strip so it's in line with
@@ -9931,7 +10423,7 @@ function NewsAndCalendarPanel({
 
   return (
     <div style={{
-      display: "flex", flexDirection: "column", height: 338, marginTop: 14,
+      display: "flex", flexDirection: "column", height: "100%",
       borderRadius: 12, background: "var(--bg-panel)", border: "1px solid var(--border-medium)",
       overflow: "hidden",
     }}>
@@ -10004,13 +10496,47 @@ function NewsAndCalendarPanel({
               );
             })}
           </div>
+          <div style={{ height: 1, background: "var(--border-medium)", margin: "10px 0 8px" }} />
+          <div style={{ fontSize: 9, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.1em",
+            color: "var(--text-muted)", marginBottom: 8 }}>
+            FTMO Trading Restriction
+          </div>
+          <button onClick={() => setRestrictedOnly(v => !v)} style={{
+            display: "flex", alignItems: "center", gap: 8, width: "100%",
+            background: "none", border: "none", padding: "4px 2px", cursor: "pointer", textAlign: "left",
+          }}>
+            <span style={{
+              width: 14, height: 14, borderRadius: 3, flexShrink: 0,
+              border: "2px solid #ef4444", background: restrictedOnly ? "#ef4444" : "transparent",
+            }} />
+            <span style={{ fontSize: 11, fontWeight: 600, color: restrictedOnly ? "var(--text-primary)" : "var(--text-secondary)" }}>
+              Restricted Events Only
+            </span>
+          </button>
+          <div style={{ height: 1, background: "var(--border-medium)", margin: "10px 0 8px" }} />
+          <div style={{ fontSize: 9, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.1em",
+            color: "var(--text-muted)", marginBottom: 8 }}>
+            Instrument
+          </div>
+          <button onClick={() => setFilterByInstrument(v => !v)} style={{
+            display: "flex", alignItems: "center", gap: 8, width: "100%",
+            background: "none", border: "none", padding: "4px 2px", cursor: "pointer", textAlign: "left",
+          }}>
+            <span style={{
+              width: 14, height: 14, borderRadius: 3, flexShrink: 0,
+              border: "2px solid var(--accent-text)", background: filterByInstrument ? "var(--accent-text)" : "transparent",
+            }} />
+            <span style={{ fontSize: 11, fontWeight: 600, color: filterByInstrument ? "var(--text-primary)" : "var(--text-secondary)" }}>
+              Filter by Current Instrument ({pair})
+            </span>
+          </button>
         </div>,
         document.body
       )}
       <div style={{ flex: 1, minHeight: 0, borderTop: "1px solid var(--border-medium)" }}>
         {tab === "news"
           ? <ForexNewsPanel news={news} loading={newsLoading} pair={pair} />
-          : <EconomicCalendarPanel events={calendarEvents} loading={calendarLoading} impactFilter={impactFilter} />}
+          : <EconomicCalendarPanel events={calendarEvents} loading={calendarLoading} impactFilter={impactFilter} restrictedOnly={restrictedOnly} filterByInstrument={filterByInstrument} pair={pair} />}
       </div>
     </div>
   );
@@ -10112,10 +10638,42 @@ export function AnalyticsV3() {
   // Lets a Sidebar favorite click switch this (already-mounted, possibly
   // hidden) page to the requested pair without prop-drilling through AppShell.
   useEffect(() => pairSelectionEvents.subscribe((pair) => setSelectedPair(pair)), []);
-  const [aisRowCollapsed, setAisRowCollapsed] = useState(false);
+  const [aisRowCollapsed, setAisRowCollapsed] = useState(true);
   const [belowChartCollapsed, setBelowChartCollapsed] = useState(false);
   const [rightOfChartCollapsed, setRightOfChartCollapsed] = useState(false);
   const allPanelsCollapsed = aisRowCollapsed && belowChartCollapsed && rightOfChartCollapsed;
+  // The AI Synthesis/Alerts row is a fixed 160px block + 10px padding-bottom.
+  // Collapsing it should grow the chart by exactly that freed height. It
+  // can't be done via flex-grow on the chart row (like belowChartCollapsed
+  // does) because the below-chart panels sibling is still mounted and
+  // doesn't shrink — competing for space that way collapses the chart to 0.
+  const chartHeightBoost = aisRowCollapsed ? 170 : 0;
+
+  // News/Calendar panel must bottom-align with the chart regardless of the
+  // chart's actual rendered height (fixed 480/+boost, or 100% when
+  // belowChartCollapsed) — measured via ResizeObserver rather than computed
+  // from font/line-height assumptions, since CSS percentage-height can't
+  // cross the chart-row's own content-driven (auto) height cleanly.
+  const [chartColHeight, setChartColHeight] = useState<number | null>(null);
+  const [rightPanelHeaderHeight, setRightPanelHeaderHeight] = useState<number | null>(null);
+  // Callback ref, not useRef+useEffect: this node is gated behind
+  // sheetRows.length > 0 (async data load) as well as rightOfChartCollapsed,
+  // so a dependency-array effect can miss the moment it first mounts. A
+  // callback ref fires exactly when the node attaches/detaches, whatever
+  // the reason, so the observer never misses it.
+  const rightPanelHeaderObsRef = useRef<ResizeObserver | null>(null);
+  const rightPanelHeaderRef = useCallback((el: HTMLDivElement | null) => {
+    rightPanelHeaderObsRef.current?.disconnect();
+    rightPanelHeaderObsRef.current = null;
+    if (!el) return;
+    const ro = new ResizeObserver(([entry]) => setRightPanelHeaderHeight(entry.contentRect.height));
+    ro.observe(el);
+    rightPanelHeaderObsRef.current = ro;
+  }, []);
+  const newsBoxHeight = chartColHeight != null && rightPanelHeaderHeight != null
+    ? Math.max(120, chartColHeight - rightPanelHeaderHeight)
+    : 338;
+
   const toggleAllPanels = useCallback(() => {
     const collapse = !allPanelsCollapsed;
     setAisRowCollapsed(collapse);
@@ -10167,17 +10725,35 @@ export function AnalyticsV3() {
   // Economic calendar — fetch on mount then every 5 min. Slower cadence than
   // news: the unofficial feed rate-limits, and scheduled events don't need
   // second-by-second freshness the way headlines do.
+  //
+  // The unofficial feed occasionally fails/hangs on the very first request
+  // after a cold app launch (network interface not fully up yet). Without a
+  // fast retry, a failed first attempt just sat there until the next full
+  // 5-minute interval tick — which read as "the calendar takes 5 minutes to
+  // load". Two fixes: (1) seed the panel instantly from the last successful
+  // fetch, cached to disk, so there's always *something* on screen while a
+  // fresh fetch is in flight; (2) retry quickly (15s) on failure instead of
+  // waiting for the next scheduled poll.
   useEffect(() => {
+    invoke<string>("read_credentials_file", { path: ECONOMIC_CALENDAR_CACHE_PATH })
+      .then(content => setCalendarEvents(JSON.parse(content)))
+      .catch(() => {});
+
+    let retryId: ReturnType<typeof setTimeout> | null = null;
     const load = () => {
       setCalendarLoading(true);
       invoke<EconomicEvent[]>("get_economic_calendar")
-        .then(items => setCalendarEvents(items))
-        .catch(() => {})
+        .then(items => {
+          setCalendarEvents(items);
+          invoke("write_text_file", { path: ECONOMIC_CALENDAR_CACHE_PATH, content: JSON.stringify(items) })
+            .catch(console.error);
+        })
+        .catch(() => { retryId = setTimeout(load, 15_000); })
         .finally(() => setCalendarLoading(false));
     };
     load();
     const id = setInterval(load, 5 * 60_000);
-    return () => clearInterval(id);
+    return () => { clearInterval(id); if (retryId) clearTimeout(retryId); };
   }, []);
 
   // Initial load — seed seenStatuses so we don't fire on startup
@@ -11446,7 +12022,7 @@ export function AnalyticsV3() {
               display: "flex", alignItems: belowChartCollapsed ? "stretch" : "flex-start", marginTop: 10,
               ...(belowChartCollapsed ? { flex: 1, minHeight: 0 } : { flexShrink: 0 }),
             }}>
-              <PriceHistoryChart rows={sheetRows} pair={selectedPair} chartTf={chartTf} setChartTf={setChartTf} livePrice={livePrice} expandWidth={rightOfChartCollapsed} expandHeight={belowChartCollapsed} allPanelsCollapsed={allPanelsCollapsed} onToggleAllPanels={toggleAllPanels} />
+              <PriceHistoryChart rows={sheetRows} pair={selectedPair} chartTf={chartTf} setChartTf={setChartTf} livePrice={livePrice} expandWidth={rightOfChartCollapsed} expandHeight={belowChartCollapsed} heightBoost={chartHeightBoost} allPanelsCollapsed={allPanelsCollapsed} onToggleAllPanels={toggleAllPanels} rightOfChartCollapsed={rightOfChartCollapsed} onHeightChange={setChartColHeight} />
               {/* ── Vertical divider — doubles as the collapse/expand handle
                   for the price/news panel right of the chart ── */}
               <div style={{ position: "relative", width: 1, alignSelf: "stretch", background: "var(--border-medium)", flexShrink: 0, marginLeft: 12 }}>
@@ -11471,6 +12047,7 @@ export function AnalyticsV3() {
               </div>
               {!rightOfChartCollapsed && (
               <div style={{ flex: 1, paddingLeft: 24, marginTop: 4, position: "relative" }}>
+                <div ref={rightPanelHeaderRef}>
                 <div style={{ display: "flex", alignItems: "center", gap: 32 }}>
                   <div style={{ display: "flex", alignItems: "flex-start" }}>
                     <span style={{
@@ -11526,10 +12103,13 @@ export function AnalyticsV3() {
                     <div style={{ height: 1, background: "var(--border-medium)", marginTop: 14 }} />
                   </>
                 )}
-                <NewsAndCalendarPanel
-                  news={newsItems} newsLoading={newsLoading} pair={selectedPair}
-                  calendarEvents={calendarEvents} calendarLoading={calendarLoading}
-                />
+                </div>
+                <div style={{ marginTop: 14, height: newsBoxHeight }}>
+                  <NewsAndCalendarPanel
+                    news={newsItems} newsLoading={newsLoading} pair={selectedPair}
+                    calendarEvents={calendarEvents} calendarLoading={calendarLoading}
+                  />
+                </div>
               </div>
               )}
             </div>

@@ -727,7 +727,7 @@ export function TradeForm({ account, existingTrade, defaultDate, defaultValues, 
 
         {/* ── Form body ── */}
         <form id="trade-form-inner" onSubmit={handleSubmit} className="flex-1 overflow-y-auto">
-          <div className="px-6 py-2" style={{ display: tab === "trade" ? "block" : "none" }}>
+          <div className="px-6 py-1.5" style={{ display: tab === "trade" ? "block" : "none" }}>
             <TradeTab values={values} set={set} rr={rr} errors={errors} ftmoTime={ftmoTime} setFtmoTime={setFtmoTime} />
           </div>
           <div className="px-6 py-2" style={{ display: tab === "journal" ? "block" : "none" }}>
@@ -848,7 +848,7 @@ interface TabProps {
 
 function TradeTab({ values, set, rr, errors = {}, ftmoTime, setFtmoTime }: TabProps) {
   return (
-    <div className="flex flex-col gap-2">
+    <div className="flex flex-col gap-1.5">
 
       {/* Opened / Closed */}
       <div className="grid grid-cols-2 gap-3">
@@ -861,19 +861,39 @@ function TradeTab({ values, set, rr, errors = {}, ftmoTime, setFtmoTime }: TabPr
         </FormField>
       </div>
 
-      {setFtmoTime && (
-        <label className="flex items-center gap-2 -mt-1 mb-1 cursor-pointer select-none">
+      {/* No closedAt = open position — this is what the Analytics chart's
+          open-position overlay and the Calendar/daily_stats rollups key off
+          of, so give it an explicit affordance rather than relying on
+          someone noticing they can blank the datetime field above. */}
+      <div className="flex items-center justify-between -mt-1 mb-1">
+        {setFtmoTime ? (
+          <label className="flex items-center gap-2 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={!!ftmoTime}
+              onChange={(e) => setFtmoTime(e.target.checked)}
+              style={{ accentColor: "var(--accent)" }}
+            />
+            <span className="text-[11px] font-medium" style={{ color: "var(--text-muted)" }}>
+              Times above are FTMO server time — convert to local on save
+            </span>
+          </label>
+        ) : <span />}
+        <label className="flex items-center gap-2 cursor-pointer select-none">
           <input
             type="checkbox"
-            checked={!!ftmoTime}
-            onChange={(e) => setFtmoTime(e.target.checked)}
+            checked={!values.closedAt}
+            onChange={(e) => set("closedAt", e.target.checked ? "" : `${todayLocal()}T${nowTimeLocal()}`)}
             style={{ accentColor: "var(--accent)" }}
           />
-          <span className="text-[11px] font-medium" style={{ color: "var(--text-muted)" }}>
-            Times above are FTMO server time — convert to local on save
+          <span
+            className="text-[11px] font-semibold uppercase tracking-wide"
+            style={{ color: values.closedAt ? "var(--text-muted)" : "#4ade80" }}
+          >
+            Open Trade
           </span>
         </label>
-      )}
+      </div>
 
       {/* Instrument + Side */}
       <div className="grid grid-cols-2 gap-3">
@@ -894,7 +914,7 @@ function TradeTab({ values, set, rr, errors = {}, ftmoTime, setFtmoTime }: TabPr
                 key={s}
                 type="button"
                 onClick={() => set("side", s)}
-                className="flex-1 flex items-center justify-center gap-1.5 py-2 text-[12px] font-semibold transition-colors capitalize"
+                className="flex-1 flex items-center justify-center gap-1.5 py-1.5 text-[12px] font-semibold transition-colors capitalize"
                 style={{
                   background: values.side === s
                     ? s === "long" ? "rgba(34,197,94,0.18)" : "rgba(239,68,68,0.18)"
@@ -962,7 +982,7 @@ function TradeTab({ values, set, rr, errors = {}, ftmoTime, setFtmoTime }: TabPr
             <div style={{ flex: 1 }}>
               <div
                 className="flex items-center justify-center gap-1.5 rounded-lg"
-                style={{ background: "var(--accent-dim)", border: "1px solid var(--accent-border)", height: 38 }}
+                style={{ background: "var(--accent-dim)", border: "1px solid var(--accent-border)", height: 34 }}
               >
                 <span className="text-[10px] font-semibold uppercase tracking-widest" style={{ color: "var(--text-secondary)" }}>
                   R:R
@@ -1007,7 +1027,7 @@ function TradeTab({ values, set, rr, errors = {}, ftmoTime, setFtmoTime }: TabPr
           value={values.technicalNotes}
           onChange={(v) => set("technicalNotes", v)}
           placeholder="Describe the setup, confluence, execution…"
-          rows={2}
+          rows={4}
         />
       </FormField>
 

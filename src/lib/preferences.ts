@@ -133,6 +133,7 @@ export interface ReversalSettings {
   eightAmBoxFilter: boolean;
   trendlineFilter: boolean;
   patternGroups: string[];
+  showLabels: boolean;
 }
 const REVERSAL_SETTINGS_KEY = "tm_reversal_settings";
 
@@ -140,6 +141,7 @@ export function getReversalSettings(defaultPatternGroups: string[]): ReversalSet
   const fallback: ReversalSettings = {
     zoneFilter: false, eightAmBoxFilter: false, trendlineFilter: false,
     patternGroups: [...defaultPatternGroups],
+    showLabels: false,
   };
   try {
     const raw = localStorage.getItem(REVERSAL_SETTINGS_KEY);
@@ -152,6 +154,7 @@ export function getReversalSettings(defaultPatternGroups: string[]): ReversalSet
       patternGroups:    Array.isArray(parsed.patternGroups) && parsed.patternGroups.every((g) => typeof g === "string")
         ? parsed.patternGroups
         : fallback.patternGroups,
+      showLabels:       typeof parsed.showLabels === "boolean" ? parsed.showLabels : fallback.showLabels,
     };
   } catch {
     return fallback;
