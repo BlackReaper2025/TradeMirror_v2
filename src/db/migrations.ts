@@ -34,6 +34,16 @@ const MIGRATIONS: string[] = [
   `CREATE INDEX IF NOT EXISTS idx_daily_stats_account_day ON daily_stats(account_id, day)`,
   `CREATE INDEX IF NOT EXISTS idx_trade_journal_trade_id ON trade_journal(trade_id)`,
   `CREATE INDEX IF NOT EXISTS idx_trade_images_trade_id ON trade_images(trade_id)`,
+  // v8 — MAE/MFE (max adverse/favorable excursion) tracking per trade
+  `ALTER TABLE trades ADD COLUMN mae_pips REAL`,
+  `ALTER TABLE trades ADD COLUMN mae REAL`,
+  `ALTER TABLE trades ADD COLUMN mae_time TEXT`,
+  `ALTER TABLE trades ADD COLUMN mfe_pips REAL`,
+  `ALTER TABLE trades ADD COLUMN mfe REAL`,
+  `ALTER TABLE trades ADD COLUMN mfe_time TEXT`,
+  // v9 — planned stop-loss / take-profit distance in pips
+  `ALTER TABLE trades ADD COLUMN sl_pips REAL`,
+  `ALTER TABLE trades ADD COLUMN tp_pips REAL`,
 ];
 
 export async function runMigrations(): Promise<void> {

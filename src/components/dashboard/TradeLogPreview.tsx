@@ -49,14 +49,13 @@ function normaliseDateTime(v: string): string {
 interface Props {
   trades:       Trade[];
   selectedDate: string | null;
-  onTradeChanged?: () => void;
+  onTradeChanged?: (opts?: { isNewTrade?: boolean; jumpToDay?: string }) => void;
 }
 
 export function TradeLogPreview({ trades, selectedDate, onTradeChanged }: Props) {
   const { ready } = useDatabase();
   const [showForm,      setShowForm]      = useState(false);
   const [editTrade,     setEditTrade]     = useState<TradeWithJournal | null>(null);
-  const [duplicateInit, setDuplicateInit] = useState<TradeFormValues | undefined>(undefined);
   const [account,    setAccount]    = useState<Account | null>(null);
   const [hour12,     setHour12]     = useState(() => getTimeFormat() === "12h");
 
@@ -77,14 +76,14 @@ export function TradeLogPreview({ trades, selectedDate, onTradeChanged }: Props)
     } catch { return null; }
   }, [ready]);
 
-  const finishSave = useCallback(async (accountId: string, days: string[]) => {
+  const finishSave = useCallback(async (accountId: string, days: string[], opts?: { isNewTrade?: boolean; jumpToDay?: string }) => {
     const uniqueDays = [...new Set(days)];
     for (const d of uniqueDays) await recalculateDailyStats(accountId, d);
     await updateAccountBalance(accountId);
     tradeEvents.notify();
     setShowForm(false);
     setEditTrade(null);
-    onTradeChanged?.();
+    onTradeChanged?.(opts);
   }, [onTradeChanged]);
 
   const handleAddClick = useCallback(async () => {
@@ -110,7 +109,7 @@ export function TradeLogPreview({ trades, selectedDate, onTradeChanged }: Props)
         await recalculateDailyStats(result.accountId, result.day);
         await updateAccountBalance(result.accountId);
         tradeEvents.notify();
-        onTradeChanged?.();
+        onTradeChanged?.({ isNewTrade: false });
       }
     } catch (err) {
       console.error("[TradeLogPreview] delete error:", err);
@@ -141,6 +140,14 @@ export function TradeLogPreview({ trades, selectedDate, onTradeChanged }: Props)
       tags:           values.tags.trim()           || undefined,
       tradeRef:       values.tradeRef.trim()       || undefined,
       exitPrice:      values.exitPrice ? parseFloat(values.exitPrice) : undefined,
+      slPips:         values.slPips  ? parseFloat(values.slPips)  : undefined,
+      tpPips:         values.tpPips  ? parseFloat(values.tpPips)  : undefined,
+      maePips:        values.maePips ? parseFloat(values.maePips) : undefined,
+      mae:            values.mae     ? parseFloat(values.mae)     : undefined,
+      maeTime:        values.maeTime ? normaliseDateTime(values.maeTime) : undefined,
+      mfePips:        values.mfePips ? parseFloat(values.mfePips) : undefined,
+      mfe:            values.mfe     ? parseFloat(values.mfe)     : undefined,
+      mfeTime:        values.mfeTime ? normaliseDateTime(values.mfeTime) : undefined,
     });
 
     await createJournalEntry({
@@ -156,7 +163,7 @@ export function TradeLogPreview({ trades, selectedDate, onTradeChanged }: Props)
 
     await syncTradeImages(tradeId, values.images);
 
-    await finishSave(account.id, [day]);
+    await finishSave(account.id, [day], { isNewTrade: true, jumpToDay: day });
   }, [account, finishSave]);
 
   const handleEditSave = useCallback(async (values: TradeFormValues) => {
@@ -182,6 +189,14 @@ export function TradeLogPreview({ trades, selectedDate, onTradeChanged }: Props)
       tags:           values.tags.trim()           || undefined,
       tradeRef:       values.tradeRef.trim()       || undefined,
       exitPrice:      values.exitPrice ? parseFloat(values.exitPrice) : undefined,
+      slPips:         values.slPips  ? parseFloat(values.slPips)  : undefined,
+      tpPips:         values.tpPips  ? parseFloat(values.tpPips)  : undefined,
+      maePips:        values.maePips ? parseFloat(values.maePips) : undefined,
+      mae:            values.mae     ? parseFloat(values.mae)     : undefined,
+      maeTime:        values.maeTime ? normaliseDateTime(values.maeTime) : undefined,
+      mfePips:        values.mfePips ? parseFloat(values.mfePips) : undefined,
+      mfe:            values.mfe     ? parseFloat(values.mfe)     : undefined,
+      mfeTime:        values.mfeTime ? normaliseDateTime(values.mfeTime) : undefined,
     });
 
     await upsertJournalEntry(
@@ -200,7 +215,7 @@ export function TradeLogPreview({ trades, selectedDate, onTradeChanged }: Props)
 
     await syncTradeImages(editTrade.id, values.images);
 
-    await finishSave(account.id, [oldDay, newDay]);
+    await finishSave(account.id, [oldDay, newDay], { isNewTrade: false });
   }, [account, editTrade, finishSave]);
 
   return (
@@ -348,10 +363,9 @@ export function TradeLogPreview({ trades, selectedDate, onTradeChanged }: Props)
           account={account}
           existingTrade={editTrade}
           defaultDate={editTrade ? undefined : (selectedDate ?? undefined)}
-          defaultValues={duplicateInit}
-          onClose={() => { setShowForm(false); setEditTrade(null); setDuplicateInit(undefined); }}
+          onClose={() => { setShowForm(false); setEditTrade(null); }}
           onSaved={editTrade ? handleEditSave : handleSave}
-          onDuplicate={(vals) => { setDuplicateInit(vals); setEditTrade(null); }}
+          onDuplicate={(vals) => { handleSave(vals); }}
         />
       )}
     </>

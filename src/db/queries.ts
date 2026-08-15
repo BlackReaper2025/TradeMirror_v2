@@ -758,6 +758,14 @@ export interface CreateTradeInput {
   technicalNotes?: string;
   tags?: string;
   tradeRef?: string;
+  slPips?: number;
+  tpPips?: number;
+  maePips?: number;
+  mae?: number;
+  maeTime?: string;
+  mfePips?: number;
+  mfe?: number;
+  mfeTime?: string;
 }
 
 export interface CreateJournalInput {
@@ -794,6 +802,14 @@ export async function createTrade(input: CreateTradeInput): Promise<void> {
     technicalNotes: input.technicalNotes ?? null,
     tags: input.tags ?? null,
     tradeRef: input.tradeRef ?? null,
+    slPips: input.slPips ?? null,
+    tpPips: input.tpPips ?? null,
+    maePips: input.maePips ?? null,
+    mae: input.mae ?? null,
+    maeTime: input.maeTime ?? null,
+    mfePips: input.mfePips ?? null,
+    mfe: input.mfe ?? null,
+    mfeTime: input.mfeTime ?? null,
   });
 }
 
@@ -852,6 +868,14 @@ export async function updateTrade(
       technicalNotes: input.technicalNotes ?? null,
       tags:           input.tags ?? null,
       tradeRef:       input.tradeRef ?? null,
+      slPips:         input.slPips ?? null,
+      tpPips:         input.tpPips ?? null,
+      maePips:        input.maePips ?? null,
+      mae:            input.mae ?? null,
+      maeTime:        input.maeTime ?? null,
+      mfePips:        input.mfePips ?? null,
+      mfe:            input.mfe ?? null,
+      mfeTime:        input.mfeTime ?? null,
     })
     .where(eq(trades.id, id));
 }

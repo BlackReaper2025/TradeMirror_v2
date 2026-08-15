@@ -14,7 +14,7 @@
 //
 //  Portfolio panel lives in the sidebar (not here).
 //
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { AccountSummaryPanel }       from "../components/dashboard/AccountSummaryPanel";
 import { EquityChart }               from "../components/dashboard/EquityChart";
 import { SessionClockPanel }         from "../components/dashboard/SessionClockPanel";
@@ -39,6 +39,7 @@ export function Dashboard() {
   const { ready }         = useDatabase();
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const [selectedTrades, setSelectedTrades] = useState<Trade[]>([]);
+  const userSelectedRef = useRef(false);
 
   useEffect(() => {
     if (!data.account || !data.todayStats) return;
@@ -48,7 +49,8 @@ export function Dashboard() {
     else               setThemeState("yellow");
   }, [data.account, data.todayStats, setThemeState]);
 
-  const handleSelectDate = useCallback(async (date: string) => {
+  const handleSelectDate = useCallback(async (date: string, isUserAction = true) => {
+    if (isUserAction) userSelectedRef.current = true;
     setSelectedDate(date);
     if (!data.account || !ready) return;
     try {
@@ -57,10 +59,23 @@ export function Dashboard() {
     } catch { setSelectedTrades([]); }
   }, [data.account, ready]);
 
-  // Keep selected trades in sync when recentTrades refresh (only when no date selected)
+  // Default to the most recent day with trade activity until the user picks a different day or logs a new trade
   useEffect(() => {
-    if (!selectedDate) setSelectedTrades(data.recentTrades);
-  }, [data.recentTrades, selectedDate]);
+    if (userSelectedRef.current || !data.account || !ready) return;
+    const lastActiveDay = data.calendarDays
+      .filter(d => d.tradeCount > 0)
+      .reduce((latest, d) => (!latest || d.date > latest ? d.date : latest), "");
+    handleSelectDate(lastActiveDay || todayStr(), false);
+  }, [data.calendarDays, data.account, ready, handleSelectDate]);
+
+  const handleTradeChanged = useCallback((opts?: { isNewTrade?: boolean; jumpToDay?: string }) => {
+    if (opts?.isNewTrade) {
+      userSelectedRef.current = false;
+      handleSelectDate(opts.jumpToDay ?? todayStr(), false);
+    } else if (selectedDate) {
+      handleSelectDate(selectedDate, false);
+    }
+  }, [selectedDate, handleSelectDate]);
 
   if (loading) {
     return (
@@ -131,7 +146,7 @@ export function Dashboard() {
 
         {/* TradeLogPreview — half-width centre-bottom, rows 8–12 */}
         <div style={{ gridColumn: "4 / 8", gridRow: "8 / 13" }}>
-          <TradeLogPreview trades={selectedTrades} selectedDate={selectedDate} onTradeChanged={() => handleSelectDate(selectedDate ?? todayStr())} />
+          <TradeLogPreview trades={selectedTrades} selectedDate={selectedDate} onTradeChanged={handleTradeChanged} />
         </div>
 
         {/* CalendarPanel — wide right-bottom, rows 8–13 */}

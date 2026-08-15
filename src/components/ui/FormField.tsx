@@ -5,30 +5,36 @@ interface FormFieldProps {
   label: string;
   hint?: string;
   required?: boolean;
+  labelRight?: ReactNode;
+  boldLabel?: boolean;
+  centerLabel?: boolean;
+  labelSize?: number;
   children: ReactNode;
   className?: string;
 }
 
-export function FormField({ label, hint, required, children, className }: FormFieldProps) {
+export function FormField({ label, hint, required, labelRight, boldLabel = true, centerLabel = true, labelSize = 11, children, className }: FormFieldProps) {
+  const justify = labelRight ? "justify-between" : centerLabel ? "justify-center" : "justify-start";
   return (
     <div className={className}>
-      <label className="block mb-1">
+      <div className={`flex items-center mb-1 ${justify}`}>
         <span
-          className="text-[11px] font-semibold uppercase tracking-widest"
-          style={{ color: "var(--text-secondary)" }}
+          className={`uppercase tracking-widest ${boldLabel ? "font-semibold" : "font-normal"}`}
+          style={{ color: "var(--text-secondary)", fontSize: labelSize }}
         >
           {label}
           {required && <span style={{ color: "var(--accent-text)" }}> *</span>}
+          {hint && (
+            <span
+              className="ml-2 text-[11px] normal-case tracking-normal"
+              style={{ color: "var(--text-muted)" }}
+            >
+              {hint}
+            </span>
+          )}
         </span>
-        {hint && (
-          <span
-            className="ml-2 text-[11px] normal-case tracking-normal"
-            style={{ color: "var(--text-muted)" }}
-          >
-            {hint}
-          </span>
-        )}
-      </label>
+        {labelRight && <div style={{ marginRight: 24 }}>{labelRight}</div>}
+      </div>
       {children}
     </div>
   );

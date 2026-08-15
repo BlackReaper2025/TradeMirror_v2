@@ -39,7 +39,6 @@ export function TradeLog() {
   const [loading, setLoading]     = useState(true);
   const [editTrade, setEditTrade]       = useState<TradeWithJournal | null>(null);
   const [showForm, setShowForm]         = useState(false);
-  const [duplicateInit, setDuplicateInit] = useState<import("../components/tradelog/TradeForm").TradeFormValues | undefined>(undefined);
   const [saveError, setSaveError]       = useState<string | null>(null);
 
   const load = useCallback(async () => {
@@ -100,6 +99,14 @@ export function TradeLog() {
         tags:           values.tags.trim()            || undefined,
         tradeRef:       values.tradeRef.trim()        || undefined,
         exitPrice:      values.exitPrice  ? parseFloat(values.exitPrice)  : undefined,
+        slPips:         values.slPips  ? parseFloat(values.slPips)  : undefined,
+        tpPips:         values.tpPips  ? parseFloat(values.tpPips)  : undefined,
+        maePips:        values.maePips ? parseFloat(values.maePips) : undefined,
+        mae:            values.mae     ? parseFloat(values.mae)     : undefined,
+        maeTime:        values.maeTime ? normaliseDateTime(values.maeTime) : undefined,
+        mfePips:        values.mfePips ? parseFloat(values.mfePips) : undefined,
+        mfe:            values.mfe     ? parseFloat(values.mfe)     : undefined,
+        mfeTime:        values.mfeTime ? normaliseDateTime(values.mfeTime) : undefined,
       });
 
       await createJournalEntry({
@@ -148,6 +155,14 @@ export function TradeLog() {
         tags:           values.tags.trim()            || undefined,
         tradeRef:       values.tradeRef.trim()        || undefined,
         exitPrice:      values.exitPrice  ? parseFloat(values.exitPrice)  : undefined,
+        slPips:         values.slPips  ? parseFloat(values.slPips)  : undefined,
+        tpPips:         values.tpPips  ? parseFloat(values.tpPips)  : undefined,
+        maePips:        values.maePips ? parseFloat(values.maePips) : undefined,
+        mae:            values.mae     ? parseFloat(values.mae)     : undefined,
+        maeTime:        values.maeTime ? normaliseDateTime(values.maeTime) : undefined,
+        mfePips:        values.mfePips ? parseFloat(values.mfePips) : undefined,
+        mfe:            values.mfe     ? parseFloat(values.mfe)     : undefined,
+        mfeTime:        values.mfeTime ? normaliseDateTime(values.mfeTime) : undefined,
       });
 
       await upsertJournalEntry(
@@ -259,10 +274,9 @@ export function TradeLog() {
           key={editTrade?.id ?? "new"}
           account={account}
           existingTrade={editTrade}
-          defaultValues={duplicateInit}
-          onClose={() => { setShowForm(false); setEditTrade(null); setDuplicateInit(undefined); }}
+          onClose={() => { setShowForm(false); setEditTrade(null); }}
           onSaved={editTrade ? handleEditSave : handleSave}
-          onDuplicate={(vals) => { setDuplicateInit(vals); setEditTrade(null); }}
+          onDuplicate={(vals) => { handleSave(vals); }}
         />
       )}
     </div>

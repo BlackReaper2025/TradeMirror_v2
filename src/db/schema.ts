@@ -41,6 +41,14 @@ export const trades = sqliteTable("trades", {
   technicalNotes: text("technical_notes"),
   tags: text("tags"), // JSON array stored as string
   tradeRef: text("trade_ref"),
+  slPips: real("sl_pips"),
+  tpPips: real("tp_pips"),
+  maePips: real("mae_pips"),
+  mae: real("mae"),
+  maeTime: text("mae_time"),
+  mfePips: real("mfe_pips"),
+  mfe: real("mfe"),
+  mfeTime: text("mfe_time"),
 });
 
 // ─── trade_images — entry/exit/additional screenshots with descriptions ───────

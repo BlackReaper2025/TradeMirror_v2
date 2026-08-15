@@ -2561,10 +2561,13 @@ function PriceHistoryChart({ rows, pair, chartTf, setChartTf, livePrice, expandW
       // width is the flex-basis (flex-basis:auto defers to it); flexShrink
       // must stay 1 whenever expandWidth is true so the row can still make
       // room for the divider next to it instead of overflowing past it and
-      // under the page's scrollbar.
-      width: expandWidth ? "100%" : "66.667%", marginBottom: 10,
+      // under the page's scrollbar. Deliberately no flex-grow here (even
+      // when expandHeight is true) — this width must stay constant whether
+      // or not the panels below the chart are collapsed; height still
+      // stretches to fill via the parent row's alignItems:stretch.
+      width: expandWidth ? "100%" : "76%", marginBottom: 10,
       flexShrink: expandWidth ? 1 : 0,
-      ...(expandHeight ? { display: "flex", flexDirection: "column", flex: "1 1 auto", minHeight: 0 } : {}),
+      ...(expandHeight ? { display: "flex", flexDirection: "column", minHeight: 0 } : {}),
     }}>
       {/* Toolbar: timeframes · Indicators button · view mode */}
       <div style={{ display: "flex", alignItems: "center", marginBottom: 4, flexShrink: 0, overflowX: "auto", minHeight: 34 }}>
@@ -10251,13 +10254,19 @@ function formatNewsDate(dateStr: string): string {
   } catch { return ""; }
 }
 
-function formatCalendarDate(dateStr: string): string {
+function formatCalendarDayHeading(dateStr: string): string {
+  try {
+    const d = new Date(dateStr);
+    if (isNaN(d.getTime())) return "Unknown Date";
+    return d.toLocaleDateString(undefined, { weekday: "long", month: "short", day: "numeric" });
+  } catch { return "Unknown Date"; }
+}
+
+function formatCalendarTime(dateStr: string): string {
   try {
     const d = new Date(dateStr);
     if (isNaN(d.getTime())) return "";
-    return d.toLocaleString(undefined, {
-      weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit",
-    });
+    return d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
   } catch { return ""; }
 }
 
@@ -10310,14 +10319,47 @@ function EconomicCalendarPanel({ events, loading, impactFilter, restrictedOnly, 
     && (!filterByInstrument || pairCurrencies.includes(ev.country?.toUpperCase()))
   );
 
+  // Group consecutive same-day events under one heading — events arrive
+  // already sorted chronologically, so a day's events are always contiguous.
+  // Each entry keeps ev's original `filtered` index so the restricted-run
+  // border logic below (which looks at filtered[i-1]/[i+1]) is unaffected.
+  const dayGroups: { key: string; heading: string; items: { ev: EconomicEvent; i: number }[] }[] = [];
+  filtered.forEach((ev, i) => {
+    const key = new Date(ev.date).toDateString();
+    const last = dayGroups[dayGroups.length - 1];
+    if (last && last.key === key) last.items.push({ ev, i });
+    else dayGroups.push({ key, heading: formatCalendarDayHeading(ev.date), items: [{ ev, i }] });
+  });
+
   return (
-    <div style={{ height: "100%", overflowY: "auto", padding: "4px 0" }}>
+    <div style={{ height: "100%", overflowY: "auto", paddingBottom: 4 }}>
         {filtered.length === 0 && !loading && (
           <div style={{ padding: "20px 12px", fontSize: 11, color: "var(--text-muted)", textAlign: "center", lineHeight: 1.5 }}>
             No calendar events loaded.<br />Check network access.
           </div>
         )}
-        {filtered.map((ev, i) => {
+        {dayGroups.map((group, gi) => {
+          // Alternating soft tint per day, distinct from the sticky heading's
+          // own (slightly stronger) shade, so consecutive days read as
+          // separate blocks instead of blending into one continuous list.
+          const dayShade = gi % 2 === 1 ? "rgba(255,255,255,0.035)" : "transparent";
+          const isToday = group.key === new Date().toDateString();
+          // Solid + noticeably lighter than the panel bg so this reads as a
+          // header, not just another row. Must stay fully opaque (no alpha)
+          // — it's position:sticky, so a translucent background would let
+          // the row scrolling underneath bleed through and garble the text.
+          const headingShade = "var(--bg-hover)";
+          return (
+          <div key={group.key} style={{ background: dayShade }}>
+            <div style={{
+              position: "sticky", top: 0, zIndex: 1, padding: "6px 10px",
+              fontSize: 10, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.06em",
+              color: isToday ? "#eab308" : "var(--text-primary)", background: headingShade,
+              borderBottom: "1px solid var(--border-strong)",
+            }}>
+              {group.heading}
+            </div>
+            {group.items.map(({ ev, i }) => {
           const prohibited = isFtmoRestricted(ev);
           // Restricted *and* on a currency actually in the instrument being
           // viewed — a stronger cue than the generic left-border accent
@@ -10342,7 +10384,7 @@ function EconomicCalendarPanel({ events, loading, impactFilter, restrictedOnly, 
               borderLeft: affectsInstrument ? "1px solid #ef4444" : "none",
               borderRight: affectsInstrument ? "1px solid #ef4444" : "none",
               borderTop: isGroupStart ? "1px solid #ef4444" : "none",
-              borderBottom: isGroupEnd ? "1px solid #ef4444" : (i < filtered.length - 1 ? "1px solid var(--border-light)" : "none"),
+              borderBottom: isGroupEnd ? "1px solid #ef4444" : (i < filtered.length - 1 ? "1px solid var(--border-subtle)" : "none"),
               borderTopLeftRadius: isGroupStart ? 6 : 0,
               borderTopRightRadius: isGroupStart ? 6 : 0,
               borderBottomLeftRadius: isGroupEnd ? 6 : 0,
@@ -10350,10 +10392,10 @@ function EconomicCalendarPanel({ events, loading, impactFilter, restrictedOnly, 
               background: affectsInstrument ? "rgba(239,68,68,0.32)" : "transparent",
             }}>
               <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <span style={{ fontSize: 13, fontWeight: 800, color: "#ffffff" }}>{ev.country}</span>
                 <span style={{ fontSize: 9, fontWeight: 700, color, textTransform: "uppercase", letterSpacing: "0.06em" }}>
                   {ev.impact}
                 </span>
-                <span style={{ fontSize: 9, fontWeight: 800, color: "#ffffff" }}>{ev.country}</span>
                 {prohibited && (
                   <span
                     title="FTMO: no trading within 2 minutes before/after this release"
@@ -10371,11 +10413,14 @@ function EconomicCalendarPanel({ events, loading, impactFilter, restrictedOnly, 
                 {ev.title}
               </div>
               <div style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 10, color: mutedColor }}>
-                <span>{formatCalendarDate(ev.date)}</span>
+                <span>{formatCalendarTime(ev.date)}</span>
                 {ev.forecast && <span>Forecast: <b style={{ color: secondaryColor }}>{ev.forecast}</b></span>}
                 {ev.previous && <span>Previous: <b style={{ color: secondaryColor }}>{ev.previous}</b></span>}
               </div>
             </div>
+          );
+            })}
+          </div>
           );
         })}
     </div>
@@ -12015,7 +12060,11 @@ export function AnalyticsV3() {
             below carries the 10px of initial spacing instead. */}
         <div className="flex-1 min-h-0" style={{
           display: "flex", flexDirection: "column",
-          overflowY: belowChartCollapsed ? "hidden" : "auto", paddingTop: "0", paddingRight: "10px",
+          // marginRight eats 8px of the page's own right padding so the
+          // scrollbar itself sits 8px further right, closer to the window
+          // edge; paddingRight bumped by the same 8px so content still ends
+          // up at its original spot — only the scrollbar's position moves.
+          overflowY: belowChartCollapsed ? "hidden" : "auto", paddingTop: "0", paddingRight: "18px", marginRight: "-8px",
         }}>
           {sheetRows.length > 0 && (
             <div style={{
@@ -12046,20 +12095,20 @@ export function AnalyticsV3() {
                 </button>
               </div>
               {!rightOfChartCollapsed && (
-              <div style={{ flex: 1, paddingLeft: 24, marginTop: 4, position: "relative" }}>
+              <div style={{ flex: 1, minWidth: 0, paddingLeft: 16, paddingRight: 0, marginTop: 4, position: "relative" }}>
                 <div ref={rightPanelHeaderRef}>
-                <div style={{ display: "flex", alignItems: "center", gap: 32 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 20 }}>
                   <div style={{ display: "flex", alignItems: "flex-start" }}>
                     <span style={{
-                      fontSize: 52, fontWeight: 800, color: "#ffffff",
+                      fontSize: 38, fontWeight: 800, color: "#ffffff",
                       letterSpacing: "-0.02em", lineHeight: 1,
                       fontVariantNumeric: "tabular-nums",
                     }}>
                       {selectedPair}
                     </span>
-                    <span className="flex items-center justify-center" style={{ width: 20, height: 20, flexShrink: 0, marginLeft: 10 }}>
-                      <span className="animate-ping absolute inline-flex rounded-full" style={{ width: 12, height: 12, opacity: 0.45, background: "#60a5fa", animationDuration: "2s" }} />
-                      <span className="relative inline-flex rounded-full" style={{ width: 8, height: 8, background: "#60a5fa" }} />
+                    <span className="flex items-center justify-center" style={{ width: 16, height: 16, flexShrink: 0, marginLeft: 8 }}>
+                      <span className="animate-ping absolute inline-flex rounded-full" style={{ width: 10, height: 10, opacity: 0.45, background: "#60a5fa", animationDuration: "2s" }} />
+                      <span className="relative inline-flex rounded-full" style={{ width: 7, height: 7, background: "#60a5fa" }} />
                     </span>
                   </div>
                   {latestRow && (() => {
@@ -12067,17 +12116,17 @@ export function AnalyticsV3() {
                     const isUp = display >= latestRow.open;
                     const pct = (latestRow.close - latestRow.open) / latestRow.open * 100;
                     return (
-                      <div style={{ display: "flex", alignItems: "flex-start", gap: 32, marginTop: 8, marginLeft: -24 }}>
+                      <div style={{ display: "flex", alignItems: "flex-start", gap: 20, marginTop: 6, marginLeft: -14 }}>
                         <div style={{ display: "flex", flexDirection: "column", gap: 2, alignItems: "center", marginLeft: -5 }}>
-                          <span style={{ fontSize: 9, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em", color: "var(--text-muted)" }}>Current Price</span>
-                          <span style={{ fontSize: 36, fontWeight: 700, fontVariantNumeric: "tabular-nums", color: isUp ? "#60a5fa" : "#a78bfa", letterSpacing: "-0.01em", lineHeight: 1 }}>
+                          <span style={{ fontSize: 8, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em", color: "var(--text-muted)", whiteSpace: "nowrap" }}>Current Price</span>
+                          <span style={{ fontSize: 26, fontWeight: 700, fontVariantNumeric: "tabular-nums", color: isUp ? "#60a5fa" : "#a78bfa", letterSpacing: "-0.01em", lineHeight: 1 }}>
                             {display.toFixed(5)}
                           </span>
                           {priceError && <span style={{ fontSize: 9, color: "#f87171", maxWidth: 200 }}>{priceError}</span>}
                         </div>
-                        <div style={{ display: "flex", flexDirection: "column", gap: 2, marginLeft: -11 }}>
-                          <span style={{ fontSize: 9, fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.1em" }}>Today's Change</span>
-                          <span style={{ fontSize: 22, fontWeight: 400, color: pct >= 0 ? "#60a5fa" : "#a78bfa", fontVariantNumeric: "tabular-nums", letterSpacing: "-0.01em", lineHeight: 1, marginTop: 12 }}>
+                        <div style={{ display: "flex", flexDirection: "column", gap: 2, marginLeft: -16 }}>
+                          <span style={{ fontSize: 8, fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.1em", whiteSpace: "nowrap" }}>Today's Change</span>
+                          <span style={{ fontSize: 17, fontWeight: 400, color: pct >= 0 ? "#60a5fa" : "#a78bfa", fontVariantNumeric: "tabular-nums", letterSpacing: "-0.01em", lineHeight: 1, marginTop: 9 }}>
                             {pct >= 0 ? "+" : ""}{pct.toFixed(3)}%
                           </span>
                         </div>
@@ -12086,21 +12135,21 @@ export function AnalyticsV3() {
                   })()}
                 </div>
                 {latestRow && (
-                  <div style={{ height: 1, background: "var(--border-medium)", margin: "14px 0 14px" }} />
+                  <div style={{ height: 1, background: "var(--border-medium)", margin: "12px 0 12px" }} />
                 )}
                 {latestRow && (
                   <>
-                    <div style={{ display: "flex", gap: 48, justifyContent: "center" }}>
+                    <div style={{ display: "flex", gap: 26, justifyContent: "center" }}>
                       {([["Today's Open", latestRow.open], ["Today's High", latestRow.high], ["Today's Low", latestRow.low], ["Today's Close", latestRow.close]] as const).map(([label, value]) => (
                         <div key={label} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2 }}>
-                          <span style={{ fontSize: 10, fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.1em" }}>{label}</span>
-                          <span style={{ fontSize: 15, fontWeight: 600, fontVariantNumeric: "tabular-nums", color: label === "Today's Close" ? (latestRow.close >= latestRow.open ? "#60a5fa" : "#a78bfa") : "var(--text-secondary)" }}>
+                          <span style={{ fontSize: 9, fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.1em", whiteSpace: "nowrap" }}>{label}</span>
+                          <span style={{ fontSize: 13, fontWeight: 600, fontVariantNumeric: "tabular-nums", color: label === "Today's Close" ? (latestRow.close >= latestRow.open ? "#60a5fa" : "#a78bfa") : "var(--text-secondary)" }}>
                             {(value as number).toFixed(5)}
                           </span>
                         </div>
                       ))}
                     </div>
-                    <div style={{ height: 1, background: "var(--border-medium)", marginTop: 14 }} />
+                    <div style={{ height: 1, background: "var(--border-medium)", marginTop: 12 }} />
                   </>
                 )}
                 </div>

@@ -34,6 +34,14 @@ export interface TradeFormValues {
   technicalNotes: string;
   tags:          string;
   tradeRef:      string;
+  slPips:        string;
+  tpPips:        string;
+  maePips:       string;
+  mae:           string;
+  maeTime:       string;
+  mfePips:       string;
+  mfe:           string;
+  mfeTime:       string;
   images:        TradeImageDraft[];
   // Journal
   emotionBefore:    string;
@@ -48,11 +56,12 @@ export interface TradeFormValues {
 const EMOTION_OPTIONS = [
   "", "Calm", "Confident", "Focused", "Neutral",
   "Anxious", "FOMO", "Revenge", "Overconfident", "Hesitant", "Greedy",
+  "Disappointment in myself",
 ];
 
 const SETUP_SUGGESTIONS = [
   "Supply Zone", "Demand Zone", "Liquidity Sweep", "Wyckoff",
-  "Break & Retest", "No Setup",
+  "Break & Retest", "8am Box", "No Setup",
 ];
 
 const MAJOR_PAIRS = [
@@ -69,10 +78,21 @@ const MAJOR_PAIRS = [
 
 const TAG_GROUPS = [
   { label: "Session",    tags: ["asia", "london", "new-york"] },
-  { label: "Setup",      tags: ["supply", "demand", "liquidity-sweep", "wyckoff"] },
-  { label: "Candle",     tags: ["engulfing", "pin"] },
-  { label: "Type",       tags: ["scalp", "day", "swing"] },
+  { label: "Setup",      tags: ["supply", "demand", "liquidity-sweep", "wyckoff", "break-retest"] },
+  { label: "Action",     tags: ["prediction", "reaction"] },
+  { label: "Candle Type", tags: ["engulfing", "pin", "doji", "hammer", "shooting-star", "inside-bar", "outside-bar", "morning-star", "evening-star", "spinning-top"] },
+  { label: "Chart Patterns", tags: ["head-shoulders", "pennant", "flag", "wedge", "triangle", "double-top", "double-bottom", "knife", "channel", "cup-handle"] },
+  { label: "Type",       tags: ["scalp", "day", "swing", "reversal", "continuation"] },
   { label: "Psychology", tags: ["patience", "impatience", "fomo", "revenge", "greedy", "scared", "no-setup", "bad-entry", "exit-early", "early-entry"] },
+];
+
+// Column layout for the Tags panel — groups sharing a column stack vertically.
+const TAG_COLUMNS = [
+  ["Session", "Type"],
+  ["Setup", "Action"],
+  ["Candle Type"],
+  ["Chart Patterns"],
+  ["Psychology"],
 ];
 
 function todayLocal() {
@@ -87,12 +107,10 @@ function nowTimeLocal() {
   return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
-function makeEmpty(defaultDate?: string): TradeFormValues {
-  const date = defaultDate ?? todayLocal();
-  const now  = `${date}T${nowTimeLocal()}`;
+function makeEmpty(_defaultDate?: string): TradeFormValues {
   return {
-    openedAt: now,
-    closedAt: now,
+    openedAt: "",
+    closedAt: "",
     instrument: "",
     side: "long",
     setupName: "",
@@ -106,6 +124,14 @@ function makeEmpty(defaultDate?: string): TradeFormValues {
     technicalNotes: "",
     tags: "",
     tradeRef: "",
+    slPips: "",
+    tpPips: "",
+    maePips: "",
+    mae: "",
+    maeTime: "",
+    mfePips: "",
+    mfe: "",
+    mfeTime: "",
     images: [],
     emotionBefore: "",
     emotionAfter: "",
@@ -139,6 +165,14 @@ function tradeToFormValues(t: TradeWithJournal): TradeFormValues {
     technicalNotes:  norm(t.technicalNotes),
     tags:            norm(t.tags),
     tradeRef:        norm(t.tradeRef),
+    slPips:          t.slPips != null ? String(t.slPips) : "",
+    tpPips:          t.tpPips != null ? String(t.tpPips) : "",
+    maePips:         t.maePips != null ? String(t.maePips) : "",
+    mae:             t.mae     != null ? String(t.mae)     : "",
+    maeTime:         dt(t.maeTime),
+    mfePips:         t.mfePips != null ? String(t.mfePips) : "",
+    mfe:             t.mfe     != null ? String(t.mfe)     : "",
+    mfeTime:         dt(t.mfeTime),
     images:          [], // loaded async by the Screenshots tab (see loadTradeImages effect)
     emotionBefore:   norm(t.journal?.emotionBefore),
     emotionAfter:    norm(t.journal?.emotionAfter),
@@ -265,6 +299,7 @@ function Input({
   placeholder,
   step,
   cents,
+  style,
 }: {
   value: string;
   onChange: (v: string) => void;
@@ -272,6 +307,7 @@ function Input({
   placeholder?: string;
   step?: string;
   cents?: boolean;
+  style?: React.CSSProperties;
 }) {
   const [focused, setFocused] = useState(false);
   return (
@@ -292,6 +328,7 @@ function Input({
       className={inputClass}
       style={{
         ...inputStyle,
+        ...style,
         ...(focused
           ? { border: "1px solid var(--accent-border)", boxShadow: "0 0 0 2px var(--accent-glow)" }
           : {}),
@@ -586,7 +623,6 @@ interface Props {
   account: Account;
   existingTrade?: TradeWithJournal | null;
   defaultDate?: string;
-  defaultValues?: TradeFormValues;
   onClose: () => void;
   onSaved: (values: TradeFormValues) => Promise<void>;
   onDuplicate?: (values: TradeFormValues) => void;
@@ -594,10 +630,10 @@ interface Props {
 
 type Tab = "trade" | "journal" | "screenshots";
 
-export function TradeForm({ account, existingTrade, defaultDate, defaultValues, onClose, onSaved, onDuplicate }: Props) {
+export function TradeForm({ account, existingTrade, defaultDate, onClose, onSaved, onDuplicate }: Props) {
   const isEdit = existingTrade != null;
   const [values, setValues]   = useState<TradeFormValues>(() =>
-    isEdit ? tradeToFormValues(existingTrade!) : (defaultValues ?? makeEmpty(defaultDate))
+    isEdit ? tradeToFormValues(existingTrade!) : makeEmpty(defaultDate)
   );
   const [tab, setTab]         = useState<Tab>("trade");
   const [saving, setSaving]   = useState(false);
@@ -662,7 +698,13 @@ export function TradeForm({ account, existingTrade, defaultDate, defaultValues, 
     setSaving(true);
     try {
       const toSave = ftmoTime
-        ? { ...values, openedAt: ftmoTimeToLocal(values.openedAt), closedAt: ftmoTimeToLocal(values.closedAt) }
+        ? {
+            ...values,
+            openedAt: ftmoTimeToLocal(values.openedAt),
+            closedAt: ftmoTimeToLocal(values.closedAt),
+            maeTime:  ftmoTimeToLocal(values.maeTime),
+            mfeTime:  ftmoTimeToLocal(values.mfeTime),
+          }
         : values;
       await onSaved(toSave);
     } finally {
@@ -767,7 +809,7 @@ export function TradeForm({ account, existingTrade, defaultDate, defaultValues, 
             {isEdit && onDuplicate && (
               <button
                 type="button"
-                onClick={() => onDuplicate(values)}
+                onClick={() => onDuplicate({ ...values, tradeRef: "", pnl: "", exitPrice: "" })}
                 className="px-4 py-2 rounded-lg text-[12px] font-medium transition-opacity hover:opacity-70"
                 style={{
                   background: "rgba(255,255,255,0.05)",
@@ -848,56 +890,72 @@ interface TabProps {
 
 function TradeTab({ values, set, rr, errors = {}, ftmoTime, setFtmoTime }: TabProps) {
   return (
-    <div className="flex flex-col gap-1.5">
+    <div className="flex flex-col gap-1.5" style={{ paddingTop: 12 }}>
 
       {/* Opened / Closed */}
       <div className="grid grid-cols-2 gap-3">
-        <FormField label="Opened at" required>
+        <FormField
+          label="Opened at"
+          required
+          labelRight={
+            // No closedAt = open position — this is what the Analytics chart's
+            // open-position overlay and the Calendar/daily_stats rollups key off
+            // of, so give it an explicit affordance rather than relying on
+            // someone noticing they can blank the datetime field below.
+            <label className="flex items-center gap-1.5 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={!values.closedAt}
+                onChange={(e) => set("closedAt", e.target.checked ? "" : `${todayLocal()}T${nowTimeLocal()}`)}
+                style={{
+                  accentColor: "var(--accent)",
+                  background: "var(--bg-panel-alt)",
+                  border: "1px solid var(--border-medium)",
+                  borderRadius: 3,
+                }}
+              />
+              <span
+                className="text-[10px] font-semibold uppercase tracking-wide"
+                style={{ color: values.closedAt ? "var(--text-muted)" : "#4ade80" }}
+              >
+                Open Trade
+              </span>
+            </label>
+          }
+        >
           <DateTimeInput value={values.openedAt} onChange={(v) => set("openedAt", v)} />
           {errors.openedAt && <p className="text-[11px] mt-1" style={{ color: "#f87171" }}>{errors.openedAt}</p>}
         </FormField>
-        <FormField label="Closed at">
+        <FormField
+          label="Closed at"
+          labelRight={
+            setFtmoTime && (
+              <label className="flex items-center gap-1.5 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={!!ftmoTime}
+                  onChange={(e) => setFtmoTime(e.target.checked)}
+                  style={{
+                    accentColor: "var(--accent)",
+                    background: "var(--bg-panel-alt)",
+                    border: "1px solid var(--border-medium)",
+                    borderRadius: 3,
+                  }}
+                />
+                <span className="text-[10px] font-medium" style={{ color: "var(--text-muted)" }}>
+                  FTMO Server Time
+                </span>
+              </label>
+            )
+          }
+        >
           <DateTimeInput value={values.closedAt} onChange={(v) => set("closedAt", v)} />
         </FormField>
       </div>
 
-      {/* No closedAt = open position — this is what the Analytics chart's
-          open-position overlay and the Calendar/daily_stats rollups key off
-          of, so give it an explicit affordance rather than relying on
-          someone noticing they can blank the datetime field above. */}
-      <div className="flex items-center justify-between -mt-1 mb-1">
-        {setFtmoTime ? (
-          <label className="flex items-center gap-2 cursor-pointer select-none">
-            <input
-              type="checkbox"
-              checked={!!ftmoTime}
-              onChange={(e) => setFtmoTime(e.target.checked)}
-              style={{ accentColor: "var(--accent)" }}
-            />
-            <span className="text-[11px] font-medium" style={{ color: "var(--text-muted)" }}>
-              Times above are FTMO server time — convert to local on save
-            </span>
-          </label>
-        ) : <span />}
-        <label className="flex items-center gap-2 cursor-pointer select-none">
-          <input
-            type="checkbox"
-            checked={!values.closedAt}
-            onChange={(e) => set("closedAt", e.target.checked ? "" : `${todayLocal()}T${nowTimeLocal()}`)}
-            style={{ accentColor: "var(--accent)" }}
-          />
-          <span
-            className="text-[11px] font-semibold uppercase tracking-wide"
-            style={{ color: values.closedAt ? "var(--text-muted)" : "#4ade80" }}
-          >
-            Open Trade
-          </span>
-        </label>
-      </div>
-
       {/* Instrument + Side */}
-      <div className="grid grid-cols-2 gap-3">
-        <FormField label="Instrument" required>
+      <div className="flex gap-3">
+        <FormField label="Instrument" required className="w-32" labelSize={9}>
           <SelectInput
             value={values.instrument}
             onChange={(v) => set("instrument", v)}
@@ -907,7 +965,7 @@ function TradeTab({ values, set, rr, errors = {}, ftmoTime, setFtmoTime }: TabPr
           {errors.instrument && <p className="text-[11px] mt-1" style={{ color: "#f87171" }}>{errors.instrument}</p>}
         </FormField>
 
-        <FormField label="Side">
+        <FormField label="Side" className="w-60" labelSize={9}>
           <div className="flex rounded-lg overflow-hidden" style={{ border: "1px solid var(--border-medium)" }}>
             {(["long", "short"] as const).map((s) => (
               <button
@@ -930,99 +988,58 @@ function TradeTab({ values, set, rr, errors = {}, ftmoTime, setFtmoTime }: TabPr
             ))}
           </div>
         </FormField>
+
+        <FormField label="Trade ID / Ref" className="flex-1" labelSize={9}>
+          <Input
+            value={values.tradeRef}
+            onChange={(v) => set("tradeRef", v)}
+            placeholder="e.g. 7842913"
+          />
+        </FormField>
       </div>
 
+      <div style={{ height: 1, background: "var(--border-medium)", margin: "4px 0 12px" }} />
+
       {/* Setup name */}
-      <FormField label="Setup name">
-        <div className="relative">
+      <div className="flex items-end gap-3">
+        <FormField label="Setup name" className="w-52" centerLabel={false}>
           <Input
             value={values.setupName}
             onChange={(v) => set("setupName", v)}
             placeholder="London Open Break…"
           />
-          {/* Quick-pick chips */}
-          <div className="flex flex-wrap gap-1 mt-1">
-            {SETUP_SUGGESTIONS.map((s) => (
-              <button
-                key={s}
-                type="button"
-                onClick={() => set("setupName", s)}
-                className="px-2 py-0.5 rounded-md text-[10px] transition-colors"
-                style={{
-                  background: values.setupName === s ? "var(--accent-dim)" : "rgba(255,255,255,0.08)",
-                  color: values.setupName === s ? "var(--accent-text)" : "var(--text-secondary)",
-                  border: values.setupName === s ? "1px solid var(--accent-border)" : "1px solid rgba(255,255,255,0.14)",
-                  fontSize: 11,
-                }}
-              >
-                {s}
-              </button>
-            ))}
-          </div>
-        </div>
-      </FormField>
-
-      {/* Entry / Stop / Take Profit */}
-      <div>
-        <div className="grid grid-cols-3 gap-3 mb-1">
-          <FormField label="Entry">
-            <Input type="number" step="0.00001" value={values.entryPrice} onChange={(v) => set("entryPrice", v)} placeholder="0.00" />
-          </FormField>
-          <FormField label="Stop">
-            <Input type="number" step="0.00001" value={values.stopPrice} onChange={(v) => set("stopPrice", v)} placeholder="0.00" />
-          </FormField>
-          <FormField label="Take Profit">
-            <Input type="number" step="0.00001" value={values.targetPrice} onChange={(v) => set("targetPrice", v)} placeholder="0.00" />
-          </FormField>
-        </div>
-
-        {/* R:R badge + Exit Price */}
-        <div className="flex items-end gap-3">
-          {rr && rr !== "—" && (
-            <div style={{ flex: 1 }}>
-              <div
-                className="flex items-center justify-center gap-1.5 rounded-lg"
-                style={{ background: "var(--accent-dim)", border: "1px solid var(--accent-border)", height: 34 }}
-              >
-                <span className="text-[10px] font-semibold uppercase tracking-widest" style={{ color: "var(--text-secondary)" }}>
-                  R:R
-                </span>
-                <span className="text-[13px] font-bold tabular-nums" style={{ color: "var(--accent-text)" }}>
-                  {rr}
-                </span>
-              </div>
-            </div>
-          )}
-          <div style={{ flex: 1 }}>
-            <FormField label="Exit Price">
-              <Input type="number" step="0.00001" value={values.exitPrice} onChange={(v) => set("exitPrice", v)} placeholder="0.00" />
-            </FormField>
-          </div>
-        </div>
-      </div>
-
-      {/* Size / Fees / P&L */}
-      <div className="grid grid-cols-3 gap-3">
-        <FormField label="Size / Lots">
-          <Input type="number" step="0.01" cents value={values.size} onChange={(v) => set("size", v)} placeholder="1.00" />
         </FormField>
-        <FormField label="Fees">
-          <Input type="number" step="0.01" cents value={values.fees} onChange={(v) => set("fees", v)} placeholder="0.00" />
-        </FormField>
-        <FormField label="P&L ($)">
-          <Input
-            type="number"
-            step="0.01"
-            cents
-            value={values.pnl}
-            onChange={(v) => set("pnl", v)}
-            placeholder="+500.00"
-          />
-        </FormField>
+        {/* Quick-pick chips — multi-select, comma-joined into setupName, wrapped to two rows */}
+        <div className="flex flex-wrap gap-0.5 flex-1" style={{ maxHeight: 64, overflowY: "hidden" }}>
+            {SETUP_SUGGESTIONS.map((s) => {
+              const current  = values.setupName.split(",").map((t) => t.trim()).filter(Boolean);
+              const isActive = current.includes(s);
+              const toggle = () => {
+                const next = isActive ? current.filter((t) => t !== s) : [...current, s];
+                set("setupName", next.join(", "));
+              };
+              return (
+                <button
+                  key={s}
+                  type="button"
+                  onClick={toggle}
+                  className="px-1.5 py-0.5 rounded-md transition-colors shrink-0 whitespace-nowrap"
+                  style={{
+                    background: isActive ? "var(--accent-dim)" : "rgba(255,255,255,0.08)",
+                    color: isActive ? "var(--accent-text)" : "var(--text-secondary)",
+                    border: isActive ? "1px solid var(--accent-border)" : "1px solid rgba(255,255,255,0.14)",
+                    fontSize: 10,
+                  }}
+                >
+                  {s}
+                </button>
+              );
+            })}
+        </div>
       </div>
 
       {/* Technical notes */}
-      <FormField label="Technical notes">
+      <FormField label="Technical notes" centerLabel={false}>
         <Textarea
           value={values.technicalNotes}
           onChange={(v) => set("technicalNotes", v)}
@@ -1031,37 +1048,177 @@ function TradeTab({ values, set, rr, errors = {}, ftmoTime, setFtmoTime }: TabPr
         />
       </FormField>
 
+      <div style={{ height: 1, background: "var(--border-medium)", margin: "4px 0 12px" }} />
+
+      {/* Entry / Stop / Take Profit */}
+      <div>
+        <div className="flex gap-3 mb-3">
+          <FormField label="Entry" className="w-20" labelSize={9}>
+            <Input type="number" step="0.00001" value={values.entryPrice} onChange={(v) => set("entryPrice", v)} placeholder="0.00" />
+          </FormField>
+          <div className="self-end" style={{ width: 1, height: 30, background: "var(--border-medium)" }} />
+          <FormField label="SL" className="w-20" labelSize={9}>
+            <Input type="number" step="0.00001" value={values.stopPrice} onChange={(v) => set("stopPrice", v)} placeholder="0.00" />
+          </FormField>
+          <FormField label="SL Pips" className="w-20" labelSize={9}>
+            <Input type="number" step="0.1" value={values.slPips} onChange={(v) => set("slPips", v)} placeholder="0" />
+          </FormField>
+          <div className="self-end" style={{ width: 1, height: 30, background: "var(--border-medium)" }} />
+          <FormField label="TP" className="w-20" labelSize={9}>
+            <Input type="number" step="0.00001" value={values.targetPrice} onChange={(v) => set("targetPrice", v)} placeholder="0.00" />
+          </FormField>
+          <FormField label="TP Pips" className="w-20" labelSize={9}>
+            <Input type="number" step="0.1" value={values.tpPips} onChange={(v) => set("tpPips", v)} placeholder="0" />
+          </FormField>
+        </div>
+
+        {/* Exit + Size + Fees + R:R badge */}
+        <div className="flex items-end gap-3">
+          <div className="w-20">
+            <FormField label="Exit" labelSize={9}>
+              <Input type="number" step="0.00001" value={values.exitPrice} onChange={(v) => set("exitPrice", v)} placeholder="0.00" />
+            </FormField>
+          </div>
+          <div className="self-end" style={{ width: 1, height: 30, background: "var(--border-medium)" }} />
+          <FormField label="Size / Lots" className="w-20" labelSize={9}>
+            <Input type="number" step="0.01" cents value={values.size} onChange={(v) => set("size", v)} placeholder="1.00" />
+          </FormField>
+          <FormField label="Fees" className="w-20" boldLabel={false} labelSize={9}>
+            <Input type="number" step="0.01" cents value={values.fees} onChange={(v) => set("fees", v)} placeholder="0.00" />
+          </FormField>
+          <div className="self-end" style={{ width: 1, height: 30, background: "var(--border-medium)" }} />
+          {rr && rr !== "—" && (
+            <FormField label="R:R" className="w-20" labelSize={9}>
+              <div
+                className="flex items-center justify-center rounded-lg"
+                style={{ background: "var(--accent-dim)", border: "1px solid var(--accent-border)", height: 34 }}
+              >
+                <span className="text-[13px] font-bold tabular-nums" style={{ color: "var(--accent-text)" }}>
+                  {rr}
+                </span>
+              </div>
+            </FormField>
+          )}
+          <FormField label="P&L ($)" className="w-20" labelSize={9}>
+            <div className="relative">
+              <span
+                className="absolute pointer-events-none"
+                style={{
+                  left: values.pnl && parseFloat(values.pnl) < 0 ? 13 : 7,
+                  top: "50%",
+                  transform: "translateY(-50%)",
+                  fontSize: 11,
+                  fontWeight: values.pnl && parseFloat(values.pnl) !== 0 ? 700 : 400,
+                  color: values.pnl && parseFloat(values.pnl) > 0
+                    ? "#4ade80"
+                    : values.pnl && parseFloat(values.pnl) < 0
+                    ? "#f87171"
+                    : "var(--text-muted)",
+                }}
+              >
+                $
+              </span>
+              <Input
+                type="number"
+                step="0.01"
+                cents
+                value={values.pnl}
+                onChange={(v) => set("pnl", v)}
+                placeholder="500.00"
+                style={{
+                  paddingLeft: values.pnl && parseFloat(values.pnl) < 0 ? 21 : 16,
+                  paddingRight: 4,
+                  fontSize: 11,
+                  ...(values.pnl && parseFloat(values.pnl) > 0
+                    ? { background: "rgba(34,197,94,0.15)", border: "1px solid rgba(34,197,94,0.45)", color: "#4ade80", fontWeight: 700 }
+                    : values.pnl && parseFloat(values.pnl) < 0
+                    ? { background: "rgba(239,68,68,0.15)", border: "1px solid rgba(239,68,68,0.45)", color: "#f87171", fontWeight: 700 }
+                    : {}),
+                }}
+              />
+            </div>
+          </FormField>
+        </div>
+      </div>
+
+      <div style={{ height: 1, background: "var(--border-medium)", margin: "12px 0 4px" }} />
+
+      {/* MAE / MFE */}
+      <div className="grid grid-cols-2 gap-3">
+        <div className="flex gap-2 col-span-2">
+          <FormField label="MAE Pip" className="w-20" labelSize={9}>
+            <Input type="number" step="0.1" value={values.maePips} onChange={(v) => set("maePips", v)} placeholder="0" />
+          </FormField>
+          <FormField label="MAE Price" className="w-20" labelSize={9}>
+            <Input type="number" step="0.01" cents value={values.mae} onChange={(v) => set("mae", v)} placeholder="0.00" />
+          </FormField>
+          <div className="flex items-end gap-5 ml-3 flex-1">
+            <div className="self-end" style={{ width: 1, height: 30, background: "var(--border-medium)" }} />
+            <FormField label="MAE Time" className="flex-1" centerLabel={false} labelSize={9}>
+              <DateTimeInput value={values.maeTime} onChange={(v) => set("maeTime", v)} />
+            </FormField>
+          </div>
+        </div>
+        <div className="flex gap-2 col-span-2">
+          <FormField label="MFE Pip" className="w-20" labelSize={9}>
+            <Input type="number" step="0.1" value={values.mfePips} onChange={(v) => set("mfePips", v)} placeholder="0" />
+          </FormField>
+          <FormField label="MFE Price" className="w-20" labelSize={9}>
+            <Input type="number" step="0.01" cents value={values.mfe} onChange={(v) => set("mfe", v)} placeholder="0.00" />
+          </FormField>
+          <div className="flex items-end gap-5 ml-3 flex-1">
+            <div className="self-end" style={{ width: 1, height: 30, background: "var(--border-medium)" }} />
+            <FormField label="MFE Time" className="flex-1" centerLabel={false} labelSize={9}>
+              <DateTimeInput value={values.mfeTime} onChange={(v) => set("mfeTime", v)} />
+            </FormField>
+          </div>
+        </div>
+      </div>
+
+      <div style={{ height: 1, background: "var(--border-medium)", margin: "4px 0" }} />
+
       {/* Tags */}
-      <FormField label="Tags">
-        <div className="flex flex-col gap-1">
-          {TAG_GROUPS.map(({ label, tags }) => {
+      <FormField label="Tags" centerLabel={false}>
+        <div className="flex gap-2 overflow-x-auto" style={{ paddingBottom: 2 }}>
+          {TAG_COLUMNS.map((labels, i) => {
             const currentTags = values.tags.split(",").map(t => t.trim()).filter(Boolean);
             return (
-              <div key={label}>
-                <div className="text-[9px] uppercase tracking-widest mb-0.5" style={{ color: "var(--text-muted)" }}>{label}</div>
-                <div className="flex flex-wrap gap-1">
-                {tags.map((tag) => {
-                  const isActive = currentTags.includes(tag);
-                  const toggle = () => {
-                    const next = isActive
-                      ? currentTags.filter(t => t !== tag)
-                      : [...currentTags, tag];
-                    set("tags", next.join(", "));
-                  };
+              <div key={labels.join("-")} className="flex gap-2 shrink-0">
+                {i > 0 && <div style={{ width: 1, background: "var(--border-medium)" }} />}
+                <div className="flex flex-col gap-2">
+                {labels.map((label, li) => {
+                  const tags = TAG_GROUPS.find((g) => g.label === label)!.tags;
                   return (
-                    <button
-                      key={tag}
-                      type="button"
-                      onClick={toggle}
-                      className="px-2 py-0.5 rounded-md text-[11px] transition-colors"
-                      style={{
-                        background: isActive ? "var(--accent-dim)" : "rgba(255,255,255,0.08)",
-                        color: isActive ? "var(--accent-text)" : "var(--text-secondary)",
-                        border: isActive ? "1px solid var(--accent-border)" : "1px solid rgba(255,255,255,0.14)",
-                      }}
-                    >
-                      {tag}
-                    </button>
+                    <div key={label} className="flex flex-col gap-1">
+                      {li > 0 && <div style={{ height: 1, background: "var(--border-medium)", margin: "6px 0" }} />}
+                      <div className="text-[9px] uppercase tracking-widest text-center" style={{ color: "var(--text-muted)" }}>{label}</div>
+                      {tags.map((tag) => {
+                        const isActive = currentTags.includes(tag);
+                        const toggle = () => {
+                          const next = isActive
+                            ? currentTags.filter(t => t !== tag)
+                            : [...currentTags, tag];
+                          set("tags", next.join(", "));
+                        };
+                        return (
+                          <button
+                            key={tag}
+                            type="button"
+                            onClick={toggle}
+                            className="px-1.5 py-0.5 rounded-md transition-colors text-center whitespace-nowrap"
+                            style={{
+                              background: isActive ? "var(--accent-dim)" : "rgba(255,255,255,0.08)",
+                              color: isActive ? "var(--accent-text)" : "var(--text-secondary)",
+                              border: isActive ? "1px solid var(--accent-border)" : "1px solid rgba(255,255,255,0.14)",
+                              fontSize: 11,
+                              lineHeight: 1.4,
+                            }}
+                          >
+                            {tag}
+                          </button>
+                        );
+                      })}
+                    </div>
                   );
                 })}
                 </div>
@@ -1069,15 +1226,6 @@ function TradeTab({ values, set, rr, errors = {}, ftmoTime, setFtmoTime }: TabPr
             );
           })}
         </div>
-      </FormField>
-
-      {/* Trade ID / Ref */}
-      <FormField label="Trade ID / Ref">
-        <Input
-          value={values.tradeRef}
-          onChange={(v) => set("tradeRef", v)}
-          placeholder="e.g. 7842913"
-        />
       </FormField>
     </div>
   );

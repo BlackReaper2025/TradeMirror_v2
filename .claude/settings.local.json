@@ -138,7 +138,30 @@
       "Bash(sort -t: -k3 -u)",
       "Bash(awk 'NR>=2041 && NR<=2172 {n=gsub\\(/<div/,\"<div\"\\); m=gsub\\(/<\\\\/div>/,\"<\\\\/div>\"\\); depth+=n-m; printf \"%d\\\\t%d\\\\t%s\\\\n\", NR, depth, $0}' src/pages/AnalyticsV3.tsx)",
       "Bash(awk 'NR>=2039 && NR<=2062 {n=gsub\\(/<div/,\"<div\"\\); m=gsub\\(/<\\\\/div>/,\"<\\\\/div>\"\\); depth+=n-m; printf \"%d\\\\t%d\\\\t%s\\\\n\", NR, depth, $0}' src/pages/AnalyticsV3.tsx)",
-      "Bash(npm install *)"
+      "Bash(npm install *)",
+      "Bash(npm -v)",
+      "Bash(curl -s -A \"Mozilla/5.0\" \"https://nfs.faireconomy.media/ff_calendar_thisweek.json\")",
+      "Bash(curl -s -A \"Mozilla/5.0\" \"https://nfs.faireconomy.media/ff_calendar_thisweek.json\" -o /tmp/ff.json)",
+      "Bash(curl -s -A \"Mozilla/5.0\" \"https://nfs.faireconomy.media/ff_calendar_thisweek.json\" -o \"C:/Users/Geoff/AppData/Local/Temp/claude/D--Dev-TradeMirror-v2-TradeMirror/b5e532ae-ad50-4fbc-94ad-81a2a1903b13/scratchpad/ff.json\")",
+      "Bash(grep -n \"^function \\\\|^export default function\\\\|^const.*=.*\\(.*\\)\\\\s*=>\\\\s*{$\" src/pages/AnalyticsV3.tsx)",
+      "Bash(awk -F: '$1<11560')",
+      "WebFetch(domain:ftmo.com)",
+      "WebFetch(domain:nfs.faireconomy.media)",
+      "Bash(command -v python3)",
+      "Bash(/c/Python313/python -c ' *)",
+      "Bash(git checkout *)",
+      "Bash(/c/Python313/python.exe -c ' *)",
+      "Bash(/c/Python313/python.exe \"C:\\\\Users\\\\Geoff\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\D--Dev-TradeMirror-v2-TradeMirror\\\\a179d630-9db5-41e5-af9e-9faac17558cb\\\\scratchpad\\\\check_traderef.py\")",
+      "Bash(/c/Python313/python.exe \"C:\\\\Users\\\\Geoff\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\D--Dev-TradeMirror-v2-TradeMirror\\\\a179d630-9db5-41e5-af9e-9faac17558cb\\\\scratchpad\\\\check_calendar.py\")",
+      "Bash(/c/Python313/python.exe \"C:\\\\Users\\\\Geoff\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\D--Dev-TradeMirror-v2-TradeMirror\\\\a179d630-9db5-41e5-af9e-9faac17558cb\\\\scratchpad\\\\find_offset.py\")",
+      "Bash(/c/Python313/python.exe \"C:\\\\Users\\\\Geoff\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\D--Dev-TradeMirror-v2-TradeMirror\\\\a179d630-9db5-41e5-af9e-9faac17558cb\\\\scratchpad\\\\find_offset2.py\")",
+      "Bash(/c/Python313/python.exe \"C:\\\\Users\\\\Geoff\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\D--Dev-TradeMirror-v2-TradeMirror\\\\a179d630-9db5-41e5-af9e-9faac17558cb\\\\scratchpad\\\\check_offset7.py\")",
+      "Bash(powershell -NoProfile -Command 'Get-Process | Where-Object { $_.ProcessName -match '\\\\''trademirror|TradeMirror'\\\\'' } | Select-Object ProcessName, Id')",
+      "Bash(/c/Python313/python.exe \"C:\\\\Users\\\\Geoff\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\D--Dev-TradeMirror-v2-TradeMirror\\\\a179d630-9db5-41e5-af9e-9faac17558cb\\\\scratchpad\\\\move_trade.py\")",
+      "Bash(powershell -NoProfile -Command \"Get-Process -Id 6084 -ErrorAction SilentlyContinue | Select-Object ProcessName, Path, StartTime\")",
+      "Bash(powershell -NoProfile -Command 'Get-Process node -ErrorAction SilentlyContinue | Select-Object Id, ProcessName, Path; Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | Where-Object { $_.LocalPort -in 1420,5173,3000 } | Select-Object LocalAddress, LocalPort, OwningProcess')",
+      "Bash(powershell -NoProfile -Command \"Get-CimInstance Win32_Process -Filter \\\\\"Name='node.exe'\\\\\" | Select-Object ProcessId, CommandLine | Format-List\")",
+      "Bash(powershell -NoProfile -Command \"Get-NetTCPConnection -State Listen -OwningProcess 10960 -ErrorAction SilentlyContinue | Select-Object LocalAddress, LocalPort\")"
     ]
   }
 }
