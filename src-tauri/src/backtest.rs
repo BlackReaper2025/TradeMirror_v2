@@ -262,8 +262,8 @@ pub fn m15_suite(m15: &[CandleV3]) -> Vec<Strategy> {
 
     let (h1_raw, h1_last) = aggregate(m15, |c| c.timestamp.get(0..13).unwrap_or(&c.timestamp).to_string());
     let (h4_raw, h4_last) = aggregate(m15, h4_key);
-    let h1     = Rc::new(crate::indicators::compute(h1_raw));
-    let h4     = Rc::new(crate::indicators::compute(h4_raw));
+    let h1     = Rc::new(crate::indicators::compute(h1_raw, "EURUSD"));
+    let h4     = Rc::new(crate::indicators::compute(h4_raw, "EURUSD"));
     let h1_map = Rc::new(map_htf(&h1_last, m15.len()));
     let h4_map = Rc::new(map_htf(&h4_last, m15.len()));
 

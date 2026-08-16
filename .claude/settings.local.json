@@ -161,7 +161,26 @@
       "Bash(powershell -NoProfile -Command \"Get-Process -Id 6084 -ErrorAction SilentlyContinue | Select-Object ProcessName, Path, StartTime\")",
       "Bash(powershell -NoProfile -Command 'Get-Process node -ErrorAction SilentlyContinue | Select-Object Id, ProcessName, Path; Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | Where-Object { $_.LocalPort -in 1420,5173,3000 } | Select-Object LocalAddress, LocalPort, OwningProcess')",
       "Bash(powershell -NoProfile -Command \"Get-CimInstance Win32_Process -Filter \\\\\"Name='node.exe'\\\\\" | Select-Object ProcessId, CommandLine | Format-List\")",
-      "Bash(powershell -NoProfile -Command \"Get-NetTCPConnection -State Listen -OwningProcess 10960 -ErrorAction SilentlyContinue | Select-Object LocalAddress, LocalPort\")"
+      "Bash(powershell -NoProfile -Command \"Get-NetTCPConnection -State Listen -OwningProcess 10960 -ErrorAction SilentlyContinue | Select-Object LocalAddress, LocalPort\")",
+      "PowerShell(Get-Command python, python3, py -ErrorAction SilentlyContinue)",
+      "PowerShell(python \"C:\\\\Users\\\\Geoff\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\D--Dev-TradeMirror-v2-TradeMirror\\\\7dc2c0d1-5051-4c2f-aa2a-e7ed1260b6b2\\\\scratchpad\\\\check_dupes.py\")",
+      "PowerShell(python \"C:\\\\Users\\\\Geoff\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\D--Dev-TradeMirror-v2-TradeMirror\\\\7dc2c0d1-5051-4c2f-aa2a-e7ed1260b6b2\\\\scratchpad\\\\compare_csv.py\")",
+      "PowerShell(python \"C:\\\\Users\\\\Geoff\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\D--Dev-TradeMirror-v2-TradeMirror\\\\7dc2c0d1-5051-4c2f-aa2a-e7ed1260b6b2\\\\scratchpad\\\\compare2.py\")",
+      "PowerShell(python \"C:\\\\Users\\\\Geoff\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\D--Dev-TradeMirror-v2-TradeMirror\\\\7dc2c0d1-5051-4c2f-aa2a-e7ed1260b6b2\\\\scratchpad\\\\fix_ftmo.py\")",
+      "Bash(ls -la \"C:\\\\Users\\\\Geoff\\\\Desktop\\\\Temp\\\\\" 2>/dev/null | grep -i heap)",
+      "Bash(ls -la \"/c/Users/Geoff/Desktop/Temp/\" | grep -i heap)",
+      "Bash(curl -sS -m 10 -A \"Mozilla/5.0 \\(compatible; TradeMirror/1.0\\)\" \"https://nfs.faireconomy.media/ff_calendar_thisweek.json\" -o /tmp/cal.json -w \"HTTP %{http_code}, size %{size_download} bytes\\\\n\")",
+      "Bash(curl -sS -m 10 -A \"Mozilla/5.0 \\(compatible; TradeMirror/1.0\\)\" -D - \"https://nfs.faireconomy.media/ff_calendar_thisweek.json\" -o /dev/null)",
+      "Bash(curl -sS -m 10 -A \"Mozilla/5.0 \\(compatible; TradeMirror/1.0\\)\" \"https://nfs.faireconomy.media/ff_calendar_thisweek.json\" -o /tmp/cal2.json -w \"HTTP %{http_code}, size %{size_download}\\\\n\")",
+      "Bash(python3 -c \"import json; d=json.load\\(open\\('/tmp/cal2.json'\\)\\); print\\(len\\(d\\), 'events'\\); print\\(d[0]\\); print\\(d[-1]\\)\")",
+      "Bash(node -e \"const d=require\\('/tmp/cal2.json'\\); console.log\\(d.length, 'events'\\); console.log\\(d[0]\\); console.log\\(d[d.length-1]\\);\")",
+      "Bash(curl -sS -m 10 -A \"Mozilla/5.0 \\(compatible; TradeMirror/1.0\\)\" -D - \"https://nfs.faireconomy.media/ff_calendar_thisweek.json?nocache=$\\(date +%s\\)\" -o /dev/null)",
+      "Bash(curl -sS -m 10 -A \"Mozilla/5.0 \\(compatible; TradeMirror/1.0\\)\" \"https://nfs.faireconomy.media/ff_calendar_nextweek.json\" -o /tmp/calnext.json -w \"HTTP %{http_code}, size %{size_download}\\\\n\")",
+      "Bash(curl -sS -m 10 -A \"Mozilla/5.0 \\(compatible; TradeMirror/1.0\\)\" \"https://nfs.faireconomy.media/ff_calendar_thisweek.json\" -o /tmp/cal_now.json -w \"HTTP %{http_code}, size %{size_download}\\\\n\")",
+      "WebFetch(domain:www.bls.gov)",
+      "WebFetch(domain:www.usinflationcalculator.com)",
+      "WebFetch(domain:cpiinflationcalculator.com)",
+      "WebFetch(domain:www.financecalendar.com)"
     ]
   }
 }

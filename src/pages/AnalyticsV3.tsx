@@ -5,7 +5,7 @@
 //  Row 2         — Evidence: 5 equal group cards (Trend, MACD, Momentum, Volatility, Directional)
 //  Row 3         — Detail:   Entry/Exit plan | Signal history dots | Live indicator bars
 //
-import { useEffect, useRef, useState, useCallback, useMemo, memo } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, useCallback, useMemo, memo } from "react";
 import { createPortal } from "react-dom";
 import {
   ComposedChart, Bar, Line, Area, XAxis, YAxis, ReferenceLine, ReferenceArea,
@@ -18,7 +18,8 @@ import { VerdictPanel }          from "../components/analytics/VerdictPanel";
 import { EvidenceCards }         from "../components/analytics/EvidenceCards";
 import { EntryExitPanel }        from "../components/analytics/EntryExitPanel";
 import { HistoryDotsPanel }      from "../components/analytics/HistoryDotsPanel";
-import { PairSelector }          from "../components/analytics/PairSelector";
+import { PairSelector, ALL_ASSETS } from "../components/analytics/PairSelector";
+import { InstrumentTicker }      from "../components/analytics/InstrumentTicker";
 import { AnalyticsClock }        from "../components/analytics/AnalyticsClock";
 import { useAnalytics, setLiveAnalytics, hasLiveAnalytics, signalHistory, historicalAccuracy,
   analysisResult as defaultAnalysisResult, signalTags, evidenceCards,
@@ -35,6 +36,7 @@ import type { AlertSound } from "../lib/alertSound";
 import { AlertsPanel, type Alert } from "../components/panels/AlertsPanel";
 import { computeSupplyDemandZones, type SupplyDemandZone } from "../lib/supplyDemand";
 import { computeAutoTrendlines, type TrendlineSegment } from "../lib/trendlines";
+import { decimalsForPair, formatPrice } from "../lib/priceFormat";
 import { invoke }                from "@tauri-apps/api/core";
 import {
   createChart, CandlestickSeries, AreaSeries, LineSeries,
@@ -1120,6 +1122,235 @@ class ReversalMarkerPrimitive {
   paneViews() { return this._views; }
 }
 
+// ─── Economic news event lines ────────────────────────────────────────────────
+// Vertical markers at the exact release time of selected economic-calendar
+// event types — reuses the same calendarEvents already fetched for the
+// Economic Calendar panel (one data source, no duplicate fetch/pipeline),
+// filtered to whichever categories are enabled and to the charted pair's
+// own two currencies.
+type NewsCategoryKey = "fomc" | "cpi" | "jobs";
+interface NewsCategoryDef { key: NewsCategoryKey; label: string; color: string; keywords: string[] }
+const NEWS_CATEGORY_DEFS: NewsCategoryDef[] = [
+  { key: "fomc", label: "FOMC", color: "#ef4444",
+    keywords: ["fomc statement", "fomc press conference", "fomc meeting minutes", "federal funds rate"] },
+  { key: "cpi", label: "CPI", color: "#f59e0b",
+    keywords: ["cpi m/m", "cpi y/y", "core cpi m/m", "core cpi y/y", "cpi q/q"] },
+  { key: "jobs", label: "Jobs Reports", color: "#3b82f6",
+    keywords: ["non-farm employment change", "unemployment rate", "average hourly earnings", "employment change"] },
+];
+// Which currencies' news are relevant to a given instrument. A genuine
+// forex-style pair ("EUR/USD") is relevant to both of its own two
+// currencies, same as before. Everything else this app lists — US indices
+// (US30/US100/US500), USOIL, US stocks, US ETFs, and USD-quoted commodities/
+// crypto (XAU/USD, BTC/USD, …) — is a USD-market instrument with no second
+// currency of its own, so splitting the raw symbol on "/" either produces
+// nothing that matches a real country code (leaving indices/stocks with no
+// news at all, including the USD releases that actually move them) or, for
+// XAU/BTC-style pairs, a harmless-but-meaningless non-USD "currency" that
+// never matches anything. Falling back to USD-only for every non-forex
+// instrument fixes both: relevant USD news (FOMC/CPI/Jobs) now shows on
+// indices, and no unrelated foreign country's news gets pulled in.
+function relevantNewsCurrencies(pair: string): string[] {
+  const parts = pair.split("/").map(c => c.toUpperCase());
+  return parts.length === 2 ? parts : ["USD"];
+}
+// The live calendar feed (ff_calendar_thisweek.json) only ever has the
+// current Sun-Sat window — no historical archive endpoint exists (confirmed:
+// every "lastweek"/date-range variant 404s). So all three US-release
+// categories below get their own small reference tables instead, sourced
+// from BLS/Fed's own published release archives, letting News plot across
+// loaded chart history instead of only whatever happens to fall in the
+// feed's current week. FOMC covers 2023–2026 (the Fed publishes its meeting
+// calendar years ahead, easy to source reliably); CPI and Jobs Reports are
+// deliberately scoped to 2025–2026 only — BLS's schedule pages block
+// automated fetching, and reconstructing exact historical monthly dates by
+// hand further back risks getting them wrong (these releases shift for
+// holidays and, as 2025 showed, government shutdowns — e.g. the Oct 2025
+// CPI was canceled outright, and the Sep/Oct/Nov 2025 jobs reports were
+// delayed and partly merged). A wrong date here is worse than a missing
+// one. All at 14:00 ET (FOMC) / 8:30 ET (CPI, Jobs).
+const FOMC_STATEMENT_DATES: string[] = [
+  "2023-02-01T14:00:00-05:00", "2023-03-22T14:00:00-04:00", "2023-05-03T14:00:00-04:00",
+  "2023-06-14T14:00:00-04:00", "2023-07-26T14:00:00-04:00", "2023-09-20T14:00:00-04:00",
+  "2023-11-01T14:00:00-04:00", "2023-12-13T14:00:00-05:00",
+  "2024-01-31T14:00:00-05:00", "2024-03-20T14:00:00-04:00", "2024-05-01T14:00:00-04:00",
+  "2024-06-12T14:00:00-04:00", "2024-07-31T14:00:00-04:00", "2024-09-18T14:00:00-04:00",
+  "2024-11-07T14:00:00-05:00", "2024-12-18T14:00:00-05:00",
+  "2025-01-29T14:00:00-05:00", "2025-03-19T14:00:00-04:00", "2025-05-07T14:00:00-04:00",
+  "2025-06-18T14:00:00-04:00", "2025-07-30T14:00:00-04:00", "2025-09-17T14:00:00-04:00",
+  "2025-10-29T14:00:00-04:00", "2025-12-10T14:00:00-05:00",
+  "2026-01-28T14:00:00-05:00", "2026-03-18T14:00:00-04:00", "2026-04-29T14:00:00-04:00",
+  "2026-06-17T14:00:00-04:00", "2026-07-29T14:00:00-04:00", "2026-09-16T14:00:00-04:00",
+  "2026-10-28T14:00:00-04:00", "2026-12-09T14:00:00-05:00",
+];
+// Consumer Price Index — released ~8:30 ET, generally the second week of
+// the month covering the prior month's data. No entry for October 2025:
+// that release was canceled outright by the government shutdown, not
+// merely delayed, so there is genuinely nothing to plot there. Source:
+// bls.gov CPI archive (news.release/archives/cpi_MMDDYYYY.htm) and
+// usinflationcalculator.com's published 2025–2026 schedule.
+const CPI_RELEASE_DATES: string[] = [
+  "2025-01-15T08:30:00-05:00", "2025-02-12T08:30:00-05:00", "2025-03-12T08:30:00-04:00",
+  "2025-04-10T08:30:00-04:00", "2025-05-13T08:30:00-04:00", "2025-06-11T08:30:00-04:00",
+  "2025-07-15T08:30:00-04:00", "2025-08-12T08:30:00-04:00", "2025-09-11T08:30:00-04:00",
+  "2025-10-24T08:30:00-04:00", /* Oct 2025 CPI: canceled, no release */
+  "2025-12-18T08:30:00-05:00",
+  "2026-01-13T08:30:00-05:00", "2026-02-13T08:30:00-05:00", "2026-03-11T08:30:00-05:00",
+  "2026-04-10T08:30:00-04:00", "2026-05-12T08:30:00-04:00", "2026-06-10T08:30:00-04:00",
+  "2026-07-14T08:30:00-04:00", "2026-08-12T08:30:00-04:00", "2026-09-11T08:30:00-04:00",
+  "2026-10-14T08:30:00-04:00", "2026-11-10T08:30:00-05:00", "2026-12-10T08:30:00-05:00",
+];
+// Employment Situation (Non-Farm Payrolls / Jobs Report) — released 8:30 ET,
+// normally the first Friday of the month covering the prior month's data.
+// No separate October 2025 entry: that report was merged into the November
+// release (Dec 16, 2025) rather than published on its own, another
+// shutdown-driven irregularity. Source: bls.gov Employment Situation
+// archive (news.release/archives/empsit_MMDDYYYY.htm) and
+// financecalendar.com's published 2026 schedule.
+const JOBS_RELEASE_DATES: string[] = [
+  "2025-01-10T08:30:00-05:00", "2025-02-07T08:30:00-05:00", "2025-03-07T08:30:00-05:00",
+  "2025-04-04T08:30:00-04:00", "2025-05-02T08:30:00-04:00", "2025-06-06T08:30:00-04:00",
+  "2025-07-03T08:30:00-04:00", "2025-08-01T08:30:00-04:00", "2025-09-05T08:30:00-04:00",
+  "2025-11-20T08:30:00-05:00", /* Sep 2025 jobs report, delayed */
+  "2025-12-16T08:30:00-05:00", /* Nov 2025 jobs report — Oct+Nov combined */
+  "2026-01-09T08:30:00-05:00", "2026-02-11T08:30:00-05:00", "2026-03-06T08:30:00-05:00",
+  "2026-04-03T08:30:00-04:00", "2026-05-08T08:30:00-04:00", "2026-06-05T08:30:00-04:00",
+  "2026-07-02T08:30:00-04:00", "2026-08-07T08:30:00-04:00", "2026-09-04T08:30:00-04:00",
+  "2026-10-02T08:30:00-04:00", "2026-11-06T08:30:00-05:00", "2026-12-04T08:30:00-05:00",
+];
+function eventNewsCategory(ev: EconomicEvent): NewsCategoryDef | null {
+  const title = ev.title.toLowerCase();
+  for (const def of NEWS_CATEGORY_DEFS) {
+    if (def.keywords.some(kw => title.includes(kw))) return def;
+  }
+  return null;
+}
+
+// A line is positioned either by its real time (resolved to the nearest
+// loaded bar, for anything within the loaded candle range) or, for the one
+// upcoming preview per category that hasn't happened yet, by a projected
+// logical index past the last loaded bar — timeToIndex has no bar to
+// resolve a future timestamp to, since none of the candles for it exist
+// yet.
+interface NewsLineData { time: UTCTimestamp | null; futureIndex?: number; label: string; color: string; }
+class NewsLineRenderer {
+  _p: NewsLinePrimitive;
+  constructor(p: NewsLinePrimitive) { this._p = p; }
+  draw(target: any) {
+    const chart = this._p._chart;
+    const series = this._p._series;
+    const lines = this._p._lines;
+    if (!chart || !series || lines.length === 0) return;
+    target.useBitmapCoordinateSpace((scope: any) => {
+      const ctx = scope.context;
+      const hr = scope.horizontalPixelRatio;
+      const vr = scope.verticalPixelRatio;
+      const h  = scope.bitmapSize.height;
+      const ts = chart.timeScale();
+
+      // Resolve every line's x-coordinate first, then sort left-to-right —
+      // lines arrive grouped by category (FOMC, then CPI, then Jobs, then
+      // live-feed), not by time, so packing rows in that arrival order
+      // could miss collisions between e.g. an earlier CPI date and a later
+      // FOMC date that land close together. Same greedy row-packing as
+      // ReversalMarkerRenderer's candle callouts: a label whose left edge
+      // would land inside the previous label's already-claimed span on a
+      // row drops to the next row down instead of overlapping it — this is
+      // what happens when two static-table dates a year apart (e.g. two
+      // Aug 12 CPI releases) sit close enough on screen that their text
+      // would otherwise sit on top of each other.
+      const resolved: { x: number; l: NewsLineData }[] = [];
+      for (const l of lines) {
+        let xRaw: number | null;
+        if (l.futureIndex !== undefined) {
+          // The one upcoming-per-category preview line — projected past the
+          // last loaded bar (see the effect that builds _lines), so there's
+          // no real bar to resolve via timeToIndex.
+          xRaw = ts.logicalToCoordinate(l.futureIndex as any);
+        } else {
+          // timeToIndex(time, true) snaps the event's exact release
+          // timestamp to whichever bar contains it (nearest-match), then
+          // logicalToCoordinate centers the line on that bar — the same
+          // "exact time → nearest bar" convention every other time-based
+          // primitive in this file uses (zones, 8am box, sessions).
+          let idx = ts.timeToIndex(l.time as UTCTimestamp, true);
+          if (idx === null) continue;
+          // Sub-daily bars (4H and finer) are labeled by their own bucket
+          // start time, so nearest-match landing on a bucket that opens
+          // after the event means it jumped over the bucket that should
+          // have contained it (confirmed on US500 4H) — step back one bar.
+          // Daily/Weekly bars are labeled differently: they open at 5pm ET,
+          // which is *later* than a same-day afternoon event even with a
+          // complete, gap-free series, so "opens after the event" is their
+          // normal case, not an error — applying this same correction there
+          // wrongly bumped a correct Jul 29 FOMC line back to Jul 28.
+          // Confirmed correct pre-correction on 1D/1W, so they're excluded.
+          if (this._p._applyBarCorrection) {
+            const barTimes = this._p._barTimes;
+            const i = idx as number;
+            const barStart = barTimes[i];
+            if (barStart !== undefined && barStart > (l.time as number) && i > 0) idx = i - 1;
+          }
+          xRaw = ts.logicalToCoordinate(idx as any);
+        }
+        if (xRaw === null) continue;
+        resolved.push({ x: xRaw * hr, l });
+      }
+      resolved.sort((a, b) => a.x - b.x);
+
+      ctx.font = `${Math.round(9 * vr)}px sans-serif`;
+      const rowGap  = 12 * vr;
+      const padding = 4 * hr;
+      const rows: number[] = []; // rightmost pixel already claimed, per row
+
+      for (const { x, l } of resolved) {
+        ctx.save();
+        ctx.strokeStyle = l.color;
+        ctx.lineWidth = hr;
+        ctx.setLineDash([4 * hr, 3 * hr]);
+        ctx.beginPath();
+        ctx.moveTo(x, 0);
+        ctx.lineTo(x, h);
+        ctx.stroke();
+        ctx.restore();
+
+        const left  = x + 3 * hr;
+        const right = left + ctx.measureText(l.label).width + padding;
+        let row = 0;
+        while (rows[row] !== undefined && left < rows[row]) row++;
+        rows[row] = right;
+
+        ctx.fillStyle = l.color;
+        ctx.textBaseline = "top";
+        ctx.fillText(l.label, left, 4 * vr + row * rowGap);
+      }
+    });
+  }
+}
+class NewsLinePaneView {
+  _p: NewsLinePrimitive;
+  constructor(p: NewsLinePrimitive) { this._p = p; }
+  update() {}
+  zOrder() { return "top" as const; }
+  renderer() { return new NewsLineRenderer(this._p); }
+}
+class NewsLinePrimitive {
+  _chart: any = null;
+  _series: any = null;
+  _lines: NewsLineData[];
+  // Bar-start times (Unix seconds), index-aligned with the chart's own
+  // logical indices — set alongside _lines. Used only by the renderer's
+  // sub-daily bar-correction (see there for why it's gated off for 1D/1W).
+  _barTimes: number[] = [];
+  _applyBarCorrection: boolean = true;
+  _views: NewsLinePaneView[] = [];
+  constructor(lines: NewsLineData[]) { this._lines = lines; }
+  attached({ chart, series }: any) { this._chart = chart; this._series = series; this._views = [new NewsLinePaneView(this)]; }
+  detached() { this._chart = null; this._series = null; this._views = []; }
+  updateAllViews() { this._views.forEach(v => v.update()); }
+  paneViews() { return this._views; }
+}
+
 // "My time" for time-of-day chart indicators (8am box, trading sessions) —
 // matches the app's existing local-time convention used for FTMO
 // time-of-day conversions (src/lib/ftmoTime.ts).
@@ -1468,7 +1699,7 @@ class TrendlinePrimitive {
 
 // ─── Price history chart ────────────────────────────────────────────────────────
 
-function PriceHistoryChart({ rows, pair, chartTf, setChartTf, livePrice, expandWidth, expandHeight, heightBoost, allPanelsCollapsed, onToggleAllPanels, rightOfChartCollapsed, onHeightChange }: { rows: SheetRow[]; pair: string; chartTf: "1W" | "1D" | "4H" | "1H" | "15M" | "5M" | "1M"; setChartTf: (tf: "1W" | "1D" | "4H" | "1H" | "15M" | "5M" | "1M") => void; livePrice: number | null; expandWidth: boolean; expandHeight: boolean; heightBoost: number; allPanelsCollapsed: boolean; onToggleAllPanels: () => void; rightOfChartCollapsed: boolean; onHeightChange: (h: number) => void }) {
+function PriceHistoryChart({ rows, pair, chartTf, setChartTf, livePrice, expandWidth, expandHeight, heightBoost, allPanelsCollapsed, onToggleAllPanels, rightOfChartCollapsed, onHeightChange, calendarEvents }: { rows: SheetRow[]; pair: string; chartTf: "1W" | "1D" | "4H" | "1H" | "15M" | "5M" | "1M"; setChartTf: (tf: "1W" | "1D" | "4H" | "1H" | "15M" | "5M" | "1M") => void; livePrice: number | null; expandWidth: boolean; expandHeight: boolean; heightBoost: number; allPanelsCollapsed: boolean; onToggleAllPanels: () => void; rightOfChartCollapsed: boolean; onHeightChange: (h: number) => void; calendarEvents: EconomicEvent[] }) {
   const [viewMode,   setViewMode]   = useState<"candles" | "line">("candles");
   const [tfRows,     setTfRows]     = useState<RawCandleTf[]>([]);
   const [tfLoading,  setTfLoading]  = useState(false);
@@ -1487,6 +1718,11 @@ function PriceHistoryChart({ rows, pair, chartTf, setChartTf, livePrice, expandW
   const [candleColorScheme, setCandleColorScheme] = useState<"default" | "tradingview">("tradingview");
   const candleColorSchemeRef = useRef(candleColorScheme);
   useEffect(() => { candleColorSchemeRef.current = candleColorScheme; }, [candleColorScheme]);
+  // Read via ref inside createSeries/addIndSeries (stable-identity callbacks
+  // with empty/unrelated dep arrays — see candleColorSchemeRef above) so
+  // switching instruments still picks up the right decimal precision.
+  const pairRef = useRef(pair);
+  useEffect(() => { pairRef.current = pair; }, [pair]);
   const [showCandleSettings, setShowCandleSettings] = useState(false);
   const [candleSettingsPos, setCandleSettingsPos] = useState<{ top: number; left: number } | null>(null);
   const viewModeBtnRef = useRef<HTMLButtonElement>(null);
@@ -1527,6 +1763,29 @@ function PriceHistoryChart({ rows, pair, chartTf, setChartTf, livePrice, expandW
   const [pivotSettingsPos, setPivotSettingsPos] = useState<{ top: number; left: number } | null>(null);
   const pivotBtnRef = useRef<HTMLButtonElement>(null);
   const pivotSettingsPopoverRef = useRef<HTMLDivElement>(null);
+
+  // Economic news event lines — its own toolbar button + settings popout,
+  // driven by the calendarEvents already fetched for the Economic Calendar
+  // panel (no separate fetch).
+  const [showNews, setShowNews] = useState(false);
+  const [newsCategoryVisibility, setNewsCategoryVisibility] = useState<Record<NewsCategoryKey, boolean>>({
+    fomc: true, cpi: true, jobs: true,
+  });
+  // Per-category, per-currency sub-filter — CPI and Jobs Reports both
+  // release under multiple countries (e.g. EUR/USD's own CPI plus every
+  // Eurozone country's CPI all match the "cpi" category), so the category
+  // toggle alone can't isolate just one side. Keyed "key:CURRENCY", true
+  // unless explicitly turned off — absent entries default to visible so
+  // switching pairs doesn't require re-enabling currencies never touched.
+  const [newsCurrencyVisibility, setNewsCurrencyVisibility] = useState<Record<string, boolean>>({});
+  const isNewsCurrencyVisible = useCallback(
+    (key: NewsCategoryKey, currency: string) => newsCurrencyVisibility[`${key}:${currency}`] !== false,
+    [newsCurrencyVisibility]
+  );
+  const [showNewsSettings, setShowNewsSettings] = useState(false);
+  const [newsSettingsPos, setNewsSettingsPos] = useState<{ top: number; left: number } | null>(null);
+  const newsBtnRef = useRef<HTMLButtonElement>(null);
+  const newsSettingsPopoverRef = useRef<HTMLDivElement>(null);
 
   // Trendline count per timeframe — how many support + resistance rays to
   // draw for each, configurable from the Lines settings panel.
@@ -1631,6 +1890,7 @@ function PriceHistoryChart({ rows, pair, chartTf, setChartTf, livePrice, expandW
   const marketSessionBoxesRef = useRef<TimeRangeBox[]>([]);
   const reversalMarkerPrimRef = useRef<ReversalMarkerPrimitive | null>(null);
   const pivotPrimRef = useRef<TimeRangeBoxPrimitive | null>(null);
+  const newsLinePrimRef = useRef<NewsLinePrimitive | null>(null);
   // Whether the next tfRows-driven applyData call should reset the visible
   // range/autoscale. True only for a genuine new instrument/timeframe load;
   // false for the background live-candle poll below, so the forming bar's
@@ -1646,7 +1906,7 @@ function PriceHistoryChart({ rows, pair, chartTf, setChartTf, livePrice, expandW
   const showEightAmBox = activeInds.has("session8am") && eightAmBoxEligibleTf;
   useEffect(() => {
     if (!showEightAmBox) { setEightAmCandles([]); return; }
-    const load = () => invoke<RawCandleTf[]>("get_live_candles", { pair, tf: "15M" })
+    const load = () => getLiveCandles(pair, "15M")
       .then(candles => setEightAmCandles(candles))
       .catch(() => setEightAmCandles([]));
     load();
@@ -1679,7 +1939,7 @@ function PriceHistoryChart({ rows, pair, chartTf, setChartTf, livePrice, expandW
   const sessionsActive = showSessions && sessionBoxEligibleTf;
   useEffect(() => {
     if (!sessionsActive) { setSessionCandles([]); return; }
-    const load = () => invoke<RawCandleTf[]>("get_live_candles", { pair, tf: "1H" })
+    const load = () => getLiveCandles(pair, "1H")
       .then(candles => setSessionCandles(candles))
       .catch(() => setSessionCandles([]));
     load();
@@ -1707,7 +1967,7 @@ function PriceHistoryChart({ rows, pair, chartTf, setChartTf, livePrice, expandW
     if (chartRef.current)
       activeIndsRef.current.forEach(key => removeIndSeries(key));
     shouldResetViewRef.current = true;
-    invoke<RawCandleTf[]>("get_live_candles", { pair, tf: chartTf })
+    getLiveCandles(pair, chartTf)
       .then(candles => setTfRows(candles))
       .catch(() => {})
       .finally(() => setTfLoading(false));
@@ -1720,7 +1980,7 @@ function PriceHistoryChart({ rows, pair, chartTf, setChartTf, livePrice, expandW
   useEffect(() => {
     const poll = () => {
       shouldResetViewRef.current = false;
-      invoke<RawCandleTf[]>("get_live_candles", { pair, tf: chartTf })
+      getLiveCandles(pair, chartTf)
         .then(candles => setTfRows(candles))
         .catch(() => {});
     };
@@ -1733,7 +1993,7 @@ function PriceHistoryChart({ rows, pair, chartTf, setChartTf, livePrice, expandW
   // high/low (and therefore zone tap detection) tracks live price.
   useEffect(() => {
     if (!showDailyZones) { setDailyZoneCandles([]); return; }
-    const load = () => invoke<RawCandleTf[]>("get_live_candles", { pair, tf: "1D" })
+    const load = () => getLiveCandles(pair, "1D")
       .then(candles => setDailyZoneCandles(candles))
       .catch(() => setDailyZoneCandles([]));
     load();
@@ -1744,7 +2004,7 @@ function PriceHistoryChart({ rows, pair, chartTf, setChartTf, livePrice, expandW
   // 4H zone candles — fetched + polled only while the 4H zone toggle is on
   useEffect(() => {
     if (!show4HZones) { setH4ZoneCandles([]); return; }
-    const load = () => invoke<RawCandleTf[]>("get_live_candles", { pair, tf: "4H" })
+    const load = () => getLiveCandles(pair, "4H")
       .then(candles => setH4ZoneCandles(candles))
       .catch(() => setH4ZoneCandles([]));
     load();
@@ -1755,7 +2015,7 @@ function PriceHistoryChart({ rows, pair, chartTf, setChartTf, livePrice, expandW
   // 1H zone candles — fetched + polled only while the 1H zone toggle is on
   useEffect(() => {
     if (!show1HZones) { setH1ZoneCandles([]); return; }
-    const load = () => invoke<RawCandleTf[]>("get_live_candles", { pair, tf: "1H" })
+    const load = () => getLiveCandles(pair, "1H")
       .then(candles => setH1ZoneCandles(candles))
       .catch(() => setH1ZoneCandles([]));
     load();
@@ -1774,7 +2034,7 @@ function PriceHistoryChart({ rows, pair, chartTf, setChartTf, livePrice, expandW
   // Weekly trendline candles — fetched only while the Weekly trendline toggle is on
   useEffect(() => {
     if (!showWeeklyTrend) { setWeeklyTrendCandles([]); return; }
-    invoke<RawCandleTf[]>("get_live_candles", { pair, tf: "1W" })
+    getLiveCandles(pair, "1W")
       .then(candles => setWeeklyTrendCandles(candles))
       .catch(() => setWeeklyTrendCandles([]));
   }, [showWeeklyTrend, pair]);
@@ -1782,7 +2042,7 @@ function PriceHistoryChart({ rows, pair, chartTf, setChartTf, livePrice, expandW
   // Daily trendline candles — fetched only while the Daily trendline toggle is on
   useEffect(() => {
     if (!showDailyTrend) { setDailyTrendCandles([]); return; }
-    invoke<RawCandleTf[]>("get_live_candles", { pair, tf: "1D" })
+    getLiveCandles(pair, "1D")
       .then(candles => setDailyTrendCandles(candles))
       .catch(() => setDailyTrendCandles([]));
   }, [showDailyTrend, pair]);
@@ -1790,7 +2050,7 @@ function PriceHistoryChart({ rows, pair, chartTf, setChartTf, livePrice, expandW
   // 4H trendline candles — fetched only while the 4H trendline toggle is on
   useEffect(() => {
     if (!show4HTrend) { setH4TrendCandles([]); return; }
-    invoke<RawCandleTf[]>("get_live_candles", { pair, tf: "4H" })
+    getLiveCandles(pair, "4H")
       .then(candles => setH4TrendCandles(candles))
       .catch(() => setH4TrendCandles([]));
   }, [show4HTrend, pair]);
@@ -1798,7 +2058,7 @@ function PriceHistoryChart({ rows, pair, chartTf, setChartTf, livePrice, expandW
   // 1H trendline candles — fetched only while the 1H trendline toggle is on
   useEffect(() => {
     if (!show1HTrend) { setH1TrendCandles([]); return; }
-    invoke<RawCandleTf[]>("get_live_candles", { pair, tf: "1H" })
+    getLiveCandles(pair, "1H")
       .then(candles => setH1TrendCandles(candles))
       .catch(() => setH1TrendCandles([]));
   }, [show1HTrend, pair]);
@@ -1806,7 +2066,7 @@ function PriceHistoryChart({ rows, pair, chartTf, setChartTf, livePrice, expandW
   // 15M trendline candles — fetched only while the 15M trendline toggle is on
   useEffect(() => {
     if (!show15MTrend) { setM15TrendCandles([]); return; }
-    invoke<RawCandleTf[]>("get_live_candles", { pair, tf: "15M" })
+    getLiveCandles(pair, "15M")
       .then(candles => setM15TrendCandles(candles))
       .catch(() => setM15TrendCandles([]));
   }, [show15MTrend, pair]);
@@ -1829,28 +2089,28 @@ function PriceHistoryChart({ rows, pair, chartTf, setChartTf, livePrice, expandW
   // same pattern as the trendline candles above.
   useEffect(() => {
     if (!showPivotWeekly) { setPivotWeeklyCandles([]); return; }
-    invoke<RawCandleTf[]>("get_live_candles", { pair, tf: "1W" })
+    getLiveCandles(pair, "1W")
       .then(candles => setPivotWeeklyCandles(candles))
       .catch(() => setPivotWeeklyCandles([]));
   }, [showPivotWeekly, pair]);
 
   useEffect(() => {
     if (!showPivotDaily) { setPivotDailyCandles([]); return; }
-    invoke<RawCandleTf[]>("get_live_candles", { pair, tf: "1D" })
+    getLiveCandles(pair, "1D")
       .then(candles => setPivotDailyCandles(candles))
       .catch(() => setPivotDailyCandles([]));
   }, [showPivotDaily, pair]);
 
   useEffect(() => {
     if (!showPivot4H) { setPivot4HCandles([]); return; }
-    invoke<RawCandleTf[]>("get_live_candles", { pair, tf: "4H" })
+    getLiveCandles(pair, "4H")
       .then(candles => setPivot4HCandles(candles))
       .catch(() => setPivot4HCandles([]));
   }, [showPivot4H, pair]);
 
   useEffect(() => {
     if (!showPivot1H) { setPivot1HCandles([]); return; }
-    invoke<RawCandleTf[]>("get_live_candles", { pair, tf: "1H" })
+    getLiveCandles(pair, "1H")
       .then(candles => setPivot1HCandles(candles))
       .catch(() => setPivot1HCandles([]));
   }, [showPivot1H, pair]);
@@ -1870,6 +2130,127 @@ function PriceHistoryChart({ rows, pair, chartTf, setChartTf, livePrice, expandW
     chartRef.current?.applyOptions({});
   }, [activeInds, showPivotWeekly, showPivotDaily, showPivot4H, showPivot1H,
       pivotWeeklyCandles, pivotDailyCandles, pivot4HCandles, pivot1HCandles]);
+
+  // Recompute news event lines + repaint whenever the toggle, enabled
+  // categories, the shared calendar feed, the charted pair, or the loaded
+  // candle range changes. Restricted to the charted pair's own two
+  // currencies — an EUR/USD chart has no use for a GBP jobs report line.
+  useEffect(() => {
+    const lines: NewsLineData[] = [];
+    let futureBarsNeeded = 0;
+    if (showNews && tfRows.length > 0) {
+      // Static-table dates (FOMC/CPI/Jobs) span years, but the chart only
+      // ever has whatever candle range is currently loaded (e.g. a handful
+      // of days on 15M). A date outside that range has no real bar to sit
+      // on — lightweight-charts' timeToIndex(time, true) would otherwise
+      // silently snap it to the nearest loaded edge bar instead of just
+      // not drawing it, which is what made every out-of-range future FOMC
+      // date pile up on the single most-recent candle. Bound to the
+      // loaded range (with one bar's slack past the last candle so a
+      // same-day event on the still-forming bar isn't excluded) — except
+      // for exactly one soonest-still-to-come date per category, tracked
+      // separately below and projected past the last bar instead of
+      // dropped, so News always previews what's coming next.
+      const firstT = Math.floor(new Date(tfRows[0].timestamp).getTime() / 1000);
+      const lastRow = tfRows[tfRows.length - 1];
+      const lastIndex = tfRows.length - 1;
+      const lastRowT = Math.floor(new Date(lastRow.timestamp).getTime() / 1000);
+      const barSeconds = tfRows.length > 1
+        ? lastRowT - Math.floor(new Date(tfRows[tfRows.length - 2].timestamp).getTime() / 1000)
+        : 0;
+      const lastT = lastRowT + barSeconds;
+      const inRange = (t: number) => t >= firstT && t <= lastT;
+
+      const nextFuture: Partial<Record<NewsCategoryKey, { time: number; label: string; color: string }>> = {};
+      const considerFuture = (key: NewsCategoryKey, t: number, label: string, color: string) => {
+        if (t <= lastT) return;
+        const cur = nextFuture[key];
+        if (!cur || t < cur.time) nextFuture[key] = { time: t, label, color };
+      };
+
+      const currencies = relevantNewsCurrencies(pair);
+      // FOMC/CPI/Jobs all come from the static tables above, not the live
+      // feed, so they can plot across the whole loaded chart history
+      // instead of only whatever happens to fall in the feed's current
+      // week. All three are USD-only releases (the Fed and BLS), so they
+      // only apply when USD is one of the charted pair's two currencies.
+      const addStatic = (key: NewsCategoryKey, isoDates: string[]) => {
+        if (!newsCategoryVisibility[key] || !currencies.includes("USD")) return;
+        if (!isNewsCurrencyVisible(key, "USD")) return;
+        const def = NEWS_CATEGORY_DEFS.find(d => d.key === key)!;
+        for (const iso of isoDates) {
+          const t = Math.floor(new Date(iso).getTime() / 1000);
+          if (Number.isNaN(t)) continue;
+          // FOMC never collides with a same-category live-feed line (it's
+          // always skipped from the live feed in favor of this table) and
+          // rarely has two dates close enough on screen to need a year
+          // suffix, so it just reads "FOMC". CPI/Jobs keep the "USD (year)"
+          // tag — those DO share the category with a live-feed EUR/GBP/etc
+          // line, and CPI in particular has landed on the same day-of-month
+          // in different years (e.g. Aug 12, 2025 and 2026).
+          const year = iso.slice(0, 4);
+          const label = key === "fomc" ? def.label : `${def.label} USD (${year})`;
+          if (inRange(t)) lines.push({ time: t as UTCTimestamp, label, color: def.color });
+          else considerFuture(key, t, key === "fomc" ? `${def.label} (Next)` : `${def.label} USD (Next)`, def.color);
+        }
+      };
+      addStatic("fomc", FOMC_STATEMENT_DATES);
+      addStatic("cpi",  CPI_RELEASE_DATES);
+      addStatic("jobs", JOBS_RELEASE_DATES);
+
+      // Live feed still covers the non-USD leg (e.g. EUR CPI on a EUR/USD
+      // chart) — just the current week, same limitation as the Economic
+      // Calendar panel itself. Labeled with the actual event title (e.g.
+      // "German Prelim CPI m/m") rather than the generic category name —
+      // a bare "CPI EUR" answers "what category" but not "which specific
+      // release", which is the question that actually needs answering
+      // when a country other than the one you expected shows up.
+      for (const ev of calendarEvents) {
+        const def = eventNewsCategory(ev);
+        if (!def || !newsCategoryVisibility[def.key]) continue;
+        const country = ev.country?.toUpperCase();
+        if (!currencies.includes(country)) continue;
+        if (country === "USD") continue; // covered by the static tables above
+        if (!isNewsCurrencyVisible(def.key, country)) continue;
+        const t = Math.floor(new Date(ev.date).getTime() / 1000);
+        if (Number.isNaN(t)) continue;
+        if (inRange(t)) lines.push({ time: t as UTCTimestamp, label: `${ev.title} (${ev.country})`, color: def.color });
+        else considerFuture(def.key, t, `${ev.title} (${ev.country}, Next)`, def.color);
+      }
+
+      // Project exactly one upcoming date per category past the last bar,
+      // using the current timeframe's own bar spacing — approximate (a
+      // future date has no real candle to align to yet, unlike history,
+      // where every line sits on an actual bar), and capped so a distant
+      // date on a fine timeframe (e.g. next FOMC, weeks out, on a 1-minute
+      // chart) doesn't demand an absurd amount of empty chart space.
+      const MAX_FUTURE_BARS = 60;
+      if (barSeconds > 0) {
+        for (const next of Object.values(nextFuture)) {
+          if (!next) continue;
+          const bars = Math.min(MAX_FUTURE_BARS, Math.max(1, Math.round((next.time - lastRowT) / barSeconds)));
+          futureBarsNeeded = Math.max(futureBarsNeeded, bars);
+          lines.push({ time: null, futureIndex: lastIndex + bars, label: next.label, color: next.color });
+        }
+      }
+    }
+    if (newsLinePrimRef.current) {
+      newsLinePrimRef.current._lines = lines;
+      newsLinePrimRef.current._barTimes = tfRows.map(r => Math.floor(new Date(r.timestamp).getTime() / 1000));
+      newsLinePrimRef.current._applyBarCorrection = chartTf !== "1D" && chartTf !== "1W";
+    }
+    // Give the projected future line(s) room to actually be visible without
+    // the user having to scroll — reset to 0 (the chart's normal framing)
+    // once none are needed, rather than leaving stale extra margin behind.
+    // Guarded on the value actually changing so this doesn't re-nudge the
+    // user's own pan/zoom on every ~10s candle poll when the upcoming
+    // event (and therefore the offset it needs) hasn't changed.
+    const chartTs = chartRef.current?.timeScale();
+    if (chartTs && chartTs.options().rightOffset !== futureBarsNeeded) {
+      chartTs.applyOptions({ rightOffset: futureBarsNeeded });
+    }
+    chartRef.current?.applyOptions({});
+  }, [showNews, newsCategoryVisibility, newsCurrencyVisibility, isNewsCurrencyVisible, calendarEvents, pair, tfRows, chartTf]);
 
   // Open positions for the currently viewed instrument — polled every 30s
   // (trades are logged manually, not high-frequency, so this is just to
@@ -2008,8 +2389,9 @@ function PriceHistoryChart({ rows, pair, chartTf, setChartTf, livePrice, expandW
         if (v !== null) acc.push({ time: times[i], value: v });
         return acc;
       }, []);
+    const indDecimals = decimalsForPair(pairRef.current, closes[closes.length - 1]);
     const indOpts = { lastValueVisible: false, priceLineVisible: false,
-                      priceFormat: { type: "price" as const, precision: 5, minMove: 0.00001 } };
+                      priceFormat: { type: "price" as const, precision: indDecimals, minMove: 1 / 10 ** indDecimals } };
 
     if (key === "bb") {
       const { upper, middle, lower } = computeBB(closes);
@@ -2159,7 +2541,8 @@ function PriceHistoryChart({ rows, pair, chartTf, setChartTf, livePrice, expandW
     const last = candles[candles.length - 1];
     if (last) {
       const isUp = candles.length > 1 ? last.close >= candles[candles.length - 2].close : true;
-      priceLineRef.current = series.createPriceLine({ price: last.close, color: isUp ? "#60a5fa" : "#a78bfa",
+      const { up: upColor, down: downColor } = CANDLE_COLOR_SCHEMES[candleColorSchemeRef.current];
+      priceLineRef.current = series.createPriceLine({ price: last.close, color: isUp ? upColor : downColor,
         lineWidth: 1, lineStyle: LineStyle.Dashed, axisLabelVisible: true, title: "" });
     }
     if (resetView) {
@@ -2198,7 +2581,7 @@ function PriceHistoryChart({ rows, pair, chartTf, setChartTf, livePrice, expandW
   }, [addIndSeries, removeIndSeries, applyData]);
 
   const createSeries = useCallback((chart: IChartApi, mode: string) => {
-    if (seriesRef.current) { chart.removeSeries(seriesRef.current); seriesRef.current = null; priceLineRef.current = null; zonePrimRef.current = null; trendPrimRef.current = null; eightAmBoxPrimRef.current = null; marketSessionPrimRef.current = null; reversalMarkerPrimRef.current = null; pivotPrimRef.current = null; }
+    if (seriesRef.current) { chart.removeSeries(seriesRef.current); seriesRef.current = null; priceLineRef.current = null; zonePrimRef.current = null; trendPrimRef.current = null; eightAmBoxPrimRef.current = null; marketSessionPrimRef.current = null; reversalMarkerPrimRef.current = null; pivotPrimRef.current = null; newsLinePrimRef.current = null; }
     if (mode === "candles") {
       const { up, down } = CANDLE_COLOR_SCHEMES[candleColorSchemeRef.current];
       const s = chart.addSeries(CandlestickSeries, {
@@ -2206,14 +2589,16 @@ function PriceHistoryChart({ rows, pair, chartTf, setChartTf, livePrice, expandW
         borderUpColor: up, borderDownColor: down,
         wickUpColor:   up, wickDownColor:   down,
       });
-      s.applyOptions({ priceFormat: { type: "price", precision: 5, minMove: 0.00001 } });
+      const mainDecimals = decimalsForPair(pairRef.current, tfRowsRef.current[tfRowsRef.current.length - 1]?.close);
+      s.applyOptions({ priceFormat: { type: "price", precision: mainDecimals, minMove: 1 / 10 ** mainDecimals } });
       seriesRef.current = s;
     } else {
       const s = chart.addSeries(AreaSeries, {
         lineColor: "#60a5fa", lineWidth: 2,
         topColor: "rgba(96,165,250,0.18)", bottomColor: "rgba(96,165,250,0)",
       });
-      s.applyOptions({ priceFormat: { type: "price", precision: 5, minMove: 0.00001 } });
+      const mainDecimals = decimalsForPair(pairRef.current, tfRowsRef.current[tfRowsRef.current.length - 1]?.close);
+      s.applyOptions({ priceFormat: { type: "price", precision: mainDecimals, minMove: 1 / 10 ** mainDecimals } });
       seriesRef.current = s;
     }
     const zonePrim = new ZoneBoxPrimitive(zoneBoxesRef.current);
@@ -2234,6 +2619,9 @@ function PriceHistoryChart({ rows, pair, chartTf, setChartTf, livePrice, expandW
     const pivotPrim = new TimeRangeBoxPrimitive([]);
     (seriesRef.current as any).attachPrimitive(pivotPrim);
     pivotPrimRef.current = pivotPrim;
+    const newsLinePrim = new NewsLinePrimitive([]);
+    (seriesRef.current as any).attachPrimitive(newsLinePrim);
+    newsLinePrimRef.current = newsLinePrim;
     // False: this fires on mount (no data yet, so a no-op) and on viewMode
     // toggle (candles/line) — the series is recreated, but the user's
     // existing pan/zoom on this same instrument's data shouldn't reset.
@@ -2253,6 +2641,14 @@ function PriceHistoryChart({ rows, pair, chartTf, setChartTf, livePrice, expandW
       borderUpColor: up, borderDownColor: down,
       wickUpColor:   up, wickDownColor:   down,
     });
+    if (priceLineRef.current) {
+      const rows = tfRowsRef.current;
+      const last = rows[rows.length - 1];
+      if (last) {
+        const isUp = rows.length > 1 ? last.close >= rows[rows.length - 2].close : true;
+        priceLineRef.current.applyOptions({ color: isUp ? up : down });
+      }
+    }
   }, [candleColorScheme, viewMode]);
 
   // Init chart once
@@ -2267,7 +2663,7 @@ function PriceHistoryChart({ rows, pair, chartTf, setChartTf, livePrice, expandW
         borderColor: "rgba(148,163,184,0.15)", timeVisible: true, secondsVisible: false,
         tickMarkFormatter: formatNyTickMark,
       },
-      localization: { timeFormatter: formatNyCrosshairTime },
+      localization: { timeFormatter: formatNyCrosshairTime, priceFormatter: (p: number) => formatPrice(p, decimalsForPair(pairRef.current, p)) },
       rightPriceScale: { borderColor: "rgba(148,163,184,0.15)", scaleMargins: { top: 0.08, bottom: 0.08 } },
     });
     chartRef.current = chart;
@@ -2294,7 +2690,7 @@ function PriceHistoryChart({ rows, pair, chartTf, setChartTf, livePrice, expandW
     ro.observe(containerRef.current);
     return () => {
       ro.disconnect(); chart.remove();
-      chartRef.current = null; seriesRef.current = null; indSeriesRef.current = {}; zonePrimRef.current = null; trendPrimRef.current = null; eightAmBoxPrimRef.current = null; marketSessionPrimRef.current = null; openTradePriceLinesRef.current = [];
+      chartRef.current = null; seriesRef.current = null; indSeriesRef.current = {}; zonePrimRef.current = null; trendPrimRef.current = null; eightAmBoxPrimRef.current = null; marketSessionPrimRef.current = null; newsLinePrimRef.current = null; openTradePriceLinesRef.current = [];
     };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -2414,6 +2810,18 @@ function PriceHistoryChart({ rows, pair, chartTf, setChartTf, livePrice, expandW
   }, [showPivotSettings]);
 
   useEffect(() => {
+    if (!showNewsSettings) return;
+    const close = (e: MouseEvent) => {
+      const target = e.target as Node;
+      const insideButton  = newsBtnRef.current?.contains(target);
+      const insidePopover = newsSettingsPopoverRef.current?.contains(target);
+      if (!insideButton && !insidePopover) setShowNewsSettings(false);
+    };
+    document.addEventListener("mousedown", close);
+    return () => document.removeEventListener("mousedown", close);
+  }, [showNewsSettings]);
+
+  useEffect(() => {
     if (!showCandleSettings) return;
     const close = (e: MouseEvent) => {
       const target = e.target as Node;
@@ -2518,6 +2926,10 @@ function PriceHistoryChart({ rows, pair, chartTf, setChartTf, livePrice, expandW
   // of the chart, so identity + price stay visible in the toolbar.
   const latestRow = rows[rows.length - 1];
 
+  // Which currencies are relevant to the charted pair, for the News
+  // settings popover's per-currency CPI/Jobs sub-filter.
+  const pairCurrencies = relevantNewsCurrencies(pair);
+
   // Snapshot — same relocate-when-expanded treatment as the master
   // collapse button below; sits just to its left in the expanded spot.
   const snapshotButton = (
@@ -2608,12 +3020,13 @@ function PriceHistoryChart({ rows, pair, chartTf, setChartTf, livePrice, expandW
                 <button
                   key={label}
                   onClick={() => setter(v => !v)}
-                  onDoubleClick={(e) => {
+                  onContextMenu={(e) => {
+                    e.preventDefault();
                     const rect = e.currentTarget.getBoundingClientRect();
                     setZoneSettingsPos({ top: rect.bottom + 6, left: rect.left });
                     setShowZoneSettings(v => !v);
                   }}
-                  title="Click to toggle, double-click for settings"
+                  title="Click to toggle, right-click for settings"
                   style={{
                     fontSize: 9, fontWeight: 700, padding: "4px 5px",
                     textTransform: "uppercase", letterSpacing: "0.08em",
@@ -2696,12 +3109,13 @@ function PriceHistoryChart({ rows, pair, chartTf, setChartTf, livePrice, expandW
                 <button
                   key={label}
                   onClick={() => setter(v => !v)}
-                  onDoubleClick={(e) => {
+                  onContextMenu={(e) => {
+                    e.preventDefault();
                     const rect = e.currentTarget.getBoundingClientRect();
                     setTrendSettingsPos({ top: rect.bottom + 6, left: rect.left });
                     setShowTrendSettings(v => !v);
                   }}
-                  title="Click to toggle, double-click for settings"
+                  title="Click to toggle, right-click for settings"
                   style={{
                     fontSize: 9, fontWeight: 700, padding: "4px 5px",
                     textTransform: "uppercase", letterSpacing: "0.08em",
@@ -2762,16 +3176,17 @@ function PriceHistoryChart({ rows, pair, chartTf, setChartTf, livePrice, expandW
         </div>
         <div style={{ width: 1, height: 18, background: "var(--border-medium)", flexShrink: 0, margin: "0 6px" }} />
         <div style={{ display: "flex", gap: 5, alignItems: "center", flexShrink: 0 }}>
-          {/* Reversal Candles toggle — double-click for settings */}
+          {/* Reversal Candles toggle — right-click for settings */}
           <button
             ref={reversalBtnRef}
             onClick={() => toggleInd("reversal")}
-            onDoubleClick={() => {
+            onContextMenu={(e) => {
+              e.preventDefault();
               const rect = reversalBtnRef.current?.getBoundingClientRect();
               if (rect) setReversalSettingsPos({ top: rect.bottom + 6, left: rect.left });
               setShowReversalSettings(v => !v);
             }}
-            title="Click to toggle, double-click for settings"
+            title="Click to toggle, right-click for settings"
             style={{
               fontSize: 9, fontWeight: 700, padding: "4px 5px",
               textTransform: "uppercase", letterSpacing: "0.08em",
@@ -2899,17 +3314,18 @@ function PriceHistoryChart({ rows, pair, chartTf, setChartTf, livePrice, expandW
           >
             8AM Box
           </button>
-          {/* Sessions button — double-click for settings */}
+          {/* Sessions button — right-click for settings */}
           <div style={{ position: "relative", display: "flex", gap: 3, alignItems: "center" }} data-sessions-panel>
             <button
               ref={sessionSettingsBtnRef}
               onClick={() => setShowSessions(v => !v)}
-              onDoubleClick={() => {
+              onContextMenu={(e) => {
+                e.preventDefault();
                 const rect = sessionSettingsBtnRef.current?.getBoundingClientRect();
                 if (rect) setSessionSettingsPos({ top: rect.bottom + 6, left: rect.left });
                 setShowSessionSettings(v => !v);
               }}
-              title="Click to toggle, double-click for settings"
+              title="Click to toggle, right-click for settings"
               style={{
                 fontSize: 9, fontWeight: 700, padding: "4px 5px",
                 textTransform: "uppercase", letterSpacing: "0.08em",
@@ -2979,16 +3395,17 @@ function PriceHistoryChart({ rows, pair, chartTf, setChartTf, livePrice, expandW
               document.body
             )}
           </div>
-          {/* Pivots toggle — double-click for settings, same pattern as Reversal */}
+          {/* Pivots toggle — right-click for settings, same pattern as Reversal */}
           <button
             ref={pivotBtnRef}
             onClick={() => toggleInd("pivots")}
-            onDoubleClick={() => {
+            onContextMenu={(e) => {
+              e.preventDefault();
               const rect = pivotBtnRef.current?.getBoundingClientRect();
               if (rect) setPivotSettingsPos({ top: rect.bottom + 6, left: rect.left });
               setShowPivotSettings(v => !v);
             }}
-            title="Click to toggle, double-click for settings"
+            title="Click to toggle, right-click for settings"
             style={{
               fontSize: 9, fontWeight: 700, padding: "4px 5px",
               textTransform: "uppercase", letterSpacing: "0.08em",
@@ -3031,6 +3448,100 @@ function PriceHistoryChart({ rows, pair, chartTf, setChartTf, livePrice, expandW
                     </span>
                   </button>
                 ))}
+              </div>
+            </div>,
+            document.body
+          )}
+          {/* News toggle — right-click for settings, same pattern as Reversal/Pivots */}
+          <button
+            ref={newsBtnRef}
+            onClick={() => setShowNews(v => !v)}
+            onContextMenu={(e) => {
+              e.preventDefault();
+              const rect = newsBtnRef.current?.getBoundingClientRect();
+              if (rect) setNewsSettingsPos({ top: rect.bottom + 6, left: rect.left });
+              setShowNewsSettings(v => !v);
+            }}
+            title="Click to toggle, right-click for settings"
+            style={{
+              fontSize: 9, fontWeight: 700, padding: "4px 5px",
+              textTransform: "uppercase", letterSpacing: "0.08em",
+              background: showNews ? "var(--accent-dim)"    : "var(--bg-panel-alt)",
+              border:     showNews ? "1px solid var(--accent-border)" : "1px solid var(--border-medium)",
+              color:      showNews ? "var(--accent-text)"   : "var(--text-secondary)",
+              borderRadius: 8, cursor: "pointer",
+            }}
+          >
+            News
+          </button>
+          {showNewsSettings && newsSettingsPos && createPortal(
+            <div ref={newsSettingsPopoverRef} style={{
+              position: "fixed", top: newsSettingsPos.top, left: newsSettingsPos.left, zIndex: 1000,
+              background: "var(--bg-panel)", border: "1px solid var(--border-medium)",
+              borderRadius: 10, padding: "10px 12px", width: 220,
+              boxShadow: "0 8px 24px rgba(0,0,0,0.45)",
+            }}>
+              <div style={{ fontSize: 9, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.1em",
+                color: "var(--text-muted)", marginBottom: 8 }}>
+                News Event Types
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                {NEWS_CATEGORY_DEFS.map(def => {
+                  const on = newsCategoryVisibility[def.key];
+                  // CPI and Jobs Reports both release under multiple
+                  // countries (a EUR/USD chart's own USD releases plus
+                  // whatever the live feed has for EUR that week) — FOMC
+                  // is USD-only, so it never needs this. Only worth
+                  // showing when the charted pair actually has two
+                  // currencies to choose between (a real forex pair, not
+                  // an index/stock/ETF, which only ever has USD anyway).
+                  const showCurrencyChips = (def.key === "cpi" || def.key === "jobs") && pairCurrencies.length === 2;
+                  return (
+                    <div key={def.key}>
+                      <button
+                        onClick={() => setNewsCategoryVisibility(v => ({ ...v, [def.key]: !v[def.key] }))}
+                        style={{
+                          display: "flex", alignItems: "center", gap: 8, width: "100%",
+                          background: "none", border: "none", padding: "4px 2px", cursor: "pointer", textAlign: "left",
+                        }}
+                      >
+                        <span style={{
+                          width: 14, height: 14, borderRadius: 3, flexShrink: 0,
+                          border: `2px solid ${def.color}`, background: on ? def.color : "transparent",
+                        }} />
+                        <span style={{ fontSize: 11, fontWeight: 600, color: on ? "var(--text-primary)" : "var(--text-secondary)" }}>
+                          {def.label}
+                        </span>
+                      </button>
+                      {showCurrencyChips && (
+                        <div style={{ display: "flex", gap: 4, marginLeft: 22, marginTop: 2, marginBottom: 2 }}>
+                          {pairCurrencies.map(cur => {
+                            const curOn = isNewsCurrencyVisible(def.key, cur);
+                            return (
+                              <button
+                                key={cur}
+                                onClick={() => setNewsCurrencyVisibility(v => ({ ...v, [`${def.key}:${cur}`]: !curOn }))}
+                                style={{
+                                  fontSize: 9, fontWeight: 700, padding: "2px 6px",
+                                  textTransform: "uppercase", letterSpacing: "0.04em",
+                                  background: curOn ? "var(--accent-dim)" : "var(--bg-panel-alt)",
+                                  border:     curOn ? "1px solid var(--accent-border)" : "1px solid var(--border-medium)",
+                                  color:      curOn ? "var(--accent-text)" : "var(--text-muted)",
+                                  borderRadius: 6, cursor: "pointer",
+                                }}
+                              >
+                                {cur}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+              <div style={{ fontSize: 10, color: "var(--text-muted)", marginTop: 8, paddingTop: 8, borderTop: "1px solid var(--border-subtle)", lineHeight: 1.4 }}>
+                Only shows events relevant to {pair} — its two currencies if it's a forex pair, USD only otherwise (indices, stocks, ETFs, commodities, crypto). USD releases: FOMC covers 2023–2026, CPI and Jobs Reports cover 2025–2026. Non-USD releases only cover the current calendar week (the live feed has no historical archive). Each enabled type also gets one "(Next)" preview projected past the last candle for its soonest upcoming release.
               </div>
             </div>,
             document.body
@@ -3098,16 +3609,17 @@ function PriceHistoryChart({ rows, pair, chartTf, setChartTf, livePrice, expandW
               document.body
             )}
           </div>
-          {/* View mode toggle — double-click for candle color settings */}
+          {/* View mode toggle — right-click for candle color settings */}
           <button
             ref={viewModeBtnRef}
             onClick={() => setViewMode(v => v === "candles" ? "line" : "candles")}
-            onDoubleClick={() => {
+            onContextMenu={(e) => {
+              e.preventDefault();
               const rect = viewModeBtnRef.current?.getBoundingClientRect();
               if (rect) setCandleSettingsPos({ top: rect.bottom + 6, left: rect.left });
               setShowCandleSettings(v => !v);
             }}
-            title="Click to toggle candles/line, double-click for settings"
+            title="Click to toggle candles/line, right-click for settings"
             style={{
               fontSize: 9, fontWeight: 700, padding: "4px 5px",
               textTransform: "uppercase", letterSpacing: "0.08em",
@@ -3154,12 +3666,6 @@ function PriceHistoryChart({ rows, pair, chartTf, setChartTf, livePrice, expandW
             </div>,
             document.body
           )}
-          {/* Snapshot — captures chart + this toolbar, saves to a trade's Entry/Exit/Additional slot.
-              Moves to the right of the instrument/price label once the chart is expanded — see below. */}
-          {!rightOfChartCollapsed && snapshotButton}
-          {/* Master collapse/expand — toggles the three panel dividers around the chart together.
-              Moves to the right of the instrument/price label once the chart is expanded — see below. */}
-          {!rightOfChartCollapsed && masterCollapseButton}
           {showSnapshotPicker && snapshotPos && createPortal(
             <div ref={snapshotPopoverRef} style={{
               position: "fixed", top: snapshotPos.top, left: snapshotPos.left, zIndex: 1000,
@@ -3257,7 +3763,6 @@ function PriceHistoryChart({ rows, pair, chartTf, setChartTf, livePrice, expandW
           )}
         </div>
         {rightOfChartCollapsed && (
-          <>
           <div style={{ display: "flex", alignItems: "center", gap: 10, flexShrink: 0, marginLeft: "auto", marginRight: 30, paddingLeft: 10, borderLeft: "1px solid var(--border-medium)" }}>
             <span style={{ fontSize: 20, lineHeight: 1, fontWeight: 800, color: "#ffffff", letterSpacing: "-0.01em", whiteSpace: "nowrap" }}>
               {pair}
@@ -3269,7 +3774,7 @@ function PriceHistoryChart({ rows, pair, chartTf, setChartTf, livePrice, expandW
               return (
                 <>
                   <span style={{ fontSize: 18, lineHeight: 1, fontWeight: 700, fontVariantNumeric: "tabular-nums", color: isUp ? "#60a5fa" : "#a78bfa", whiteSpace: "nowrap" }}>
-                    {display.toFixed(5)}
+                    {formatPrice(display, decimalsForPair(pair, display))}
                   </span>
                   <span style={{ fontSize: 10, lineHeight: 1, fontWeight: 600, fontVariantNumeric: "tabular-nums", color: pct >= 0 ? "#60a5fa" : "#a78bfa", whiteSpace: "nowrap" }}>
                     {pct >= 0 ? "+" : ""}{pct.toFixed(3)}%
@@ -3278,12 +3783,15 @@ function PriceHistoryChart({ rows, pair, chartTf, setChartTf, livePrice, expandW
               );
             })()}
           </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 5, flexShrink: 0 }}>
-            {snapshotButton}
-            {masterCollapseButton}
-          </div>
-          </>
         )}
+        {/* Snapshot + master collapse/expand — stay in the toolbar row (so
+            they're never over the candles/data), pinned to its right edge,
+            which sits directly above the chart's price scale below. */}
+        <div style={{ display: "flex", alignItems: "center", gap: 5, flexShrink: 0, marginLeft: rightOfChartCollapsed ? 0 : "auto" }}>
+          <div style={{ width: 1, height: 18, background: "var(--border-medium)", flexShrink: 0 }} />
+          {snapshotButton}
+          {masterCollapseButton}
+        </div>
       </div>
       <div style={{ borderRadius: 14, overflow: "hidden", position: "relative", ...(expandHeight ? { flex: 1, minHeight: 0 } : {}) }}>
         {tfLoading && (
@@ -6453,13 +6961,22 @@ const CLAUDE_API_KEY_PATH = 'C:\\Users\\Geoff\\.trademirror\\claude-api-key.txt'
 
 
 // ─── Failure Swing ────────────────────────────────────────────────────────────
-function computeFsWick(r: SheetRow): number | null {
+// Forex pairs are quoted with a pip convention (1 pip = 0.0001), so the wick
+// is scaled to pip units. Everything else (indices, commodities, crypto,
+// stocks) has no such convention — scaling a non-forex wick by 10000 anyway
+// turned a normal few-point US500/US100/US30 wick into a "pip" value in the
+// hundreds of thousands, which then made buildFsCdf's one-tick-per-pip loop
+// iterate that many times (a UI hang, reading as "not working"). Non-forex
+// pairs use the raw price difference instead.
+const FOREX_PAIRS = new Set(ALL_ASSETS.filter(a => a.category === "Forex").map(a => a.pair));
+function computeFsWick(r: SheetRow, pair: string): number | null {
+  const scale = FOREX_PAIRS.has(pair) ? 10000 : 1;
   if (r.close > r.open) {
-    const v = Math.round((r.open - r.low) * 10000);
+    const v = Math.round((r.open - r.low) * scale);
     return v >= 0 ? v : null;
   }
   if (r.close < r.open) {
-    const v = Math.round((r.high - r.open) * 10000);
+    const v = Math.round((r.high - r.open) * scale);
     return v >= 0 ? v : null;
   }
   return null;
@@ -6490,7 +7007,7 @@ function fsPercentileRank(sorted: number[], value: number): number {
   return parseFloat(((lo / sorted.length) * 100).toFixed(1));
 }
 
-function FailureSwingPanelBodyImpl({ rows, expanded }: { rows: SheetRow[]; expanded?: boolean }) {
+function FailureSwingPanelBodyImpl({ rows, pair, expanded }: { rows: SheetRow[]; pair: string; expanded?: boolean }) {
   const showCdf   = true;
   const showToday = true;
   const showPercs = true;
@@ -6499,14 +7016,14 @@ function FailureSwingPanelBodyImpl({ rows, expanded }: { rows: SheetRow[]; expan
     const all: number[] = [];
     let nUp = 0, nDown = 0;
     for (const r of rows) {
-      const v = computeFsWick(r);
+      const v = computeFsWick(r, pair);
       if (v !== null) { all.push(v); if (r.close > r.open) nUp++; else nDown++; }
     }
     const sorted = [...all].sort((a, b) => a - b);
     const n = sorted.length;
     if (!n) return null;
     const cur       = rows[rows.length - 1];
-    const todayFs   = cur ? computeFsWick(cur) : null;
+    const todayFs   = cur ? computeFsWick(cur, pair) : null;
     const todayRank = todayFs !== null ? fsPercentileRank(sorted, todayFs) : null;
     return {
       cdfData: buildFsCdf(all),
@@ -9802,6 +10319,33 @@ function CandleContextPanelBodyImpl({ pair, indicatorTf, expanded }: { pair: str
   );
 }
 
+// Deduplicated, briefly cached raw-candle fetch shared by the chart/zone/
+// session/8am-box/trendline/pivot live-polling effects in PriceHistoryChart.
+// Several of those poll the exact same (pair, tf) on the same cadence (e.g.
+// Sessions and 1H Zones both poll 1H every 10s) — without sharing, each is
+// an independent uncached OANDA call fired every tick. Same pattern as
+// stackCandleCache below, just for the raw (non-indicator) candle command.
+const rawCandleCache = new Map<string, { ts: number; promise: Promise<RawCandleTf[]> }>();
+// Must exceed the 10s poll cadence used by every consumer above — otherwise
+// two effects polling the same (pair, tf) a few seconds apart (mount-time
+// drift) each miss the other's cache entry and both fire their own
+// uncached OANDA fetch + full candle-array rebuild every cycle, which is
+// exactly the sustained per-tick memory/CPU churn this cache exists to
+// avoid (see WebView2 "Out of Memory" crashes on long Analytics sessions).
+const RAW_CANDLE_TTL_MS = 12_000;
+function getLiveCandles(pair: string, tf: string): Promise<RawCandleTf[]> {
+  const key = `${pair}:${tf}`;
+  const hit = rawCandleCache.get(key);
+  if (hit && Date.now() - hit.ts < RAW_CANDLE_TTL_MS) return hit.promise;
+  const promise = invoke<RawCandleTf[]>("get_live_candles", { pair, tf });
+  rawCandleCache.set(key, { ts: Date.now(), promise });
+  promise.catch(() => {
+    const cur = rawCandleCache.get(key);
+    if (cur && cur.promise === promise) rawCandleCache.delete(key);
+  });
+  return promise;
+}
+
 const STACK_TFS = ["1W", "1D", "4H", "1H", "15M", "5M", "1M"] as const;
 
 // Deduplicated, briefly cached candle fetch shared by every strategy stack panel.
@@ -10312,12 +10856,15 @@ function EconomicCalendarPanel({ events, loading, impactFilter, restrictedOnly, 
   // Crude Oil Inventories is Low), so requiring the matching impact box to
   // also be checked made it trivially easy to filter restricted events out
   // by accident.
-  const filtered = events.filter(ev =>
-    (restrictedOnly
-      ? isFtmoRestricted(ev)
-      : (!(CALENDAR_IMPACTS as readonly string[]).includes(ev.impact) || impactFilter.has(ev.impact as CalendarImpact)))
-    && (!filterByInstrument || pairCurrencies.includes(ev.country?.toUpperCase()))
-  );
+  const calendarHorizonMs = Date.now() + 9 * 24 * 60 * 60 * 1000;
+  const filtered = events.filter(ev => {
+    const evTime = new Date(ev.date).getTime();
+    return (!isNaN(evTime) && evTime >= Date.now() && evTime <= calendarHorizonMs)
+      && (restrictedOnly
+        ? isFtmoRestricted(ev)
+        : (!(CALENDAR_IMPACTS as readonly string[]).includes(ev.impact) || impactFilter.has(ev.impact as CalendarImpact)))
+      && (!filterByInstrument || pairCurrencies.includes(ev.country?.toUpperCase()));
+  });
 
   // Group consecutive same-day events under one heading — events arrive
   // already sorted chronologically, so a day's events are always contiguous.
@@ -10785,15 +11332,24 @@ export function AnalyticsV3() {
       .catch(() => {});
 
     let retryId: ReturnType<typeof setTimeout> | null = null;
+    let retryDelay = 15_000;
     const load = () => {
       setCalendarLoading(true);
       invoke<EconomicEvent[]>("get_economic_calendar")
         .then(items => {
+          retryDelay = 15_000;
           setCalendarEvents(items);
           invoke("write_text_file", { path: ECONOMIC_CALENDAR_CACHE_PATH, content: JSON.stringify(items) })
             .catch(console.error);
         })
-        .catch(() => { retryId = setTimeout(load, 15_000); })
+        // Back off on repeated failure (e.g. the feed's own rate limit)
+        // instead of hammering it every 15s indefinitely, which is exactly
+        // what trips that rate limit in the first place. Caps at the normal
+        // 5-minute poll cadence.
+        .catch(() => {
+          retryId = setTimeout(load, retryDelay);
+          retryDelay = Math.min(retryDelay * 2, 5 * 60_000);
+        })
         .finally(() => setCalendarLoading(false));
     };
     load();
@@ -11181,6 +11737,58 @@ export function AnalyticsV3() {
   const iRows     = indicatorRows.length > 0 ? indicatorRows : sheetRows;
 
   const latestRow   = iRows[iRows.length - 1];
+
+  // Instrument name + Current Price + Today's Change must always sit on one
+  // aligned row, for every instrument, with zero clipping past the app edge
+  // — wrapping to a second line or a fixed min-width both failed that for
+  // long pair names / wide prices at narrower panel widths. Instead: render
+  // the row at natural size, measure it, and scale the whole row down
+  // (never up) just enough to fit — content and available space both drive
+  // recomputation, so it's correct after a pair switch or a divider drag.
+  const [priceRowScale, setPriceRowScale] = useState(1);
+  const priceRowOuterObsRef = useRef<ResizeObserver | null>(null);
+  const priceRowInnerObsRef = useRef<ResizeObserver | null>(null);
+  const priceRowOuterElRef  = useRef<HTMLDivElement | null>(null);
+  const priceRowInnerElRef  = useRef<HTMLDivElement | null>(null);
+  const recomputePriceRowScale = useCallback(() => {
+    const inner = priceRowInnerElRef.current;
+    const outer = priceRowOuterElRef.current;
+    if (!inner || !outer) return;
+    inner.style.transform = "scale(1)"; // reset before measuring, else scrollWidth reflects the last scale, not natural size
+    const naturalWidth = inner.scrollWidth;
+    // Small safety margin — scrollWidth/clientWidth both round to integer
+    // px, so an exact-fit case can still clip by a sub-pixel amount.
+    const available = outer.clientWidth - 2;
+    setPriceRowScale(naturalWidth > available && naturalWidth > 0 ? available / naturalWidth : 1);
+  }, []);
+  // Callback refs (not useRef+useEffect): these nodes are gated behind
+  // several conditions (sheetRows loaded, panel expanded, latestRow
+  // present), so a dependency-array effect can miss the moment they first
+  // mount — same reasoning as rightPanelHeaderRef above. Both outer
+  // (available space) AND inner (natural content width — font metrics,
+  // text content, anything) are observed directly, rather than relying on
+  // a fixed set of anticipated triggers like selectedPair/latestRow, which
+  // still left an edge case that clipped by a few px.
+  const priceRowOuterRef = useCallback((el: HTMLDivElement | null) => {
+    priceRowOuterElRef.current = el;
+    priceRowOuterObsRef.current?.disconnect();
+    priceRowOuterObsRef.current = null;
+    if (!el) return;
+    const ro = new ResizeObserver(() => recomputePriceRowScale());
+    ro.observe(el);
+    priceRowOuterObsRef.current = ro;
+  }, [recomputePriceRowScale]);
+  const priceRowInnerRef = useCallback((el: HTMLDivElement | null) => {
+    priceRowInnerElRef.current = el;
+    priceRowInnerObsRef.current?.disconnect();
+    priceRowInnerObsRef.current = null;
+    if (!el) return;
+    const ro = new ResizeObserver(() => recomputePriceRowScale());
+    ro.observe(el);
+    priceRowInnerObsRef.current = ro;
+  }, [recomputePriceRowScale]);
+  useLayoutEffect(() => { recomputePriceRowScale(); }, [selectedPair, latestRow, livePrice, recomputePriceRowScale]);
+
   const macdBias    = !latestRow ? "neutral"
     : latestRow.macdHistogram > 0 ? "bullish"
     : latestRow.macdHistogram < 0 ? "bearish"
@@ -11689,11 +12297,11 @@ export function AnalyticsV3() {
 
   const fswStats = useMemo(() => {
     const all: number[] = [];
-    for (const r of sheetRows) { const v = computeFsWick(r); if (v !== null) all.push(v); }
+    for (const r of sheetRows) { const v = computeFsWick(r, selectedPair); if (v !== null) all.push(v); }
     const sorted = [...all].sort((a, b) => a - b);
     if (!sorted.length || !sheetRows.length) return null;
     const cur = sheetRows[sheetRows.length - 1];
-    const todayFs = cur ? computeFsWick(cur) : null;
+    const todayFs = cur ? computeFsWick(cur, selectedPair) : null;
     const todayRank = todayFs !== null ? fsPercentileRank(sorted, todayFs) : null;
     return { todayFs, todayRank };
   }, [sheetRows]);
@@ -11960,7 +12568,11 @@ export function AnalyticsV3() {
         {/* flex-1/min-w-0 keeps the (potentially expanded) pair selector from
             growing over the clock or the app's fixed top-right fullscreen button */}
         <div className="flex-1 min-w-0 h-full">
-          <PairSelector value={selectedPair} onPairChange={(pair) => setSelectedPair(pair)} />
+          <PairSelector
+            value={selectedPair}
+            onPairChange={(pair) => setSelectedPair(pair)}
+            collapsedContent={<InstrumentTicker onSelect={(pair) => setSelectedPair(pair)} />}
+          />
         </div>
         {/* marginRight clears the app-level fixed fullscreen toggle (top:8/right:8, 26px) */}
         <div className="h-full" style={{ marginRight: 30 }}>
@@ -12066,12 +12678,29 @@ export function AnalyticsV3() {
           // up at its original spot — only the scrollbar's position moves.
           overflowY: belowChartCollapsed ? "hidden" : "auto", paddingTop: "0", paddingRight: "18px", marginRight: "-8px",
         }}>
+          {sheetRows.length === 0 && (
+            // Same footprint as the real chart+toolbar below (toolbar strip +
+            // 480px-tall panel) so the page doesn't visibly collapse down to
+            // just the bottom rows while the initial candle fetch is still
+            // in flight, then jump back open once sheetRows arrives.
+            <div style={{ marginTop: 10, flexShrink: 0, width: rightOfChartCollapsed ? "100%" : "76%" }}>
+              <div style={{ height: 34, marginBottom: 4 }} />
+              <div style={{
+                height: 480 + chartHeightBoost, borderRadius: 14,
+                background: "var(--bg-panel-alt)", border: "1px solid var(--border-subtle)",
+                display: "flex", alignItems: "center", justifyContent: "center",
+                color: "var(--text-muted)", fontSize: 12, letterSpacing: "0.05em",
+              }}>
+                Loading chart…
+              </div>
+            </div>
+          )}
           {sheetRows.length > 0 && (
             <div style={{
               display: "flex", alignItems: belowChartCollapsed ? "stretch" : "flex-start", marginTop: 10,
               ...(belowChartCollapsed ? { flex: 1, minHeight: 0 } : { flexShrink: 0 }),
             }}>
-              <PriceHistoryChart rows={sheetRows} pair={selectedPair} chartTf={chartTf} setChartTf={setChartTf} livePrice={livePrice} expandWidth={rightOfChartCollapsed} expandHeight={belowChartCollapsed} heightBoost={chartHeightBoost} allPanelsCollapsed={allPanelsCollapsed} onToggleAllPanels={toggleAllPanels} rightOfChartCollapsed={rightOfChartCollapsed} onHeightChange={setChartColHeight} />
+              <PriceHistoryChart rows={sheetRows} pair={selectedPair} chartTf={chartTf} setChartTf={setChartTf} livePrice={livePrice} expandWidth={rightOfChartCollapsed} expandHeight={belowChartCollapsed} heightBoost={chartHeightBoost} allPanelsCollapsed={allPanelsCollapsed} onToggleAllPanels={toggleAllPanels} rightOfChartCollapsed={rightOfChartCollapsed} onHeightChange={setChartColHeight} calendarEvents={calendarEvents} />
               {/* ── Vertical divider — doubles as the collapse/expand handle
                   for the price/news panel right of the chart ── */}
               <div style={{ position: "relative", width: 1, alignSelf: "stretch", background: "var(--border-medium)", flexShrink: 0, marginLeft: 12 }}>
@@ -12097,12 +12726,20 @@ export function AnalyticsV3() {
               {!rightOfChartCollapsed && (
               <div style={{ flex: 1, minWidth: 0, paddingLeft: 16, paddingRight: 0, marginTop: 4, position: "relative" }}>
                 <div ref={rightPanelHeaderRef}>
-                <div style={{ display: "flex", alignItems: "center", gap: 20 }}>
+                {/* Outer: fixed to the panel's actual available width, clips
+                    anything past it. Inner: rendered at natural size, then
+                    scaled down (never up, transformOrigin left) just enough
+                    to fit — see recomputePriceRowScale. This keeps the pair
+                    name / price / change permanently on one aligned row for
+                    every instrument at every panel width, with no clipping. */}
+                <div ref={priceRowOuterRef} style={{ width: "100%", overflow: "hidden" }}>
+                <div ref={priceRowInnerRef} style={{ display: "flex", alignItems: "center", gap: 20, width: "fit-content", transform: `scale(${priceRowScale})`, transformOrigin: "left center" }}>
                   <div style={{ display: "flex", alignItems: "flex-start" }}>
                     <span style={{
                       fontSize: 38, fontWeight: 800, color: "#ffffff",
                       letterSpacing: "-0.02em", lineHeight: 1,
                       fontVariantNumeric: "tabular-nums",
+                      whiteSpace: "nowrap",
                     }}>
                       {selectedPair}
                     </span>
@@ -12118,21 +12755,22 @@ export function AnalyticsV3() {
                     return (
                       <div style={{ display: "flex", alignItems: "flex-start", gap: 20, marginTop: 6, marginLeft: -14 }}>
                         <div style={{ display: "flex", flexDirection: "column", gap: 2, alignItems: "center", marginLeft: -5 }}>
-                          <span style={{ fontSize: 8, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em", color: "var(--text-muted)", whiteSpace: "nowrap" }}>Current Price</span>
-                          <span style={{ fontSize: 26, fontWeight: 700, fontVariantNumeric: "tabular-nums", color: isUp ? "#60a5fa" : "#a78bfa", letterSpacing: "-0.01em", lineHeight: 1 }}>
-                            {display.toFixed(5)}
+                          <span style={{ fontSize: 8, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em", color: "var(--text-secondary)", whiteSpace: "nowrap" }}>Current Price</span>
+                          <span style={{ fontSize: 26, fontWeight: 700, fontVariantNumeric: "tabular-nums", color: isUp ? "#60a5fa" : "#a78bfa", letterSpacing: "-0.01em", lineHeight: 1, whiteSpace: "nowrap" }}>
+                            {formatPrice(display, decimalsForPair(selectedPair, display))}
                           </span>
                           {priceError && <span style={{ fontSize: 9, color: "#f87171", maxWidth: 200 }}>{priceError}</span>}
                         </div>
                         <div style={{ display: "flex", flexDirection: "column", gap: 2, marginLeft: -16 }}>
-                          <span style={{ fontSize: 8, fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.1em", whiteSpace: "nowrap" }}>Today's Change</span>
-                          <span style={{ fontSize: 17, fontWeight: 400, color: pct >= 0 ? "#60a5fa" : "#a78bfa", fontVariantNumeric: "tabular-nums", letterSpacing: "-0.01em", lineHeight: 1, marginTop: 9 }}>
+                          <span style={{ fontSize: 8, fontWeight: 700, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.1em", whiteSpace: "nowrap" }}>Today's Change</span>
+                          <span style={{ fontSize: 17, fontWeight: 400, color: pct >= 0 ? "#60a5fa" : "#a78bfa", fontVariantNumeric: "tabular-nums", letterSpacing: "-0.01em", lineHeight: 1, marginTop: 9, whiteSpace: "nowrap" }}>
                             {pct >= 0 ? "+" : ""}{pct.toFixed(3)}%
                           </span>
                         </div>
                       </div>
                     );
                   })()}
+                </div>
                 </div>
                 {latestRow && (
                   <div style={{ height: 1, background: "var(--border-medium)", margin: "12px 0 12px" }} />
@@ -12144,7 +12782,7 @@ export function AnalyticsV3() {
                         <div key={label} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2 }}>
                           <span style={{ fontSize: 9, fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.1em", whiteSpace: "nowrap" }}>{label}</span>
                           <span style={{ fontSize: 13, fontWeight: 600, fontVariantNumeric: "tabular-nums", color: label === "Today's Close" ? (latestRow.close >= latestRow.open ? "#60a5fa" : "#a78bfa") : "var(--text-secondary)" }}>
-                            {(value as number).toFixed(5)}
+                            {formatPrice(value as number, decimalsForPair(selectedPair, value as number))}
                           </span>
                         </div>
                       ))}
@@ -12273,7 +12911,7 @@ export function AnalyticsV3() {
                             {p.id === "roc"             && <RocPanelBody          pair={selectedPair} indicatorTf={indicatorTf} />}
                             {p.id === "atr"             && <AtrPanelBody          pair={selectedPair} indicatorTf={indicatorTf} />}
                             {p.id === "squeeze"         && <SqueezePanelBody      pair={selectedPair} indicatorTf={indicatorTf} />}
-                            {p.id === "failure-swing"   && <FailureSwingPanelBody  rows={sheetRows} />}
+                            {p.id === "failure-swing"   && <FailureSwingPanelBody  rows={sheetRows} pair={selectedPair} />}
                             {p.id === "candle-context"  && <CandleContextPanelBody    pair={selectedPair} indicatorTf={indicatorTf} />}
                             {p.id === "market-structure" && <MarketStructurePanelBody pair={selectedPair} indicatorTf={indicatorTf} />}
                             {p.id === "regime"          && <RegimePanelBody           pair={selectedPair} indicatorTf={indicatorTf} showCandles={regimeShowCandles} onToggleCandles={() => setRegimeShowCandles(v => !v)} />}
@@ -12375,7 +13013,7 @@ export function AnalyticsV3() {
           {expanded.id === "roc"             && <RocPanelBody        pair={selectedPair} indicatorTf={indicatorTf} expanded />}
           {expanded.id === "atr"             && <AtrPanelBody             pair={selectedPair} indicatorTf={indicatorTf} expanded />}
           {expanded.id === "squeeze"         && <SqueezePanelBody         pair={selectedPair} indicatorTf={indicatorTf} expanded />}
-          {expanded.id === "failure-swing"   && <FailureSwingPanelBody   rows={sheetRows} expanded />}
+          {expanded.id === "failure-swing"   && <FailureSwingPanelBody   rows={sheetRows} pair={selectedPair} expanded />}
           {expanded.id === "ai-chat"         && <AlertsPanel instrument={selectedPair.replace("/", "_")} alerts={alerts} onUpdate={updateAlert} onDelete={deleteAlert} />}
           {expanded.id === "candle-context"   && <CandleContextPanelBody    pair={selectedPair} indicatorTf={indicatorTf} expanded />}
           {expanded.id === "market-structure" && <MarketStructurePanelBody  pair={selectedPair} indicatorTf={indicatorTf} expanded />}

@@ -28,10 +28,7 @@ export function AnalyticsClock() {
   }, [fmt]);
 
   return (
-    <div
-      className="h-full flex items-center shrink-0 rounded-[14px] px-3"
-      style={{ background: "var(--bg-panel)", border: "1px solid var(--border-subtle)" }}
-    >
+    <div className="h-full flex items-center shrink-0 px-3">
       <span className="text-[20px] font-bold tabular-nums tracking-wide whitespace-nowrap" style={{ color: "var(--text-primary)" }}>
         {time}
       </span>

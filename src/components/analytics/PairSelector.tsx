@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { ChevronDown, Search, Star, X } from "lucide-react";
 import { getFavoritePairs, toggleFavoritePair } from "../../lib/preferences";
 
-type Category = "Forex" | "Stocks" | "ETFs" | "Crypto";
+type Category = "Forex" | "Indices" | "Commodities" | "Stocks" | "ETFs" | "Crypto";
 
 const CATEGORIES: Record<Category, string[]> = {
   Forex:  [
@@ -13,6 +13,8 @@ const CATEGORIES: Record<Category, string[]> = {
     "NZD/CAD", "NZD/CHF", "NZD/JPY", "NZD/USD",
     "USD/CAD", "USD/CHF", "USD/JPY", "USD/MXN", "USD/SEK", "USD/ZAR",
   ],
+  Indices:     ["US30", "US100", "US500"],
+  Commodities: ["XAU/USD", "XAG/USD", "USOIL"],
   Stocks: ["AAPL", "TSLA", "NVDA", "AMZN", "MSFT", "META", "GOOGL"],
   ETFs:   ["SPY", "QQQ", "GLD", "TLT", "VXX", "IWM", "XLF"],
   Crypto: ["BTC/USD", "ETH/USD", "SOL/USD", "XRP/USD", "BNB/USD", "DOGE/USD"],
@@ -21,7 +23,7 @@ const CATEGORIES: Record<Category, string[]> = {
 const DEFAULT_CATEGORY: Category = "Forex";
 const DEFAULT_PAIR = "EUR/USD";
 
-const ALL_ASSETS: { pair: string; category: Category }[] =
+export const ALL_ASSETS: { pair: string; category: Category }[] =
   (Object.keys(CATEGORIES) as Category[]).flatMap((c) =>
     CATEGORIES[c].map((p) => ({ pair: p, category: c })),
   );
@@ -34,9 +36,12 @@ const categoryOf = (p: string): Category =>
 interface PairSelectorProps {
   value?: string;
   onPairChange?: (pair: string, category: Category) => void;
+  // Rendered next to the trigger, filling the remaining width, only while
+  // collapsed — hidden the instant the category/chip picker expands.
+  collapsedContent?: React.ReactNode;
 }
 
-export function PairSelector({ value, onPairChange }: PairSelectorProps) {
+export function PairSelector({ value, onPairChange, collapsedContent }: PairSelectorProps) {
   const [open,     setOpen]     = useState(false);
   const [category, setCategory] = useState<Category>(DEFAULT_CATEGORY);
   const [pair,     setPair]     = useState(DEFAULT_PAIR);
@@ -163,7 +168,7 @@ export function PairSelector({ value, onPairChange }: PairSelectorProps) {
       </div>
 
       {/* ── Inline expanding container (asset selector) ─────────── */}
-      <div className="relative h-full flex-1 min-w-0" style={{ zIndex: open ? 20 : "auto" }}>
+      <div className="relative h-full flex-1 min-w-0 flex items-center gap-3" style={{ zIndex: open ? 20 : "auto" }}>
       <div
         className="h-full flex items-center rounded-[14px] overflow-hidden"
         style={{
@@ -287,6 +292,9 @@ export function PairSelector({ value, onPairChange }: PairSelectorProps) {
         </div>
 
       </div>
+      {!open && collapsedContent && (
+        <div className="h-full flex-1 min-w-0">{collapsedContent}</div>
+      )}
       </div>
     </div>
   );

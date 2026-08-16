@@ -149,13 +149,23 @@ const TELEGRAM_CHAT_ID_PATH: &str = "C:\\Users\\Geoff\\.trademirror\\telegram-ch
 /// Normalizes a display pair ("EURUSD", "EUR/USD", "EUR_USD") to OANDA's
 /// underscored instrument form. Mirrors the conversion already used by
 /// get_live_candles / get_live_candles_computed / get_synthesis.
+///
+/// CFD indices/energy don't derive from the display symbol via the generic
+/// 3+3 split (e.g. "US500" is not "US5_00") and OANDA's own codes for them
+/// don't match the display name at all, so they need an explicit table.
 fn to_oanda_instrument(pair: &str) -> String {
     if pair.contains('_') {
-        pair.to_string()
-    } else if pair.contains('/') {
-        pair.replace('/', "_")
-    } else {
-        format!("{}_{}", &pair[..3], &pair[3..])
+        return pair.to_string();
+    }
+    if pair.contains('/') {
+        return pair.replace('/', "_");
+    }
+    match pair {
+        "US500" => "SPX500_USD".to_string(),
+        "US100" => "NAS100_USD".to_string(),
+        "US30"  => "US30_USD".to_string(),
+        "USOIL" => "WTICO_USD".to_string(),
+        _ => format!("{}_{}", &pair[..3], &pair[3..]),
     }
 }
 
@@ -172,7 +182,7 @@ fn background_sync(db_path: &str, pair: &str) -> Result<usize, String> {
     let instrument = to_oanda_instrument(pair);
     let symbol = instrument.replace('_', "");
     let raw = oanda_client::fetch_raw_candles(&api_key, &instrument, 500)?;
-    let rows = indicators::compute(raw);
+    let rows = indicators::compute(raw, &symbol);
     let count = rows.len();
     candle_store::upsert_candles(db_path, &symbol, "D", &rows)?;
     Ok(count)
@@ -384,15 +394,28 @@ struct EconomicEvent {
 
 #[tauri::command]
 fn get_economic_calendar() -> Result<Vec<EconomicEvent>, String> {
-    reqwest::blocking::Client::builder()
+    let client = reqwest::blocking::Client::builder()
         .timeout(std::time::Duration::from_secs(8))
         .user_agent("Mozilla/5.0 (compatible; TradeMirror/1.0)")
         .build()
-        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())?;
+
+    // "thisweek" is the only window this free feed actually serves — there is
+    // no "ff_calendar_nextweek.json" (confirmed: 404s, always has). A prior
+    // attempt to pull it and merge it in silently failed on every single call
+    // since the .json() parse of that 404 page never succeeds, so it merged
+    // nothing while still burning one of the ~2-requests-per-5-minutes this
+    // host allows — meaning the one call that *does* work only got half its
+    // rate-limit budget. Late in the calendar week (Fri/Sat) "thisweek" will
+    // legitimately thin out toward zero remaining events; that's a ceiling of
+    // this data source, not something fixable client-side.
+    let events: Vec<EconomicEvent> = client
         .get("https://nfs.faireconomy.media/ff_calendar_thisweek.json")
         .send().map_err(|e| format!("request: {}", e))?
         .json::<Vec<EconomicEvent>>()
-        .map_err(|e| format!("parse: {}", e))
+        .map_err(|e| format!("parse: {}", e))?;
+
+    Ok(events)
 }
 
 // ─── OANDA live price streaming ───────────────────────────────────────────────
@@ -408,13 +431,7 @@ async fn get_live_price(pair: Option<String>) -> Result<f64, String> {
     if api_key.is_empty() { return Err("OANDA key file is empty".into()); }
 
     let pair = pair.unwrap_or_else(|| "EUR/USD".to_string());
-    let instrument = if pair.contains('_') {
-        pair.clone()
-    } else if pair.contains('/') {
-        pair.replace('/', "_")
-    } else {
-        format!("{}_{}", &pair[..3], &pair[3..])
-    };
+    let instrument = to_oanda_instrument(&pair);
 
     let url = format!(
         "https://api-fxtrade.oanda.com/v3/instruments/{}/candles?granularity=M1&count=1&price=M",
@@ -455,13 +472,7 @@ fn get_live_candles(pair: String, tf: String) -> Result<Vec<oanda_client::RawCan
     let api_key = contents.lines().next().unwrap_or("").trim().to_string();
     if api_key.is_empty() { return Err("OANDA key file is empty".into()); }
 
-    let instrument = if pair.contains('_') {
-        pair.clone()
-    } else if pair.contains('/') {
-        pair.replace('/', "_")
-    } else {
-        format!("{}_{}", &pair[..3], &pair[3..])
-    };
+    let instrument = to_oanda_instrument(&pair);
 
     let granularity = match tf.as_str() {
         "1W"  => "W",
@@ -486,13 +497,8 @@ fn get_live_candles_computed(pair: String, tf: String) -> Result<Vec<CandleV3>, 
     let api_key = contents.lines().next().unwrap_or("").trim().to_string();
     if api_key.is_empty() { return Err("OANDA key file is empty".into()); }
 
-    let instrument = if pair.contains('_') {
-        pair.clone()
-    } else if pair.contains('/') {
-        pair.replace('/', "_")
-    } else {
-        format!("{}_{}", &pair[..3], &pair[3..])
-    };
+    let instrument = to_oanda_instrument(&pair);
+    let symbol = instrument.replace('_', "");
 
     let granularity = match tf.as_str() {
         "1W"  => "W",
@@ -506,7 +512,7 @@ fn get_live_candles_computed(pair: String, tf: String) -> Result<Vec<CandleV3>, 
     };
 
     let raw = oanda_client::fetch_raw_candles_tf(&api_key, &instrument, granularity, 1000)?;
-    Ok(indicators::compute(raw))
+    Ok(indicators::compute(raw, &symbol))
 }
 
 // ─── Synthesis: regime-weighted multi-timeframe scoring ──────────────────────
@@ -518,13 +524,8 @@ fn get_synthesis(pair: String, tf: String) -> Result<scoring::Synthesis, String>
     let api_key = contents.lines().next().unwrap_or("").trim().to_string();
     if api_key.is_empty() { return Err("OANDA key file is empty".into()); }
 
-    let instrument = if pair.contains('_') {
-        pair.clone()
-    } else if pair.contains('/') {
-        pair.replace('/', "_")
-    } else {
-        format!("{}_{}", &pair[..3], &pair[3..])
-    };
+    let instrument = to_oanda_instrument(&pair);
+    let symbol = instrument.replace('_', "");
 
     let primary_tf = match tf.as_str() {
         "1D" | "D"  => "D",
@@ -535,7 +536,7 @@ fn get_synthesis(pair: String, tf: String) -> Result<scoring::Synthesis, String>
 
     let fetch = |gran: &str, n: u32| -> Result<Vec<CandleV3>, String> {
         let raw = oanda_client::fetch_raw_candles_tf(&api_key, &instrument, gran, n)?;
-        Ok(indicators::compute(raw))
+        Ok(indicators::compute(raw, &symbol))
     };
 
     // 250 bars give all indicator series ample warm-up (incl. EMA200, ADX 2x period seed).
@@ -625,7 +626,7 @@ fn backfill_tf(
     println!("[backfill] fetched {} raw {} candles over {} page(s); computing indicators…",
         raw.len(), granularity, pages);
 
-    let mut rows = indicators::compute(raw);
+    let mut rows = indicators::compute(raw, store_symbol);
     for r in rows.iter_mut() { r.date = r.timestamp.clone(); } // unique key for intraday
     let n = rows.len();
     candle_store::upsert_candles(db_path, store_symbol, granularity, &rows)?;

@@ -1,6 +1,19 @@
 use serde::Deserialize;
+use std::sync::OnceLock;
 
 const BASE_URL: &str = "https://api-fxtrade.oanda.com/v3";
+
+// Reused across every call instead of `reqwest::blocking::Client::new()` per
+// fetch — a fresh client means a fresh connection pool and a fresh TLS
+// handshake to OANDA every time. A pair switch fires 15-20+ of these calls
+// concurrently (chart, zones, sessions, trendlines, pivots, strategy stacks),
+// and switching pairs again before they finish piles more on top uncancelled
+// — dozens of simultaneous cold TLS handshakes is enough to stall the whole
+// screen. One shared client keeps connections alive and pooled instead.
+fn client() -> &'static reqwest::blocking::Client {
+    static CLIENT: OnceLock<reqwest::blocking::Client> = OnceLock::new();
+    CLIENT.get_or_init(reqwest::blocking::Client::new)
+}
 
 // ─── Raw candle (OHLCV only) ──────────────────────────────────────────────────
 
@@ -49,7 +62,7 @@ pub fn fetch_raw_candles(
         BASE_URL, instrument, count,
     );
 
-    let response = reqwest::blocking::Client::new()
+    let response = client()
         .get(&url)
         .header("Authorization", format!("Bearer {}", api_key))
         .header("Accept-Datetime-Format", "RFC3339")
@@ -133,7 +146,7 @@ fn fetch_tf_inner(
         url.push_str(&format!("&to={}", to_iso.replace(':', "%3A")));
     }
 
-    let response = reqwest::blocking::Client::new()
+    let response = client()
         .get(&url)
         .header("Authorization", format!("Bearer {}", api_key))
         .header("Accept-Datetime-Format", "RFC3339")

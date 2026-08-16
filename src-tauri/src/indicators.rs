@@ -238,10 +238,9 @@ fn macd_series(closes: &[f64], fast: usize, slow: usize, signal: usize)
     (macd_line, signal_line, histogram)
 }
 
-/// Transforms raw OANDA OHLCV candles into CandleV3 rows.
-/// OHLCV and date are mapped directly; all indicator fields are
-/// stubbed with 0.0 / false until real computation is added.
-pub fn compute(raw: Vec<RawCandle>) -> Vec<CandleV3> {
+/// Transforms raw OANDA OHLCV candles into CandleV3 rows, stamped with
+/// `symbol` (the bare storage-form instrument, e.g. "EURUSD", "SPX500USD").
+pub fn compute(raw: Vec<RawCandle>, symbol: &str) -> Vec<CandleV3> {
     let closes:  Vec<f64> = raw.iter().map(|c| c.close).collect();
     let volumes: Vec<f64> = raw.iter().map(|c| c.volume).collect();
     let vol_sma20_v = sma_series(&volumes, 20);
@@ -312,7 +311,7 @@ pub fn compute(raw: Vec<RawCandle>) -> Vec<CandleV3> {
     raw.into_iter().enumerate().map(|(i, c)| CandleV3 {
         date:           c.date,
         timestamp:      c.timestamp,
-        symbol:         "EURUSD".into(),
+        symbol:         symbol.into(),
         open:           c.open,
         high:           c.high,
         low:            c.low,
