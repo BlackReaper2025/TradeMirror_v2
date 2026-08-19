@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-ALERTS_FILE = Path("alerts.json")
+ALERTS_FILE = Path.home() / ".trademirror" / "alerts.json"
 
 
 def load_alerts():

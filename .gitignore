@@ -28,5 +28,9 @@ docs/Oanda-API-Key.txt
 TradeMirror_Alert_Test/.env
 .env
 
+# User data — now lives at ~/.trademirror/, not the repo
+TradeMirror_Alert_Test/alerts.json
+TradeMirror_Alert_Test/alert_log.json
+
 # Claude Code worktrees (local-only)
 .claude/worktrees/

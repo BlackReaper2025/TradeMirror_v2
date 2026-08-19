@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-ALERT_LOG_FILE = Path("alert_log.json")
+ALERT_LOG_FILE = Path.home() / ".trademirror" / "alert_log.json"
 
 
 def clear_alert_log():

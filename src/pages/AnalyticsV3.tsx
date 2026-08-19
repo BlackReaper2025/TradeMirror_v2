@@ -35,13 +35,16 @@ import { computeSupplyDemandZones, type SupplyDemandZone } from "../lib/supplyDe
 import { computeAutoTrendlines, type TrendlineSegment } from "../lib/trendlines";
 import { decimalsForPair, formatPrice } from "../lib/priceFormat";
 import { invoke }                from "@tauri-apps/api/core";
+import { homeDir, join }         from "@tauri-apps/api/path";
 import {
   createChart, CandlestickSeries, AreaSeries, LineSeries, HistogramSeries,
   ColorType, CrosshairMode, LineStyle, TickMarkType,
 } from "lightweight-charts";
 import type { IChartApi, UTCTimestamp } from "lightweight-charts";
-const ALERTS_JSON_PATH = "D:\\Dev\\TradeMirror_v2\\TradeMirror\\TradeMirror_Alert_Test\\alerts.json";
-const ECONOMIC_CALENDAR_CACHE_PATH = "D:\\Dev\\TradeMirror_v2\\TradeMirror\\TradeMirror_Alert_Test\\economic_calendar_cache.json";
+// Shared with the standalone Python alert engine (TradeMirror_Alert_Test/price_alert.py),
+// which reads/writes the same two files under ~/.trademirror/.
+const alertsJsonPath = homeDir().then(h => join(h, ".trademirror", "alerts.json"));
+const economicCalendarCachePath = homeDir().then(h => join(h, ".trademirror", "economic_calendar_cache.json"));
 
 // ─── V3 backend candle type (Rust snake_case serialization) ──────────────────
 interface RawCandleV3 {
@@ -3240,8 +3243,8 @@ function PriceHistoryChart({
 
   // Pivot Points toggles — master on/off lives on activeInds ("pivots"),
   // same as Reversal/8AM Box; these four control which timeframe(s) render
-  // once the indicator itself is active. Daily on by default, rest opt-in.
-  const [showPivotWeekly, setShowPivotWeekly] = useState(false);
+  // once the indicator itself is active. Weekly/Daily on by default, rest opt-in.
+  const [showPivotWeekly, setShowPivotWeekly] = useState(true);
   const [showPivotDaily,  setShowPivotDaily]  = useState(true);
   const [showPivot4H,     setShowPivot4H]     = useState(false);
   const [showPivot1H,     setShowPivot1H]     = useState(false);
@@ -3294,6 +3297,9 @@ function PriceHistoryChart({
     W: TRENDLINE_COLOR, D: TRENDLINE_COLOR, H4: TRENDLINE_COLOR, H1: TRENDLINE_COLOR,
     M15: TRENDLINE_COLOR, M5: TRENDLINE_COLOR, M1: TRENDLINE_COLOR,
   });
+  // Which timeframe row (if any) has its color swatch picker expanded —
+  // hidden by default, opened per-row via the swatch button beside the count.
+  const [openTrendColorKey, setOpenTrendColorKey] = useState<string | null>(null);
   const [showTrendSettings, setShowTrendSettings] = useState(false);
   const [trendSettingsPos, setTrendSettingsPos] = useState<{ top: number; left: number } | null>(null);
   const trendSettingsGroupRef = useRef<HTMLDivElement>(null);
@@ -5205,22 +5211,33 @@ function PriceHistoryChart({
                               color: "var(--text-secondary)", fontSize: 11, lineHeight: 1,
                             }}
                           >+</button>
-                        </div>
-                      </div>
-                      <div style={{ display: "flex", gap: 4, marginTop: 4 }}>
-                        {TRENDLINE_COLOR_PRESETS.map(c => (
                           <button
-                            key={c}
-                            onClick={() => setTrendColors(prev => ({ ...prev, [key]: c }))}
-                            title={c}
+                            onClick={() => setOpenTrendColorKey(k => k === key ? null : key)}
+                            title="Change color"
                             style={{
-                              width: 14, height: 14, borderRadius: "50%", cursor: "pointer",
-                              background: c, padding: 0,
-                              border: trendColors[key] === c ? "2px solid var(--text-primary)" : "1px solid var(--border-medium)",
+                              width: 14, height: 14, borderRadius: "50%", cursor: "pointer", padding: 0, marginLeft: 2,
+                              background: trendColors[key],
+                              border: openTrendColorKey === key ? "2px solid var(--text-primary)" : "1px solid var(--border-medium)",
                             }}
                           />
-                        ))}
+                        </div>
                       </div>
+                      {openTrendColorKey === key && (
+                        <div style={{ display: "flex", gap: 4, marginTop: 4 }}>
+                          {TRENDLINE_COLOR_PRESETS.map(c => (
+                            <button
+                              key={c}
+                              onClick={() => { setTrendColors(prev => ({ ...prev, [key]: c })); setOpenTrendColorKey(null); }}
+                              title={c}
+                              style={{
+                                width: 14, height: 14, borderRadius: "50%", cursor: "pointer",
+                                background: c, padding: 0,
+                                border: trendColors[key] === c ? "2px solid var(--text-primary)" : "1px solid var(--border-medium)",
+                              }}
+                            />
+                          ))}
+                        </div>
+                      )}
                     </div>
                   ))}
                 </div>,
@@ -13537,7 +13554,8 @@ export function AnalyticsV3() {
   const [priceError, setPriceError]   = useState<string | null>(null);
 
   function saveAlerts(list: Alert[]) {
-    invoke("write_text_file", { path: ALERTS_JSON_PATH, content: JSON.stringify(list, null, 2) })
+    alertsJsonPath
+      .then(path => invoke("write_text_file", { path, content: JSON.stringify(list, null, 2) }))
       .catch(console.error);
   }
 
@@ -13581,7 +13599,8 @@ export function AnalyticsV3() {
   // fresh fetch is in flight; (2) retry quickly (15s) on failure instead of
   // waiting for the next scheduled poll.
   useEffect(() => {
-    invoke<string>("read_credentials_file", { path: ECONOMIC_CALENDAR_CACHE_PATH })
+    economicCalendarCachePath
+      .then(path => invoke<string>("read_credentials_file", { path }))
       .then(content => setCalendarEvents(JSON.parse(content)))
       .catch(() => {});
 
@@ -13604,7 +13623,8 @@ export function AnalyticsV3() {
         .then(items => {
           retryDelay = 15_000;
           setCalendarEvents(items);
-          invoke("write_text_file", { path: ECONOMIC_CALENDAR_CACHE_PATH, content: JSON.stringify(items) })
+          economicCalendarCachePath
+            .then(path => invoke("write_text_file", { path, content: JSON.stringify(items) }))
             .catch(console.error);
           loadStored();
         })
@@ -13662,7 +13682,8 @@ export function AnalyticsV3() {
 
   // Initial load — seed seenStatuses so we don't fire on startup
   useEffect(() => {
-    invoke<string>("read_credentials_file", { path: ALERTS_JSON_PATH })
+    alertsJsonPath
+      .then(path => invoke<string>("read_credentials_file", { path }))
       .then(content => {
         const loaded = JSON.parse(content) as Alert[];
         loaded.forEach(a => { seenStatuses.current[a.id] = a.status; });
@@ -13674,7 +13695,8 @@ export function AnalyticsV3() {
   // Poll alerts.json every 10 s for status changes → in-app notification + sound
   useEffect(() => {
     const poll = () => {
-      invoke<string>("read_credentials_file", { path: ALERTS_JSON_PATH })
+      alertsJsonPath
+        .then(path => invoke<string>("read_credentials_file", { path }))
         .then(content => {
           const loaded = JSON.parse(content) as Alert[];
           const newToasts: AlertToast[] = [];
@@ -13809,7 +13831,9 @@ export function AnalyticsV3() {
           const t = triggered.find(x => x.id === a.id);
           return t ? { ...a, status: "triggered" as const, triggered_at_utc: now } : a;
         });
-        invoke("write_text_file", { path: ALERTS_JSON_PATH, content: JSON.stringify(next, null, 2) }).catch(console.error);
+        alertsJsonPath
+          .then(path => invoke("write_text_file", { path, content: JSON.stringify(next, null, 2) }))
+          .catch(console.error);
         return next;
       });
 

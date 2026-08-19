@@ -1,7 +1,8 @@
 import { invoke } from '@tauri-apps/api/core';
+import { homeDir, join } from '@tauri-apps/api/path';
 
-const API_KEY_PATH = 'C:\\Users\\Geoff\\.trademirror\\sheets-api-key.txt';
-const SHEET_ID     = '1gyI-Eokk-_PMRA5JEvtFoUxgDWzgM3fYYCGQBAFFjMU';
+const apiKeyPath = homeDir().then(h => join(h, '.trademirror', 'sheets-api-key.txt'));
+const SHEET_ID    = '1gyI-Eokk-_PMRA5JEvtFoUxgDWzgM3fYYCGQBAFFjMU';
 
 export interface SheetRow {
   date:          string;
@@ -108,11 +109,12 @@ function parseRow(headers: string[], row: string[]): SheetRow {
 }
 
 export async function fetchSheetRows(count = 20): Promise<SheetRow[]> {
-  const apiKey = await invoke<string>('read_credentials_file', { path: API_KEY_PATH })
+  const keyPath = await apiKeyPath;
+  const apiKey = await invoke<string>('read_credentials_file', { path: keyPath })
     .then(s => s.trim())
     .catch(() => {
       throw new Error(
-        `Setup required: create the file "${API_KEY_PATH}" and paste your Google Sheets API key into it. ` +
+        `Setup required: create the file "${keyPath}" and paste your Google Sheets API key into it. ` +
         `Get a key at console.cloud.google.com → APIs & Services → Credentials → Create API Key. ` +
         `Also set the sheet sharing to "Anyone with the link – Viewer".`
       );

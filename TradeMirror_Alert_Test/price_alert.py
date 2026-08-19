@@ -1,5 +1,6 @@
 import os
 import json
+from pathlib import Path
 from datetime import datetime, timezone
 
 import requests
@@ -14,8 +15,11 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 OANDA_REST_URL = "https://api-fxtrade.oanda.com/v3/accounts"
 OANDA_STREAM_URL = "https://stream-fxtrade.oanda.com/v3/accounts"
 
-ALERTS_FILE = "alerts.json"
-ALERT_LOG_FILE = "alert_log.json"
+# Shared with the TradeMirror app (see src/pages/AnalyticsV3.tsx), which reads/
+# writes the same two files so both processes agree regardless of OS or cwd.
+TRADEMIRROR_DIR = Path.home() / ".trademirror"
+ALERTS_FILE = TRADEMIRROR_DIR / "alerts.json"
+ALERT_LOG_FILE = TRADEMIRROR_DIR / "alert_log.json"
 
 headers = {
     "Authorization": f"Bearer {OANDA_API_TOKEN}"

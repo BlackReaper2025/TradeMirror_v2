@@ -7,6 +7,7 @@ import {
 import { PieChart, Pie, Cell, ResponsiveContainer } from "recharts";
 import { clsx } from "clsx";
 import { pairSelectionEvents } from "../../lib/pairSelection";
+import { quoteCache, startWarmLoop, setWarmPriorityPairs, WARM_INTERVAL_MS } from "../analytics/InstrumentTicker";
 import { useAccountAndPortfolio, type PortfolioItem } from "../../hooks/useAccountAndPortfolio";
 import { logoSrc } from "../../config/branding";
 import { getMusicUrl, getAccountBrokerUrl, getFavoritePairs, removeFavoritePair, reorderFavoritePairs } from "../../lib/preferences";
@@ -243,6 +244,17 @@ function FavoritesPanel({
   // insertion-line indicator; the actual reorder happens once on drop.
   const [dragPair, setDragPair] = useState<string | null>(null);
   const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
+  // Day % change reuses the same background-warming quote cache as the
+  // Analytics ticker (see InstrumentTicker.tsx) rather than a second fetch
+  // pipeline — start it here too in case Analytics hasn't been visited yet,
+  // and re-render on its cadence so each row's % ticks over as it refreshes.
+  const [, forceRefresh] = useState(0);
+  useEffect(() => {
+    startWarmLoop();
+    const id = setInterval(() => forceRefresh(t => t + 1), WARM_INTERVAL_MS);
+    return () => clearInterval(id);
+  }, []);
+  useEffect(() => setWarmPriorityPairs(favorites), [favorites]);
 
   if (favorites.length === 0) return null;
   return (
@@ -294,14 +306,26 @@ function FavoritesPanel({
                 />
                 <span className="text-[12px] font-medium truncate">{pair}</span>
               </div>
-              <button
-                onClick={(e) => { e.stopPropagation(); onRemove(pair); }}
-                title="Remove from favorites"
-                className="opacity-0 group-hover:opacity-100 transition-opacity shrink-0"
-                style={{ color: "var(--text-muted)", lineHeight: 0 }}
-              >
-                <X size={12} />
-              </button>
+              <div className="flex items-center gap-1.5 shrink-0">
+                {(() => {
+                  const q = quoteCache.get(pair);
+                  if (!q) return null;
+                  const up = q.changePct >= 0;
+                  return (
+                    <span className="text-[11px] font-semibold" style={{ color: up ? "#60a5fa" : "#a78bfa" }}>
+                      {up ? "+" : ""}{q.changePct.toFixed(2)}%
+                    </span>
+                  );
+                })()}
+                <button
+                  onClick={(e) => { e.stopPropagation(); onRemove(pair); }}
+                  title="Remove from favorites"
+                  className="opacity-0 group-hover:opacity-100 transition-opacity shrink-0"
+                  style={{ color: "var(--text-muted)", lineHeight: 0 }}
+                >
+                  <X size={12} />
+                </button>
+              </div>
             </div>
           ))}
         </div>

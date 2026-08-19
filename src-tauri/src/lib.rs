@@ -97,11 +97,11 @@ fn save_chart_screenshot(app: tauri::AppHandle, data_base64: String, kind: Strin
 
 #[tauri::command]
 fn send_test_notification() -> Result<(), String> {
-    let token = std::fs::read_to_string(TELEGRAM_TOKEN_PATH)
+    let token = std::fs::read_to_string(telegram_token_path())
         .map_err(|e| format!("Could not read Telegram token: {}", e))?
         .trim()
         .to_string();
-    let chat_id = std::fs::read_to_string(TELEGRAM_CHAT_ID_PATH)
+    let chat_id = std::fs::read_to_string(telegram_chat_id_path())
         .map_err(|e| format!("Could not read Telegram chat ID: {}", e))?
         .trim()
         .to_string();
@@ -121,11 +121,11 @@ fn send_test_notification() -> Result<(), String> {
 
 #[tauri::command]
 fn send_telegram_message(text: String) -> Result<(), String> {
-    let token = std::fs::read_to_string(TELEGRAM_TOKEN_PATH)
+    let token = std::fs::read_to_string(telegram_token_path())
         .map_err(|e| format!("Could not read Telegram token: {}", e))?
         .trim()
         .to_string();
-    let chat_id = std::fs::read_to_string(TELEGRAM_CHAT_ID_PATH)
+    let chat_id = std::fs::read_to_string(telegram_chat_id_path())
         .map_err(|e| format!("Could not read Telegram chat ID: {}", e))?
         .trim()
         .to_string();
@@ -142,9 +142,16 @@ fn send_telegram_message(text: String) -> Result<(), String> {
 
 // ─── Analytics V3 — sync OANDA → indicators → SQLite ─────────────────────────
 
-const OANDA_KEY_PATH: &str = "C:\\Users\\Geoff\\.trademirror\\oanda-api-key.txt";
-const TELEGRAM_TOKEN_PATH: &str = "C:\\Users\\Geoff\\.trademirror\\telegram-bot-token.txt";
-const TELEGRAM_CHAT_ID_PATH: &str = "C:\\Users\\Geoff\\.trademirror\\telegram-chat-id.txt";
+/// Home directory, cross-platform ($HOME on macOS/Linux, %USERPROFILE% on Windows).
+fn home_dir() -> String {
+    std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .unwrap_or_default()
+}
+
+fn oanda_key_path() -> String { format!("{}/.trademirror/oanda-api-key.txt", home_dir()) }
+fn telegram_token_path() -> String { format!("{}/.trademirror/telegram-bot-token.txt", home_dir()) }
+fn telegram_chat_id_path() -> String { format!("{}/.trademirror/telegram-chat-id.txt", home_dir()) }
 
 /// Normalizes a display pair ("EURUSD", "EUR/USD", "EUR_USD") to OANDA's
 /// underscored instrument form. Mirrors the conversion already used by
@@ -241,7 +248,7 @@ fn read_oanda_key() -> Result<String, String> {
     use std::sync::OnceLock;
     static KEY: OnceLock<Result<String, String>> = OnceLock::new();
     KEY.get_or_init(|| {
-        let contents = std::fs::read_to_string(OANDA_KEY_PATH)
+        let contents = std::fs::read_to_string(oanda_key_path())
             .map_err(|e| format!("Could not read OANDA key file: {}", e))?;
         let key = contents.lines().next().unwrap_or("").trim().to_string();
         if key.is_empty() { Err("OANDA API key is empty".into()) } else { Ok(key) }
@@ -710,11 +717,24 @@ fn get_synthesis(pair: String, tf: String) -> Result<scoring::Synthesis, String>
 
 // ─── Headless positioning cron (runs without the GUI) ────────────────────────
 
-/// Database path used by the headless cron, matching Tauri's app_data_dir:
-/// %APPDATA%\com.geoff.trademirror\trademirror.db on Windows.
+/// Database path used by the headless cron, matching Tauri's app_data_dir for
+/// identifier "com.geoff.trademirror": %APPDATA%\com.geoff.trademirror\ on
+/// Windows, ~/Library/Application Support/com.geoff.trademirror/ on macOS,
+/// ~/.local/share/com.geoff.trademirror/ elsewhere.
 fn cron_db_path() -> String {
-    let base = std::env::var("APPDATA").unwrap_or_default();
-    format!("{}\\com.geoff.trademirror\\trademirror.db", base)
+    #[cfg(target_os = "windows")]
+    {
+        let base = std::env::var("APPDATA").unwrap_or_default();
+        format!("{}\\com.geoff.trademirror\\trademirror.db", base)
+    }
+    #[cfg(target_os = "macos")]
+    {
+        format!("{}/Library/Application Support/com.geoff.trademirror/trademirror.db", home_dir())
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    {
+        format!("{}/.local/share/com.geoff.trademirror/trademirror.db", home_dir())
+    }
 }
 
 /// One-shot backtest runner for the headless binary (src/bin/backtest.rs).

@@ -26,25 +26,38 @@ interface Quote {
 // scratch. One instrument at a time, on a gentle cadence — fetching all
 // ~50 in a burst is exactly the concurrent-request pile-up that stalled
 // pair switching before (see oanda_client.rs shared-client fix).
-const quoteCache = new Map<string, Quote>();
+export const quoteCache = new Map<string, Quote>();
 let warmIndex = 0;
 let warmStarted = false;
-const WARM_INTERVAL_MS = 1_500;
+export const WARM_INTERVAL_MS = 1_500;
 
-function startWarmLoop() {
+// Pairs that should warm ahead of the plain round-robin (the Sidebar
+// favorites list — see setWarmPriorityPairs) so they show a % change right
+// away and stay populated regardless of which instrument is currently being
+// viewed, instead of waiting for the ~50-pair rotation to reach them.
+let priorityPairs: string[] = [];
+export function setWarmPriorityPairs(pairs: string[]) { priorityPairs = pairs; }
+
+function fetchQuote(pair: string) {
+  invoke<RawCandleTf[]>("get_live_candles", { pair, tf: "1D" })
+    .then(candles => {
+      const last = candles[candles.length - 1];
+      if (last && last.open) {
+        quoteCache.set(pair, { price: last.close, changePct: (last.close - last.open) / last.open * 100 });
+      }
+    })
+    .catch(() => {});
+}
+
+export function startWarmLoop() {
   if (warmStarted) return;
   warmStarted = true;
   const tick = () => {
+    const uncachedPriority = priorityPairs.find(p => !quoteCache.has(p));
+    if (uncachedPriority) { fetchQuote(uncachedPriority); return; }
     const pair = ALL_ASSETS[warmIndex % ALL_ASSETS.length].pair;
     warmIndex++;
-    invoke<RawCandleTf[]>("get_live_candles", { pair, tf: "1D" })
-      .then(candles => {
-        const last = candles[candles.length - 1];
-        if (last && last.open) {
-          quoteCache.set(pair, { price: last.close, changePct: (last.close - last.open) / last.open * 100 });
-        }
-      })
-      .catch(() => {});
+    fetchQuote(pair);
   };
   tick();
   setInterval(tick, WARM_INTERVAL_MS);

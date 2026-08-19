@@ -256,7 +256,9 @@
       "Bash(npx vite *)",
       "Bash(cd \"D:\\\\Dev\\\\TradeMirror_v2\\\\TradeMirror\" && grep -n \"calcRR\\\\|function fmt\\\\|function fmtPrice\\\\|risk\\\\s*=\\\\|reward\\\\s*=\" src/components/tradelog/TradeForm.tsx | head -20 *)",
       "Bash(sort -t'\\(' -k2 -n -r)",
-      "Bash(grep -n \"fmt\\\\$\\(\" src/pages/TradeLog.tsx)"
+      "Bash(grep -n \"fmt\\\\$\\(\" src/pages/TradeLog.tsx)",
+      "Bash(node -e \"console.log\\(require\\('fs'\\).existsSync\\('node_modules/@tauri-apps/api/path.js'\\) || require\\('fs'\\).existsSync\\('node_modules/@tauri-apps/api/path.d.ts'\\)\\)\")",
+      "Bash(find / -iname \"*.rs\" -path \"*tauri*permissions*path*\" 2>/dev/null | head -5 *)"
     ]
   }
 }
