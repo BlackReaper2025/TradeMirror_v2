@@ -417,6 +417,11 @@ The intelligence layer must stabilize first.
 
 ---
 
+# Launch Command
+claude --dangerously-skip-permissions
+
+---
+
 # Prompt Discipline
 
 Every prompt should include:

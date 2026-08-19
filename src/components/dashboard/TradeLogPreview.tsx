@@ -4,14 +4,7 @@ import { Panel } from "../ui/Panel";
 import { Badge } from "../ui/Badge";
 import { TradeForm, type TradeFormValues } from "../tradelog/TradeForm";
 import {
-  createTrade,
-  createJournalEntry,
-  updateTrade,
-  upsertJournalEntry,
-  syncTradeImages,
   deleteTradeById,
-  recalculateDailyStats,
-  updateAccountBalance,
   getSettings,
   getAccount,
   getJournalByTradeId,
@@ -19,13 +12,10 @@ import {
   type Account,
   type TradeWithJournal,
 } from "../../db/queries";
-import { tradeEvents } from "../../lib/tradeEvents";
+import { finishTradeSave, saveNewTrade, saveEditedTrade } from "../../lib/tradeSave";
+import { formatTradeTime } from "../../lib/tradeFormat";
 import { useDatabase } from "../../db/DatabaseProvider";
 import { getTimeFormat } from "../../lib/preferences";
-
-function formatTime(iso: string, hour12: boolean) {
-  return new Date(iso).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12 });
-}
 
 function fmtPrice(n: number | null | undefined) {
   if (n == null) return null;
@@ -39,11 +29,6 @@ function todayDateStr(): string {
 
 function fmtDate(date: string): string {
   return new Date(date + "T00:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
-}
-
-function normaliseDateTime(v: string): string {
-  if (!v) return v;
-  return v.length === 16 ? v + ":00" : v.replace(/Z$/, "");
 }
 
 interface Props {
@@ -77,10 +62,7 @@ export function TradeLogPreview({ trades, selectedDate, onTradeChanged }: Props)
   }, [ready]);
 
   const finishSave = useCallback(async (accountId: string, days: string[], opts?: { isNewTrade?: boolean; jumpToDay?: string }) => {
-    const uniqueDays = [...new Set(days)];
-    for (const d of uniqueDays) await recalculateDailyStats(accountId, d);
-    await updateAccountBalance(accountId);
-    tradeEvents.notify();
+    await finishTradeSave(accountId, days);
     setShowForm(false);
     setEditTrade(null);
     onTradeChanged?.(opts);
@@ -106,9 +88,7 @@ export function TradeLogPreview({ trades, selectedDate, onTradeChanged }: Props)
     try {
       const result = await deleteTradeById(tradeId);
       if (result) {
-        await recalculateDailyStats(result.accountId, result.day);
-        await updateAccountBalance(result.accountId);
-        tradeEvents.notify();
+        await finishTradeSave(result.accountId, [result.day]);
         onTradeChanged?.({ isNewTrade: false });
       }
     } catch (err) {
@@ -118,103 +98,13 @@ export function TradeLogPreview({ trades, selectedDate, onTradeChanged }: Props)
 
   const handleSave = useCallback(async (values: TradeFormValues) => {
     if (!account) return;
-    const tradeId   = `t-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-    const journalId = `j-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-    const openedAt  = normaliseDateTime(values.openedAt);
-    const closedAt  = values.closedAt ? normaliseDateTime(values.closedAt) : undefined;
-    const day       = (closedAt ?? openedAt).split("T")[0];
-
-    await createTrade({
-      id: tradeId, accountId: account.id, openedAt,
-      closedAt,
-      instrument:     values.instrument.trim(),
-      side:           values.side,
-      setupName:      values.setupName.trim()     || undefined,
-      entryPrice:     values.entryPrice  ? parseFloat(values.entryPrice)  : undefined,
-      stopPrice:      values.stopPrice   ? parseFloat(values.stopPrice)   : undefined,
-      targetPrice:    values.targetPrice ? parseFloat(values.targetPrice) : undefined,
-      size:           values.size        ? parseFloat(values.size)        : undefined,
-      fees:           values.fees        ? parseFloat(values.fees)        : 0,
-      pnl:            values.pnl         ? parseFloat(values.pnl)         : 0,
-      technicalNotes: values.technicalNotes.trim() || undefined,
-      tags:           values.tags.trim()           || undefined,
-      tradeRef:       values.tradeRef.trim()       || undefined,
-      exitPrice:      values.exitPrice ? parseFloat(values.exitPrice) : undefined,
-      slPips:         values.slPips  ? parseFloat(values.slPips)  : undefined,
-      tpPips:         values.tpPips  ? parseFloat(values.tpPips)  : undefined,
-      maePips:        values.maePips ? parseFloat(values.maePips) : undefined,
-      mae:            values.mae     ? parseFloat(values.mae)     : undefined,
-      maeTime:        values.maeTime ? normaliseDateTime(values.maeTime) : undefined,
-      mfePips:        values.mfePips ? parseFloat(values.mfePips) : undefined,
-      mfe:            values.mfe     ? parseFloat(values.mfe)     : undefined,
-      mfeTime:        values.mfeTime ? normaliseDateTime(values.mfeTime) : undefined,
-    });
-
-    await createJournalEntry({
-      id: journalId, tradeId,
-      emotionBefore:   values.emotionBefore                      || undefined,
-      emotionAfter:    values.emotionAfter                       || undefined,
-      mistakes:        values.mistakes.trim()                    || undefined,
-      lessons:         values.lessons.trim()                     || undefined,
-      confidenceScore: values.confidenceScore ? parseInt(values.confidenceScore) : undefined,
-      disciplineScore: values.disciplineScore ? parseInt(values.disciplineScore) : undefined,
-      freeformNotes:   values.freeformNotes.trim()               || undefined,
-    });
-
-    await syncTradeImages(tradeId, values.images);
-
+    const { day } = await saveNewTrade(account, values);
     await finishSave(account.id, [day], { isNewTrade: true, jumpToDay: day });
   }, [account, finishSave]);
 
   const handleEditSave = useCallback(async (values: TradeFormValues) => {
     if (!account || !editTrade) return;
-    const oldDay   = (editTrade.closedAt ?? editTrade.openedAt).slice(0, 10);
-    const openedAt = normaliseDateTime(values.openedAt);
-    const closedAt = values.closedAt ? normaliseDateTime(values.closedAt) : undefined;
-    const newDay   = (closedAt ?? openedAt).split("T")[0];
-
-    await updateTrade(editTrade.id, {
-      openedAt,
-      closedAt,
-      instrument:     values.instrument.trim(),
-      side:           values.side,
-      setupName:      values.setupName.trim()     || undefined,
-      entryPrice:     values.entryPrice  ? parseFloat(values.entryPrice)  : undefined,
-      stopPrice:      values.stopPrice   ? parseFloat(values.stopPrice)   : undefined,
-      targetPrice:    values.targetPrice ? parseFloat(values.targetPrice) : undefined,
-      size:           values.size        ? parseFloat(values.size)        : undefined,
-      fees:           values.fees        ? parseFloat(values.fees)        : 0,
-      pnl:            values.pnl         ? parseFloat(values.pnl)         : 0,
-      technicalNotes: values.technicalNotes.trim() || undefined,
-      tags:           values.tags.trim()           || undefined,
-      tradeRef:       values.tradeRef.trim()       || undefined,
-      exitPrice:      values.exitPrice ? parseFloat(values.exitPrice) : undefined,
-      slPips:         values.slPips  ? parseFloat(values.slPips)  : undefined,
-      tpPips:         values.tpPips  ? parseFloat(values.tpPips)  : undefined,
-      maePips:        values.maePips ? parseFloat(values.maePips) : undefined,
-      mae:            values.mae     ? parseFloat(values.mae)     : undefined,
-      maeTime:        values.maeTime ? normaliseDateTime(values.maeTime) : undefined,
-      mfePips:        values.mfePips ? parseFloat(values.mfePips) : undefined,
-      mfe:            values.mfe     ? parseFloat(values.mfe)     : undefined,
-      mfeTime:        values.mfeTime ? normaliseDateTime(values.mfeTime) : undefined,
-    });
-
-    await upsertJournalEntry(
-      editTrade.id,
-      editTrade.journal?.id ?? null,
-      {
-        emotionBefore:   values.emotionBefore                      || undefined,
-        emotionAfter:    values.emotionAfter                       || undefined,
-        mistakes:        values.mistakes.trim()                    || undefined,
-        lessons:         values.lessons.trim()                     || undefined,
-        confidenceScore: values.confidenceScore ? parseInt(values.confidenceScore) : undefined,
-        disciplineScore: values.disciplineScore ? parseInt(values.disciplineScore) : undefined,
-        freeformNotes:   values.freeformNotes.trim()               || undefined,
-      }
-    );
-
-    await syncTradeImages(editTrade.id, values.images);
-
+    const { oldDay, newDay } = await saveEditedTrade(editTrade, values);
     await finishSave(account.id, [oldDay, newDay], { isNewTrade: false });
   }, [account, editTrade, finishSave]);
 
@@ -285,7 +175,7 @@ export function TradeLogPreview({ trades, selectedDate, onTradeChanged }: Props)
                       />
                     </div>
                     <div className="text-[11px] truncate mt-0.5" style={{ color: "var(--text-secondary)" }}>
-                      {trade.setupName} · {formatTime(trade.openedAt, hour12)}
+                      {trade.setupName} · {formatTradeTime(trade.openedAt, hour12)}
                     </div>
                     {(trade.entryPrice != null || trade.targetPrice != null) && (
                       <div className="flex items-center gap-2 mt-1">

@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react';
+import { useEffect, useRef } from 'react';
 
 /**
  * Animated dot-wave background — Canvas 2D (no Three.js / WebGL).

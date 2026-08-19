@@ -11,17 +11,13 @@ import {
   ComposedChart, Bar, Line, Area, XAxis, YAxis, ReferenceLine, ReferenceArea,
   ResponsiveContainer, Cell, Tooltip,
 } from "recharts";
-import { Maximize2, Minimize2, X, GripVertical, Settings, Camera } from "lucide-react";
+import { Maximize2, Minimize2, X, GripVertical, Settings, Camera, Info, LayoutGrid, ChevronDown, Lock, Unlock } from "lucide-react";
 import { toPng } from "html-to-image";
 import { getSettings, getAllTradesWithJournal, addTradeImage, localDateStr, type TradeWithJournal } from "../db/queries";
-import { VerdictPanel }          from "../components/analytics/VerdictPanel";
-import { EvidenceCards }         from "../components/analytics/EvidenceCards";
-import { EntryExitPanel }        from "../components/analytics/EntryExitPanel";
-import { HistoryDotsPanel }      from "../components/analytics/HistoryDotsPanel";
 import { PairSelector, ALL_ASSETS } from "../components/analytics/PairSelector";
 import { InstrumentTicker }      from "../components/analytics/InstrumentTicker";
 import { AnalyticsClock }        from "../components/analytics/AnalyticsClock";
-import { useAnalytics, setLiveAnalytics, hasLiveAnalytics, signalHistory, historicalAccuracy,
+import { useAnalytics, setLiveAnalytics, signalHistory, historicalAccuracy,
   analysisResult as defaultAnalysisResult, signalTags, evidenceCards,
   emaStackData, macdChartData, momentumChartData, volatilityChartData, directionalChartData,
 } from "../data/analyticsDataV3";
@@ -29,8 +25,9 @@ import type { AnalysisResult } from "../data/analyticsDataV3";
 import type { SheetRow }         from "../lib/googleSheets";
 import { fetchSynthesis, synthesisToAnalysisResult } from "../lib/brain/synthesis";
 import type { Synthesis }        from "../lib/brain/synthesis";
-import { getAnalyticsPanelOrder, setAnalyticsPanelOrder, getReversalSettings, setReversalSettings } from "../lib/preferences";
+import { getAnalyticsPanelOrder, setAnalyticsPanelOrder, getReversalSettings, setReversalSettings, getTreasuryAuctionsBackfilled, setTreasuryAuctionsBackfilled, getQuadPairs, setQuadPairs } from "../lib/preferences";
 import { pairSelectionEvents } from "../lib/pairSelection";
+import { sidebarEvents } from "../lib/sidebarEvents";
 import { playAlertSound } from "../lib/alertSound";
 import type { AlertSound } from "../lib/alertSound";
 import { AlertsPanel, type Alert } from "../components/panels/AlertsPanel";
@@ -39,7 +36,7 @@ import { computeAutoTrendlines, type TrendlineSegment } from "../lib/trendlines"
 import { decimalsForPair, formatPrice } from "../lib/priceFormat";
 import { invoke }                from "@tauri-apps/api/core";
 import {
-  createChart, CandlestickSeries, AreaSeries, LineSeries,
+  createChart, CandlestickSeries, AreaSeries, LineSeries, HistogramSeries,
   ColorType, CrosshairMode, LineStyle, TickMarkType,
 } from "lightweight-charts";
 import type { IChartApi, UTCTimestamp } from "lightweight-charts";
@@ -147,15 +144,29 @@ interface EconomicEvent {
   actual?: string;
 }
 
-function formatDataDate(dateStr: string): string {
-  // dateStr is "YYYY-MM-DD" — parse as local date to avoid any timezone shift
-  const [y, m, d] = dateStr.split("-").map(Number);
-  return new Date(y, m - 1, d).toLocaleDateString("en-US", {
-    weekday: "long",
-    year:    "numeric",
-    month:   "long",
-    day:     "numeric",
-  });
+// A 10Y note or 30Y bond auction result, sourced from TreasuryDirect's own
+// public auction-results API (see sync_treasury_auctions/
+// get_stored_treasury_auctions in src-tauri/src/lib.rs) — real published
+// data, not the ForexFactory calendar feed. TreasuryDirect's results don't
+// include a "tail"/when-issued-yield field at all (that's a market-quoted
+// figure, not something Treasury itself publishes), so those stay
+// unavailable rather than invented.
+interface TreasuryAuction {
+  cusip: string;
+  securityTerm: string;
+  auctionDate: string;
+  issueDate: string;
+  highYield: string;
+  bidToCoverRatio: string;
+  indirectBidderAccepted: string;
+  directBidderAccepted: string;
+  primaryDealerAccepted: string;
+  totalAccepted: string;
+  offeringAmount: string;
+  // auctionDate is date-only (midnight, no timezone) — the real close/
+  // results time is here instead, e.g. "01:00 PM", always US Eastern
+  // (confirmed against the live API). See auctionTimestamp() below.
+  closingTimeCompetitive: string;
 }
 
 // ── Verdict-driven color palette ─────────────────────────────────────────────
@@ -406,16 +417,6 @@ function fmtDate(d: string) {
 }
 
 
-function isForexOpen(): boolean {
-  const now = new Date();
-  const day = now.getUTCDay();
-  const mins = now.getUTCHours() * 60 + now.getUTCMinutes();
-  if (day === 6) return false;
-  if (day === 0 && mins < 22 * 60) return false;
-  if (day === 5 && mins >= 22 * 60) return false;
-  return true;
-}
-
 const PRICE_GRID = "1.1fr 1px 1.4fr 1.4fr 1.4fr 1.4fr 1px 1.1fr 1px 1.0fr 0.9fr 0.9fr";
 
 function VLine() {
@@ -526,36 +527,36 @@ function buildPriceAnalysis(rows: SheetRow[]): { headline: string; bullets: stri
   return { headline, bullets, description };
 }
 
-function CandleShape({ x, width, payload, background, yDomain }: any) {
-  if (!payload || !background || !yDomain) return null;
-  const { open, high, low, close } = payload;
-  if ([open, high, low, close].some((v: unknown) => v == null || isNaN(v as number))) return null;
-  const isUp  = close >= open;
-  const color = isUp ? "#60a5fa" : "#a78bfa";
-  const [dMin, dMax] = yDomain;
-  const range = dMax - dMin;
-  if (range === 0) return null;
-  const toPixel = (v: number) => background.y + (dMax - v) / range * background.height;
-  const yH = toPixel(high);
-  const yL = toPixel(low);
-  const yO = toPixel(open);
-  const yC = toPixel(close);
-  const bodyTop = Math.min(yO, yC);
-  const bodyH   = Math.max(Math.abs(yC - yO), 1.5);
-  const cx      = x + width / 2;
-  const bw      = Math.max(width - 2, 2);
-  return (
-    <g>
-      <line x1={cx} y1={yH} x2={cx} y2={yL} stroke={color} strokeWidth={1} strokeOpacity={0.8} />
-      <rect x={cx - bw / 2} y={bodyTop} width={bw} height={bodyH}
-            fill={color} fillOpacity={1} stroke={color} strokeWidth={0.5} />
-    </g>
-  );
-}
-
 // ─── Indicator helpers ─────────────────────────────────────────────────────────
 
-type IndKey = "bb" | "ichi" | "ema9" | "ema20" | "ema50" | "ema200" | "reversal" | "session8am" | "pivots";
+type IndKey = "bb" | "ichi" | "ema9" | "ema20" | "ema50" | "ema200" | "volume" | "reversal" | "session8am" | "pivots";
+
+// ─── Quad View lock — broadcast the primary tile's toolbar settings to the
+// other 3 tiles ────────────────────────────────────────────────────────────
+// Module-scope pub/sub (same lightweight pattern as pairSelectionEvents/
+// tradeEvents), scoped to this file since QuadSyncSettings mirrors
+// PriceHistoryChart's own internal state shape. Only the toolbar-level
+// master toggles are synced (timeframe, which overlays are on, view mode,
+// candle colors) — not each overlay's own right-click sub-settings (ORB's
+// per-session picks, Pivot timeframes, News categories, etc.), which stay
+// per-tile even when locked.
+interface QuadSyncSettings {
+  chartTf: "1W" | "1D" | "4H" | "1H" | "15M" | "5M" | "1M";
+  activeInds: IndKey[];
+  showDailyZones: boolean; show4HZones: boolean; show1HZones: boolean; show15MZones: boolean; show5MZones: boolean;
+  showWeeklyTrend: boolean; showDailyTrend: boolean; show4HTrend: boolean; show1HTrend: boolean; show15MTrend: boolean; show5MTrend: boolean; show1MTrend: boolean;
+  showOrbNY: boolean; showOrbTokyo: boolean; showOrbLondon: boolean; showOrb930: boolean;
+  showSessions: boolean;
+  showNews: boolean;
+  viewMode: "candles" | "line";
+  candleColorScheme: "default" | "tradingview";
+}
+type QuadSyncListener = (settings: QuadSyncSettings) => void;
+const quadSyncListeners = new Set<QuadSyncListener>();
+const quadSyncEvents = {
+  subscribe(fn: QuadSyncListener): () => void { quadSyncListeners.add(fn); return () => quadSyncListeners.delete(fn); },
+  publish(settings: QuadSyncSettings): void { quadSyncListeners.forEach(fn => fn(settings)); },
+};
 
 const IND_DEFS: { key: IndKey; label: string; color: string }[] = [
   { key: "bb",    label: "BB(20,2)", color: "#64b5f6" },
@@ -564,7 +565,16 @@ const IND_DEFS: { key: IndKey; label: string; color: string }[] = [
   { key: "ema20", label: "EMA 20",  color: "#30d158" },
   { key: "ema50", label: "EMA 50",  color: "#ff6b6b" },
   { key: "ema200",label: "EMA 200", color: "#bf5af2" },
+  { key: "volume",label: "Volume",  color: "#94a3b8" },
 ];
+
+// Volume histogram bar colors — muted versions of the current candle
+// up/down colors so it reads as "the same candles, quieter" rather than a
+// clashing third color scheme.
+const VOLUME_COLOR_SCHEMES = {
+  default:     { up: "rgba(96,165,250,0.5)",  down: "rgba(167,139,250,0.5)" },
+  tradingview: { up: "rgba(34,197,94,0.5)",   down: "rgba(239,68,68,0.5)" },
+} as const;
 
 function computeEMA(closes: number[], period: number): (number | null)[] {
   if (closes.length < period) return closes.map(() => null);
@@ -1128,15 +1138,44 @@ class ReversalMarkerPrimitive {
 // Economic Calendar panel (one data source, no duplicate fetch/pipeline),
 // filtered to whichever categories are enabled and to the charted pair's
 // own two currencies.
-type NewsCategoryKey = "fomc" | "cpi" | "jobs";
-interface NewsCategoryDef { key: NewsCategoryKey; label: string; color: string; keywords: string[] }
+type NewsCategoryKey =
+  | "fomc" | "sep" | "fomc_presser" | "fomc_minutes"
+  | "cpi" | "pce" | "jobs" | "gdp" | "ism" | "jolts" | "retail_sales" | "ppi" | "jobless_claims"
+  | "auction";
+type NewsCategoryGroup = "Monetary Policy" | "Inflation / Growth / Labor" | "Bond Market";
+interface NewsCategoryDef { key: NewsCategoryKey; label: string; color: string; group: NewsCategoryGroup; keywords: string[] }
+// Grouped to match the News settings popout's layout: a section header per
+// group, categories listed underneath. fomc/cpi/jobs keep real keyword
+// matching (used by the non-USD live-feed leg below); every other new
+// category here is drawn by the separate SIMPLE_CATEGORY_DEFS pool-scan
+// further down, which doesn't go through eventNewsCategory at all — their
+// keywords stay empty, same reasoning as "auction" already had.
+// Color is per-group, not per-category, so every marker's color on the
+// chart tells you which group it belongs to at a glance: Monetary Policy
+// red, Inflation/Growth/Labor yellow, Bond Market green.
+const GROUP_COLORS: Record<NewsCategoryGroup, string> = {
+  "Monetary Policy": "#ef4444",
+  "Inflation / Growth / Labor": "#eab308",
+  "Bond Market": "#10b981",
+};
 const NEWS_CATEGORY_DEFS: NewsCategoryDef[] = [
-  { key: "fomc", label: "FOMC", color: "#ef4444",
+  { key: "fomc", label: "FOMC", color: GROUP_COLORS["Monetary Policy"], group: "Monetary Policy",
     keywords: ["fomc statement", "fomc press conference", "fomc meeting minutes", "federal funds rate"] },
-  { key: "cpi", label: "CPI", color: "#f59e0b",
+  { key: "sep", label: "SEP / Dot Plot", color: GROUP_COLORS["Monetary Policy"], group: "Monetary Policy", keywords: [] },
+  { key: "fomc_presser", label: "Fed Chair Press Conference", color: GROUP_COLORS["Monetary Policy"], group: "Monetary Policy", keywords: [] },
+  { key: "fomc_minutes", label: "FOMC Minutes", color: GROUP_COLORS["Monetary Policy"], group: "Monetary Policy", keywords: [] },
+  { key: "cpi", label: "CPI", color: GROUP_COLORS["Inflation / Growth / Labor"], group: "Inflation / Growth / Labor",
     keywords: ["cpi m/m", "cpi y/y", "core cpi m/m", "core cpi y/y", "cpi q/q"] },
-  { key: "jobs", label: "Jobs Reports", color: "#3b82f6",
+  { key: "pce", label: "PCE / Core PCE", color: GROUP_COLORS["Inflation / Growth / Labor"], group: "Inflation / Growth / Labor", keywords: [] },
+  { key: "jobs", label: "Jobs / NFP", color: GROUP_COLORS["Inflation / Growth / Labor"], group: "Inflation / Growth / Labor",
     keywords: ["non-farm employment change", "unemployment rate", "average hourly earnings", "employment change"] },
+  { key: "gdp", label: "GDP", color: GROUP_COLORS["Inflation / Growth / Labor"], group: "Inflation / Growth / Labor", keywords: [] },
+  { key: "ism", label: "ISM Manufacturing / Services", color: GROUP_COLORS["Inflation / Growth / Labor"], group: "Inflation / Growth / Labor", keywords: [] },
+  { key: "jolts", label: "JOLTS", color: GROUP_COLORS["Inflation / Growth / Labor"], group: "Inflation / Growth / Labor", keywords: [] },
+  { key: "retail_sales", label: "Retail Sales", color: GROUP_COLORS["Inflation / Growth / Labor"], group: "Inflation / Growth / Labor", keywords: [] },
+  { key: "ppi", label: "PPI", color: GROUP_COLORS["Inflation / Growth / Labor"], group: "Inflation / Growth / Labor", keywords: [] },
+  { key: "jobless_claims", label: "Initial Jobless Claims", color: GROUP_COLORS["Inflation / Growth / Labor"], group: "Inflation / Growth / Labor", keywords: [] },
+  { key: "auction", label: "10Y/30Y Auction", color: GROUP_COLORS["Bond Market"], group: "Bond Market", keywords: [] },
 ];
 // Which currencies' news are relevant to a given instrument. A genuine
 // forex-style pair ("EUR/USD") is relevant to both of its own two
@@ -1183,6 +1222,125 @@ const FOMC_STATEMENT_DATES: string[] = [
   "2026-06-17T14:00:00-04:00", "2026-07-29T14:00:00-04:00", "2026-09-16T14:00:00-04:00",
   "2026-10-28T14:00:00-04:00", "2026-12-09T14:00:00-05:00",
 ];
+
+// Real Fed Funds target range actual/previous per meeting — used only as a
+// fallback when neither the live feed nor persisted history has a real
+// matching "Federal Funds Rate" event (every meeting before this feature
+// started polling). Computed from FRED's daily DFEDTARU/DFEDTARL series
+// (target range upper/lower limit), sampled a few days on either side of
+// each meeting date to land on the correct pre/post-meeting constant value
+// regardless of the series' own reporting lag around the exact decision
+// date. No forecast: FRED has no consensus-estimate data, so this never
+// drives a "vs forecast" surprise — only the real decision (hold/cut/hike),
+// which interpretFomc already derives from actual vs previous alone.
+// Source: https://fred.stlouisfed.org/series/DFEDTARU and DFEDTARL.
+const FOMC_FRED_ACTUALS: { date: string; actual: string; previous: string }[] = [
+  { date: "2023-02-01", actual: "4.50%-4.75%", previous: "4.25%-4.50%" },
+  { date: "2023-03-22", actual: "4.75%-5.00%", previous: "4.50%-4.75%" },
+  { date: "2023-05-03", actual: "5.00%-5.25%", previous: "4.75%-5.00%" },
+  { date: "2023-06-14", actual: "5.00%-5.25%", previous: "5.00%-5.25%" },
+  { date: "2023-07-26", actual: "5.25%-5.50%", previous: "5.00%-5.25%" },
+  { date: "2023-09-20", actual: "5.25%-5.50%", previous: "5.25%-5.50%" },
+  { date: "2023-11-01", actual: "5.25%-5.50%", previous: "5.25%-5.50%" },
+  { date: "2023-12-13", actual: "5.25%-5.50%", previous: "5.25%-5.50%" },
+  { date: "2024-01-31", actual: "5.25%-5.50%", previous: "5.25%-5.50%" },
+  { date: "2024-03-20", actual: "5.25%-5.50%", previous: "5.25%-5.50%" },
+  { date: "2024-05-01", actual: "5.25%-5.50%", previous: "5.25%-5.50%" },
+  { date: "2024-06-12", actual: "5.25%-5.50%", previous: "5.25%-5.50%" },
+  { date: "2024-07-31", actual: "5.25%-5.50%", previous: "5.25%-5.50%" },
+  { date: "2024-09-18", actual: "4.75%-5.00%", previous: "5.25%-5.50%" },
+  { date: "2024-11-07", actual: "4.50%-4.75%", previous: "4.75%-5.00%" },
+  { date: "2024-12-18", actual: "4.25%-4.50%", previous: "4.50%-4.75%" },
+  { date: "2025-01-29", actual: "4.25%-4.50%", previous: "4.25%-4.50%" },
+  { date: "2025-03-19", actual: "4.25%-4.50%", previous: "4.25%-4.50%" },
+  { date: "2025-05-07", actual: "4.25%-4.50%", previous: "4.25%-4.50%" },
+  { date: "2025-06-18", actual: "4.25%-4.50%", previous: "4.25%-4.50%" },
+  { date: "2025-07-30", actual: "4.25%-4.50%", previous: "4.25%-4.50%" },
+  { date: "2025-09-17", actual: "4.00%-4.25%", previous: "4.25%-4.50%" },
+  { date: "2025-10-29", actual: "3.75%-4.00%", previous: "4.00%-4.25%" },
+  { date: "2025-12-10", actual: "3.50%-3.75%", previous: "3.75%-4.00%" },
+  { date: "2026-01-28", actual: "3.50%-3.75%", previous: "3.50%-3.75%" },
+  { date: "2026-03-18", actual: "3.50%-3.75%", previous: "3.50%-3.75%" },
+  { date: "2026-04-29", actual: "3.50%-3.75%", previous: "3.50%-3.75%" },
+  { date: "2026-06-17", actual: "3.50%-3.75%", previous: "3.50%-3.75%" },
+  { date: "2026-07-29", actual: "3.50%-3.75%", previous: "3.50%-3.75%" },
+];
+function fomcFredFallback(dateIso: string): EventDetail | null {
+  const row = FOMC_FRED_ACTUALS.find(r => r.date === dateIso.slice(0, 10));
+  if (!row) return null;
+  return interpretFomc({ title: "Federal Funds Rate", country: "USD", date: dateIso, impact: "High", forecast: "", previous: row.previous, actual: row.actual });
+}
+
+// FOMC Minutes — released 3 weeks after each meeting (always a Wednesday at
+// 2pm ET, shifted a day earlier the few times that Wednesday would've
+// landed on/next to Thanksgiving or New Year's Eve — both real, confirmed
+// exceptions, not a fixed-offset guess). meetingDate ties each release back
+// to the meeting it's the minutes OF, so the popup can reuse that meeting's
+// real decision (via interpretFomc/fomcFredFallback) instead of showing
+// nothing — minutes aren't their own numeric data release. Only includes
+// meetings that have actually happened; a future meeting has no minutes
+// date yet because none has been decided or scheduled.
+// Source: https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm
+const FOMC_MINUTES_DATES: { meetingDate: string; minutesDate: string }[] = [
+  { meetingDate: "2023-02-01", minutesDate: "2023-02-22T14:00:00-05:00" },
+  { meetingDate: "2023-03-22", minutesDate: "2023-04-12T14:00:00-04:00" },
+  { meetingDate: "2023-05-03", minutesDate: "2023-05-24T14:00:00-04:00" },
+  { meetingDate: "2023-06-14", minutesDate: "2023-07-05T14:00:00-04:00" },
+  { meetingDate: "2023-07-26", minutesDate: "2023-08-16T14:00:00-04:00" },
+  { meetingDate: "2023-09-20", minutesDate: "2023-10-11T14:00:00-04:00" },
+  { meetingDate: "2023-11-01", minutesDate: "2023-11-21T14:00:00-05:00" },
+  { meetingDate: "2023-12-13", minutesDate: "2024-01-03T14:00:00-05:00" },
+  { meetingDate: "2024-01-31", minutesDate: "2024-02-21T14:00:00-05:00" },
+  { meetingDate: "2024-03-20", minutesDate: "2024-04-10T14:00:00-04:00" },
+  { meetingDate: "2024-05-01", minutesDate: "2024-05-22T14:00:00-04:00" },
+  { meetingDate: "2024-06-12", minutesDate: "2024-07-03T14:00:00-04:00" },
+  { meetingDate: "2024-07-31", minutesDate: "2024-08-21T14:00:00-04:00" },
+  { meetingDate: "2024-09-18", minutesDate: "2024-10-09T14:00:00-04:00" },
+  { meetingDate: "2024-11-07", minutesDate: "2024-11-26T14:00:00-05:00" },
+  { meetingDate: "2024-12-18", minutesDate: "2025-01-08T14:00:00-05:00" },
+  { meetingDate: "2025-01-29", minutesDate: "2025-02-19T14:00:00-05:00" },
+  { meetingDate: "2025-03-19", minutesDate: "2025-04-09T14:00:00-04:00" },
+  { meetingDate: "2025-05-07", minutesDate: "2025-05-28T14:00:00-04:00" },
+  { meetingDate: "2025-06-18", minutesDate: "2025-07-09T14:00:00-04:00" },
+  { meetingDate: "2025-07-30", minutesDate: "2025-08-20T14:00:00-04:00" },
+  { meetingDate: "2025-09-17", minutesDate: "2025-10-08T14:00:00-04:00" },
+  { meetingDate: "2025-10-29", minutesDate: "2025-11-19T14:00:00-05:00" },
+  { meetingDate: "2025-12-10", minutesDate: "2025-12-30T14:00:00-05:00" },
+  { meetingDate: "2026-01-28", minutesDate: "2026-02-18T14:00:00-05:00" },
+  { meetingDate: "2026-03-18", minutesDate: "2026-04-08T14:00:00-04:00" },
+  { meetingDate: "2026-04-29", minutesDate: "2026-05-20T14:00:00-04:00" },
+  { meetingDate: "2026-06-17", minutesDate: "2026-07-08T14:00:00-04:00" },
+  { meetingDate: "2026-07-29", minutesDate: "2026-08-19T14:00:00-04:00" },
+];
+
+// Summary of Economic Projections (dot plot) — only released at the four
+// quarterly FOMC meetings (Mar/Jun/Sep/Dec), never every meeting. No free
+// structured API publishes this directly (the Fed only releases it as a
+// PDF table); these are the real published median federal-funds-rate
+// projections per meeting, pulled from the St. Louis Fed's ALFRED vintage
+// system — FRED series FEDTARMD (yearly path) and FEDTARMDLR (longer run),
+// queried per meeting's vintage_date, e.g.:
+// https://alfred.stlouisfed.org/graph/alfredgraph.csv?id=FEDTARMD&vintage_date=2025-12-10
+// Not every meeting is present — only the ones actually verified against
+// ALFRED. A meeting missing here just means no SEP section is shown; it's
+// never inferred or estimated. Add newer meetings here once ALFRED has
+// published that vintage (typically within a day or two of the release).
+const SEP_PROJECTIONS: { date: string; projections: Record<string, number> }[] = [
+  { date: "2023-03-22", projections: { "2023": 5.1, "2024": 4.3, "2025": 3.1, longerRun: 2.5 } },
+  { date: "2023-06-14", projections: { "2023": 5.6, "2024": 4.6, "2025": 3.4, longerRun: 2.5 } },
+  { date: "2023-09-20", projections: { "2023": 5.6, "2024": 5.1, "2025": 3.9, "2026": 2.9, longerRun: 2.5 } },
+  { date: "2023-12-13", projections: { "2023": 5.4, "2024": 4.6, "2025": 3.6, "2026": 2.9, longerRun: 2.5 } },
+  { date: "2024-03-20", projections: { "2024": 4.6, "2025": 3.9, "2026": 3.1, longerRun: 2.6 } },
+  { date: "2024-06-12", projections: { "2024": 5.1, "2025": 4.1, "2026": 3.1, longerRun: 2.8 } },
+  { date: "2024-09-18", projections: { "2024": 4.4, "2025": 3.4, "2026": 2.9, "2027": 2.9, longerRun: 2.9 } },
+  { date: "2024-12-18", projections: { "2024": 4.4, "2025": 3.9, "2026": 3.4, "2027": 3.1, longerRun: 3.0 } },
+  { date: "2025-03-19", projections: { "2025": 3.9, "2026": 3.4, "2027": 3.1, longerRun: 3.0 } },
+  { date: "2025-06-18", projections: { "2025": 3.9, "2026": 3.6, "2027": 3.4, longerRun: 3.0 } },
+  { date: "2025-09-17", projections: { "2025": 3.6, "2026": 3.4, "2027": 3.1, "2028": 3.1, longerRun: 3.0 } },
+  { date: "2025-12-10", projections: { "2025": 3.6, "2026": 3.4, "2027": 3.1, "2028": 3.1, longerRun: 3.0 } },
+  { date: "2026-03-18", projections: { "2026": 3.4, "2027": 3.1, "2028": 3.1, longerRun: 3.1 } },
+  { date: "2026-06-17", projections: { "2026": 3.8, "2027": 3.6, "2028": 3.4, longerRun: 3.1 } },
+];
 // Consumer Price Index — released ~8:30 ET, generally the second week of
 // the month covering the prior month's data. No entry for October 2025:
 // that release was canceled outright by the government shutdown, not
@@ -1200,6 +1358,56 @@ const CPI_RELEASE_DATES: string[] = [
   "2026-07-14T08:30:00-04:00", "2026-08-12T08:30:00-04:00", "2026-09-11T08:30:00-04:00",
   "2026-10-14T08:30:00-04:00", "2026-11-10T08:30:00-05:00", "2026-12-10T08:30:00-05:00",
 ];
+
+// Real historical CPI y/y and Core CPI y/y actual/previous values — used
+// only as a fallback for a static-table release date when neither the live
+// feed nor persisted history has a real matching event (which is every
+// release before this feature started polling, i.e. effectively all of
+// them right now). Computed here from FRED's raw CPI index series
+// (fredgraph.csv's own units=pc1 percent-change param didn't take effect
+// when tested against the live endpoint, so "y/y % change" is computed
+// directly from consecutive index levels instead — same result, just
+// computed client-side rather than server-side).
+// Source: https://fred.stlouisfed.org/series/CPIAUCSL (headline) and
+// https://fred.stlouisfed.org/series/CPILFESL (core).
+// FRED has no consensus-forecast data, so forecast/surprise/tag are never
+// populated from this table — only real published actual/previous, never
+// invented. A release missing here (e.g. one after this table was last
+// updated) just shows nothing extra; it's never estimated.
+const CPI_FRED_ACTUALS: { date: string; actual: number; previous: number | null; coreActual: number | null; corePrevious: number | null }[] = [
+  { date: "2025-01-15", actual: 2.9, previous: 2.7, coreActual: 3.2, corePrevious: 3.3 },
+  { date: "2025-02-12", actual: 3, previous: 2.9, coreActual: 3.3, corePrevious: 3.2 },
+  { date: "2025-03-12", actual: 2.8, previous: 3, coreActual: 3.1, corePrevious: 3.3 },
+  { date: "2025-04-10", actual: 2.4, previous: 2.8, coreActual: 2.8, corePrevious: 3.1 },
+  { date: "2025-05-13", actual: 2.3, previous: 2.4, coreActual: 2.8, corePrevious: 2.8 },
+  { date: "2025-06-11", actual: 2.4, previous: 2.3, coreActual: 2.8, corePrevious: 2.8 },
+  { date: "2025-07-15", actual: 2.7, previous: 2.4, coreActual: 2.9, corePrevious: 2.8 },
+  { date: "2025-08-12", actual: 2.7, previous: 2.7, coreActual: 3.1, corePrevious: 2.9 },
+  { date: "2025-09-11", actual: 2.9, previous: 2.7, coreActual: 3.1, corePrevious: 3.1 },
+  // No Oct 2025 CPI (canceled) means Nov 2025 data has no real prior-month
+  // comparison — left null, not estimated.
+  { date: "2025-12-18", actual: 2.7, previous: null, coreActual: 2.6, corePrevious: null },
+  { date: "2026-01-13", actual: 2.7, previous: 2.7, coreActual: 2.6, corePrevious: 2.6 },
+  { date: "2026-02-13", actual: 2.4, previous: 2.7, coreActual: 2.5, corePrevious: 2.6 },
+  { date: "2026-03-11", actual: 2.4, previous: 2.4, coreActual: 2.5, corePrevious: 2.5 },
+  { date: "2026-04-10", actual: 3.3, previous: 2.4, coreActual: 2.6, corePrevious: 2.5 },
+  { date: "2026-05-12", actual: 3.8, previous: 3.3, coreActual: 2.7, corePrevious: 2.6 },
+  { date: "2026-06-10", actual: 4.2, previous: 3.8, coreActual: 2.8, corePrevious: 2.7 },
+  { date: "2026-07-14", actual: 3.5, previous: 4.2, coreActual: 2.6, corePrevious: 2.8 },
+  { date: "2026-08-12", actual: 3.3, previous: 3.5, coreActual: 2.5, corePrevious: 2.6 },
+];
+function cpiFredFallback(dateIso: string): EventDetail | null {
+  const row = CPI_FRED_ACTUALS.find(r => r.date === dateIso.slice(0, 10));
+  if (!row) return null;
+  const detail: EventDetail = {
+    title: "CPI",
+    headline: { label: "CPI y/y", actual: `${row.actual}%`, previous: row.previous !== null ? `${row.previous}%` : undefined },
+  };
+  if (row.coreActual !== null) {
+    detail.core = { label: "Core CPI y/y", actual: `${row.coreActual}%`, previous: row.corePrevious !== null ? `${row.corePrevious}%` : undefined };
+  }
+  return detail;
+}
 // Employment Situation (Non-Farm Payrolls / Jobs Report) — released 8:30 ET,
 // normally the first Friday of the month covering the prior month's data.
 // No separate October 2025 entry: that report was merged into the November
@@ -1218,6 +1426,496 @@ const JOBS_RELEASE_DATES: string[] = [
   "2026-07-02T08:30:00-04:00", "2026-08-07T08:30:00-04:00", "2026-09-04T08:30:00-04:00",
   "2026-10-02T08:30:00-04:00", "2026-11-06T08:30:00-05:00", "2026-12-04T08:30:00-05:00",
 ];
+
+// Real historical NFP change, Unemployment Rate, and Average Hourly
+// Earnings m/m actual/previous — used only as a fallback when neither the
+// live feed nor persisted history has a real matching event (every release
+// before this feature started polling). Computed from FRED's raw series:
+// PAYEMS (Total Nonfarm Payrolls level, NFP = month-over-month change),
+// UNRATE (Unemployment Rate, used directly), and CES0500000003 (Average
+// Hourly Earnings, % change computed the same way CPI's y/y is). null means
+// genuinely no data that month (e.g. Oct 2025's unemployment rate — that
+// report was delayed by the government shutdown, same gap already noted on
+// JOBS_RELEASE_DATES above), never estimated.
+// Source: https://fred.stlouisfed.org/series/PAYEMS, /UNRATE, and
+// /CES0500000003.
+const JOBS_FRED_ACTUALS: { date: string; nfp: number | null; prevNfp: number | null; unrate: number | null; prevUnrate: number | null; ahe: number | null; prevAhe: number | null }[] = [
+  { date: "2025-01-10", nfp: 237, prevNfp: 134, unrate: 4.1, prevUnrate: 4.2, ahe: 0.3, prevAhe: 0.4 },
+  { date: "2025-02-07", nfp: -48, prevNfp: 237, unrate: 4.0, prevUnrate: 4.1, ahe: 0.4, prevAhe: 0.3 },
+  { date: "2025-03-07", nfp: 42, prevNfp: -48, unrate: 4.2, prevUnrate: 4.0, ahe: 0.3, prevAhe: 0.4 },
+  { date: "2025-04-04", nfp: 67, prevNfp: 42, unrate: 4.2, prevUnrate: 4.2, ahe: 0.5, prevAhe: 0.3 },
+  { date: "2025-05-02", nfp: 108, prevNfp: 67, unrate: 4.2, prevUnrate: 4.2, ahe: 0.0, prevAhe: 0.5 },
+  { date: "2025-06-06", nfp: 13, prevNfp: 108, unrate: 4.3, prevUnrate: 4.2, ahe: 0.4, prevAhe: 0.0 },
+  { date: "2025-07-03", nfp: -20, prevNfp: 13, unrate: 4.1, prevUnrate: 4.3, ahe: 0.2, prevAhe: 0.4 },
+  { date: "2025-08-01", nfp: 64, prevNfp: -20, unrate: 4.3, prevUnrate: 4.1, ahe: 0.3, prevAhe: 0.2 },
+  { date: "2025-09-05", nfp: -70, prevNfp: 64, unrate: 4.3, prevUnrate: 4.3, ahe: 0.4, prevAhe: 0.3 },
+  { date: "2025-11-20", nfp: -140, prevNfp: 76, unrate: null, prevUnrate: 4.4, ahe: 0.4, prevAhe: 0.2 },
+  { date: "2025-12-16", nfp: 41, prevNfp: -140, unrate: 4.5, prevUnrate: null, ahe: 0.4, prevAhe: 0.4 },
+  { date: "2026-01-09", nfp: -17, prevNfp: 41, unrate: 4.4, prevUnrate: 4.5, ahe: 0.1, prevAhe: 0.4 },
+  { date: "2026-02-11", nfp: 160, prevNfp: -17, unrate: 4.3, prevUnrate: 4.4, ahe: 0.4, prevAhe: 0.1 },
+  { date: "2026-03-06", nfp: -156, prevNfp: 160, unrate: 4.4, prevUnrate: 4.3, ahe: 0.3, prevAhe: 0.4 },
+  { date: "2026-04-03", nfp: 214, prevNfp: -156, unrate: 4.3, prevUnrate: 4.4, ahe: 0.2, prevAhe: 0.3 },
+  { date: "2026-05-08", nfp: 148, prevNfp: 214, unrate: 4.3, prevUnrate: 4.3, ahe: 0.2, prevAhe: 0.2 },
+  { date: "2026-06-05", nfp: 63, prevNfp: 148, unrate: 4.3, prevUnrate: 4.3, ahe: 0.2, prevAhe: 0.2 },
+  { date: "2026-07-02", nfp: 20, prevNfp: 63, unrate: 4.2, prevUnrate: 4.3, ahe: 0.3, prevAhe: 0.2 },
+  { date: "2026-08-07", nfp: -23, prevNfp: 20, unrate: 4.1, prevUnrate: 4.2, ahe: 0.1, prevAhe: 0.3 },
+];
+function jobsFredFallback(dateIso: string): EventDetail | null {
+  const row = JOBS_FRED_ACTUALS.find(r => r.date === dateIso.slice(0, 10));
+  if (!row) return null;
+  const ev = (title: string, actual: number | null, previous: number | null, unit: string): EconomicEvent | undefined =>
+    actual === null ? undefined : { title, country: "USD", date: dateIso, impact: "High", forecast: "", previous: previous !== null ? `${previous}${unit}` : "", actual: `${actual}${unit}` };
+  return interpretJobs(
+    ev("Non-Farm Employment Change", row.nfp, row.prevNfp, "K"),
+    ev("Unemployment Rate", row.unrate, row.prevUnrate, "%"),
+    ev("Average Hourly Earnings m/m", row.ahe, row.prevAhe, "%"),
+  );
+}
+
+// ISM Manufacturing/Services PMI — unlike CPI/Jobs/FOMC, there is no free
+// source for the actual index VALUES at all: ISM's PMI numbers are
+// commercially licensed, and FRED's old free mirror of them (series NAPM)
+// has been discontinued (confirmed: 404 on the live API, not guessed) —
+// there's no legitimate free backfill for the numbers themselves. The
+// RELEASE SCHEDULE, though, is real public information, not licensed
+// content: Manufacturing releases the 1st business day of each month (2nd
+// in January), Services the 3rd business day (4th in January), both
+// 10:00am ET, both shifted a day when that would land on New Year's Day,
+// Independence Day, or Labor Day — computed here, not guessed, and
+// verified against ISM's own published rule (ismworld.org) plus the
+// standard US federal holiday-observance shift. So these markers plot
+// reliably on schedule, and their popup shows real data whenever a live or
+// persisted release actually exists (which starts accumulating from now
+// on) — but never a fabricated historical index value.
+const ISM_MANUFACTURING_DATES: string[] = [
+  "2025-01-03T10:00:00-05:00", "2025-02-03T10:00:00-05:00", "2025-03-03T10:00:00-05:00",
+  "2025-04-01T10:00:00-04:00", "2025-05-01T10:00:00-04:00", "2025-06-02T10:00:00-04:00",
+  "2025-07-01T10:00:00-04:00", "2025-08-01T10:00:00-04:00", "2025-09-02T10:00:00-04:00",
+  "2025-10-01T10:00:00-04:00", "2025-11-03T10:00:00-05:00", "2025-12-01T10:00:00-05:00",
+  "2026-01-05T10:00:00-05:00", "2026-02-02T10:00:00-05:00", "2026-03-02T10:00:00-05:00",
+  "2026-04-01T10:00:00-04:00", "2026-05-01T10:00:00-04:00", "2026-06-01T10:00:00-04:00",
+  "2026-07-01T10:00:00-04:00", "2026-08-03T10:00:00-04:00", "2026-09-01T10:00:00-04:00",
+  "2026-10-01T10:00:00-04:00", "2026-11-02T10:00:00-05:00", "2026-12-01T10:00:00-05:00",
+];
+const ISM_SERVICES_DATES: string[] = [
+  "2025-01-07T10:00:00-05:00", "2025-02-05T10:00:00-05:00", "2025-03-05T10:00:00-05:00",
+  "2025-04-03T10:00:00-04:00", "2025-05-05T10:00:00-04:00", "2025-06-04T10:00:00-04:00",
+  "2025-07-03T10:00:00-04:00", "2025-08-05T10:00:00-04:00", "2025-09-04T10:00:00-04:00",
+  "2025-10-03T10:00:00-04:00", "2025-11-05T10:00:00-05:00", "2025-12-03T10:00:00-05:00",
+  "2026-01-07T10:00:00-05:00", "2026-02-04T10:00:00-05:00", "2026-03-04T10:00:00-05:00",
+  "2026-04-03T10:00:00-04:00", "2026-05-05T10:00:00-04:00", "2026-06-03T10:00:00-04:00",
+  "2026-07-06T10:00:00-04:00", "2026-08-05T10:00:00-04:00", "2026-09-03T10:00:00-04:00",
+  "2026-10-05T10:00:00-04:00", "2026-11-04T10:00:00-05:00", "2026-12-03T10:00:00-05:00",
+];
+
+// Retail Sales — unlike ISM, this IS free public government data (Census
+// Bureau), so both the release schedule AND real historical actual/previous
+// values are backfillable, same as CPI/Jobs/FOMC. The schedule is
+// genuinely irregular (no fixed "Nth day" rule, unlike ISM), including a
+// real gap around Sep–Oct 2025 (the government shutdown delayed that
+// release by over two months, same disruption already documented on
+// JOBS_RELEASE_DATES/CPI_RELEASE_DATES above) — pulled from ALFRED's own
+// realized-release-date archive, not computed/guessed.
+// Source: https://alfred.stlouisfed.org/release/downloaddates?rid=9&ff=txt
+// (release dates) and https://fred.stlouisfed.org/series/RSAFS /
+// RSFSXMV (headline / ex-motor-vehicle "core" level, m/m % computed here
+// the same way CPI's y/y is).
+const RETAIL_SALES_DATES: string[] = [
+  "2025-01-16T08:30:00-05:00", "2025-02-14T08:30:00-05:00", "2025-03-17T08:30:00-04:00",
+  "2025-04-16T08:30:00-04:00", "2025-05-15T08:30:00-04:00", "2025-06-17T08:30:00-04:00",
+  "2025-07-17T08:30:00-04:00", "2025-08-15T08:30:00-04:00", "2025-09-16T08:30:00-04:00",
+  "2025-11-25T08:30:00-05:00", /* Oct 2025 release didn't happen — shutdown delayed Sep 2025 data to Nov 25 */
+  "2025-12-16T08:30:00-05:00",
+  "2026-01-14T08:30:00-05:00", "2026-02-10T08:30:00-05:00", "2026-03-06T08:30:00-05:00",
+  "2026-04-01T08:30:00-04:00", "2026-04-21T08:30:00-04:00", "2026-05-14T08:30:00-04:00",
+  "2026-06-17T08:30:00-04:00", "2026-07-16T08:30:00-04:00", "2026-08-14T08:30:00-04:00",
+  "2026-09-16T08:30:00-04:00", "2026-10-15T08:30:00-04:00", "2026-11-17T08:30:00-05:00",
+  "2026-12-16T08:30:00-05:00",
+];
+const RETAIL_SALES_FRED_ACTUALS: { date: string; actual: number; previous: number | null; coreActual: number | null; corePrevious: number | null }[] = [
+  { date: "2025-01-16", actual: 0.8, previous: 0.5, coreActual: 0.9, corePrevious: -0.1 },
+  { date: "2025-02-14", actual: -0.8, previous: 0.8, coreActual: -0.5, corePrevious: 0.9 },
+  { date: "2025-03-17", actual: 0.0, previous: -0.8, coreActual: 0.6, corePrevious: -0.5 },
+  { date: "2025-04-16", actual: 1.7, previous: 0.0, coreActual: 0.6, corePrevious: 0.6 },
+  { date: "2025-05-15", actual: -0.1, previous: 1.7, coreActual: 0.0, corePrevious: 0.6 },
+  { date: "2025-06-17", actual: -1.1, previous: -0.1, coreActual: -0.2, corePrevious: 0.0 },
+  { date: "2025-07-17", actual: 0.7, previous: -1.1, coreActual: 0.7, corePrevious: -0.2 },
+  { date: "2025-08-15", actual: 1.1, previous: 0.7, coreActual: 0.7, corePrevious: 0.7 },
+  { date: "2025-09-16", actual: 0.6, previous: 1.1, coreActual: 0.6, corePrevious: 0.7 },
+  { date: "2025-11-25", actual: 0.1, previous: 0.6, coreActual: 0.1, corePrevious: 0.6 },
+  { date: "2025-12-16", actual: -0.2, previous: 0.1, coreActual: 0.2, corePrevious: 0.1 },
+  { date: "2026-01-14", actual: 0.5, previous: -0.2, coreActual: 0.4, corePrevious: 0.2 },
+  { date: "2026-02-10", actual: 0.0, previous: 0.5, coreActual: 0.0, corePrevious: 0.4 },
+  { date: "2026-03-06", actual: 0.0, previous: 0.0, coreActual: 0.1, corePrevious: 0.0 },
+  { date: "2026-04-01", actual: 0.9, previous: 0.0, coreActual: 0.9, corePrevious: 0.1 },
+  { date: "2026-04-21", actual: 1.7, previous: 0.9, coreActual: 2.0, corePrevious: 0.9 },
+  { date: "2026-05-14", actual: 0.7, previous: 1.7, coreActual: 0.9, corePrevious: 2.0 },
+  { date: "2026-06-17", actual: 0.9, previous: 0.7, coreActual: 0.9, corePrevious: 0.9 },
+  { date: "2026-07-16", actual: 0.2, previous: 0.9, coreActual: -0.2, corePrevious: 0.9 },
+  { date: "2026-08-14", actual: -0.6, previous: 0.2, coreActual: -0.3, corePrevious: -0.2 },
+];
+// Mirrors interpretCpi's shape: forecast-vs-actual when a live release has
+// one, falling back to the real month-over-month trend (vs previous) when
+// it doesn't — e.g. every FRED-backed historical entry here, which has no
+// forecast at all since FRED doesn't publish consensus estimates.
+function interpretRetailSales(headline?: EconomicEvent, core?: EconomicEvent): EventDetail | null {
+  if (!headline) return null;
+  const detail: EventDetail = { title: "Retail Sales", headline: fieldDetail("Retail Sales m/m", headline) };
+  if (core) detail.core = fieldDetail("Core Retail Sales m/m", core);
+  const a = parseEconValue(headline.actual);
+  const f = parseEconValue(headline.forecast);
+  if (a && f) {
+    if (a.num > f.num)      { detail.tag = "STRONG";  detail.direction = "Hawkish"; }
+    else if (a.num < f.num) { detail.tag = "WEAK";    detail.direction = "Dovish"; }
+    else                    { detail.tag = "IN LINE"; detail.direction = "Neutral"; }
+  } else {
+    const p = parseEconValue(headline.previous);
+    if (a && p) {
+      if (a.num > p.num)      { detail.tag = "ACCELERATING"; detail.direction = "Hawkish"; }
+      else if (a.num < p.num) { detail.tag = "SLOWING";      detail.direction = "Dovish"; }
+      else                    { detail.tag = "STEADY";       detail.direction = "Neutral"; }
+    }
+  }
+  return detail;
+}
+function retailSalesFredFallback(dateIso: string): EventDetail | null {
+  const row = RETAIL_SALES_FRED_ACTUALS.find(r => r.date === dateIso.slice(0, 10));
+  if (!row) return null;
+  const ev = (title: string, actual: number | null, previous: number | null): EconomicEvent | undefined =>
+    actual === null ? undefined : { title, country: "USD", date: dateIso, impact: "Medium", forecast: "", previous: previous !== null ? `${previous}%` : "", actual: `${actual}%` };
+  return interpretRetailSales(
+    ev("Retail Sales m/m", row.actual, row.previous),
+    ev("Core Retail Sales m/m", row.coreActual, row.corePrevious),
+  );
+}
+
+// Initial Jobless Claims — released weekly (every Thursday, 8:30am ET,
+// shifted to Wednesday the handful of times Thursday itself is New Year's
+// Day, July 4th, Juneteenth, Veterans Day, Christmas, or Thanksgiving —
+// Thanksgiving is always a Thursday, so that shift happens every year).
+// Both the schedule and the real historical values are free, public DOL
+// data — computed here from FRED's ICSA series (Initial Claims, seasonally
+// adjusted; the observation date is the week-ending Saturday, 5 days before
+// the Thursday that reports it) — not guessed. Unlike ISM, nothing here is
+// commercially restricted, so this covers the full range with no gaps.
+// Source: https://fred.stlouisfed.org/series/ICSA.
+const JOBLESS_CLAIMS_FRED_ACTUALS: { date: string; actual: number; previous: number | null }[] = [
+  { date: "2025-01-02T08:30:00-05:00", actual: 212, previous: null },
+  { date: "2025-01-09T08:30:00-05:00", actual: 206, previous: 212 },
+  { date: "2025-01-16T08:30:00-05:00", actual: 219, previous: 206 },
+  { date: "2025-01-23T08:30:00-05:00", actual: 223, previous: 219 },
+  { date: "2025-01-30T08:30:00-05:00", actual: 212, previous: 223 },
+  { date: "2025-02-06T08:30:00-05:00", actual: 220, previous: 212 },
+  { date: "2025-02-13T08:30:00-05:00", actual: 216, previous: 220 },
+  { date: "2025-02-20T08:30:00-05:00", actual: 223, previous: 216 },
+  { date: "2025-02-27T08:30:00-05:00", actual: 241, previous: 223 },
+  { date: "2025-03-06T08:30:00-05:00", actual: 224, previous: 241 },
+  { date: "2025-03-13T08:30:00-04:00", actual: 222, previous: 224 },
+  { date: "2025-03-20T08:30:00-04:00", actual: 225, previous: 222 },
+  { date: "2025-03-27T08:30:00-04:00", actual: 224, previous: 225 },
+  { date: "2025-04-03T08:30:00-04:00", actual: 220, previous: 224 },
+  { date: "2025-04-10T08:30:00-04:00", actual: 223, previous: 220 },
+  { date: "2025-04-17T08:30:00-04:00", actual: 217, previous: 223 },
+  { date: "2025-04-24T08:30:00-04:00", actual: 224, previous: 217 },
+  { date: "2025-05-01T08:30:00-04:00", actual: 239, previous: 224 },
+  { date: "2025-05-08T08:30:00-04:00", actual: 228, previous: 239 },
+  { date: "2025-05-15T08:30:00-04:00", actual: 226, previous: 228 },
+  { date: "2025-05-22T08:30:00-04:00", actual: 225, previous: 226 },
+  { date: "2025-05-29T08:30:00-04:00", actual: 236, previous: 225 },
+  { date: "2025-06-05T08:30:00-04:00", actual: 244, previous: 236 },
+  { date: "2025-06-12T08:30:00-04:00", actual: 246, previous: 244 },
+  { date: "2025-06-18T08:30:00-04:00", actual: 243, previous: 246 },
+  { date: "2025-06-26T08:30:00-04:00", actual: 236, previous: 243 },
+  { date: "2025-07-03T08:30:00-04:00", actual: 231, previous: 236 },
+  { date: "2025-07-10T08:30:00-04:00", actual: 228, previous: 231 },
+  { date: "2025-07-17T08:30:00-04:00", actual: 221, previous: 228 },
+  { date: "2025-07-24T08:30:00-04:00", actual: 218, previous: 221 },
+  { date: "2025-07-31T08:30:00-04:00", actual: 219, previous: 218 },
+  { date: "2025-08-07T08:30:00-04:00", actual: 226, previous: 219 },
+  { date: "2025-08-14T08:30:00-04:00", actual: 224, previous: 226 },
+  { date: "2025-08-21T08:30:00-04:00", actual: 233, previous: 224 },
+  { date: "2025-08-28T08:30:00-04:00", actual: 229, previous: 233 },
+  { date: "2025-09-04T08:30:00-04:00", actual: 236, previous: 229 },
+  { date: "2025-09-11T08:30:00-04:00", actual: 259, previous: 236 },
+  { date: "2025-09-18T08:30:00-04:00", actual: 233, previous: 259 },
+  { date: "2025-09-25T08:30:00-04:00", actual: 219, previous: 233 },
+  { date: "2025-10-02T08:30:00-04:00", actual: 225, previous: 219 },
+  { date: "2025-10-09T08:30:00-04:00", actual: 233, previous: 225 },
+  { date: "2025-10-16T08:30:00-04:00", actual: 222, previous: 233 },
+  { date: "2025-10-23T08:30:00-04:00", actual: 231, previous: 222 },
+  { date: "2025-10-30T08:30:00-04:00", actual: 221, previous: 231 },
+  { date: "2025-11-06T08:30:00-05:00", actual: 228, previous: 221 },
+  { date: "2025-11-13T08:30:00-05:00", actual: 228, previous: 228 },
+  { date: "2025-11-20T08:30:00-05:00", actual: 222, previous: 228 },
+  { date: "2025-11-26T08:30:00-05:00", actual: 218, previous: 222 },
+  { date: "2025-12-04T08:30:00-05:00", actual: 216, previous: 218 },
+  { date: "2025-12-11T08:30:00-05:00", actual: 235, previous: 216 },
+  { date: "2025-12-18T08:30:00-05:00", actual: 224, previous: 235 },
+  { date: "2025-12-24T08:30:00-05:00", actual: 215, previous: 224 },
+  { date: "2025-12-31T08:30:00-05:00", actual: 203, previous: 215 },
+  { date: "2026-01-08T08:30:00-05:00", actual: 207, previous: 203 },
+  { date: "2026-01-15T08:30:00-05:00", actual: 201, previous: 207 },
+  { date: "2026-01-22T08:30:00-05:00", actual: 210, previous: 201 },
+  { date: "2026-01-29T08:30:00-05:00", actual: 211, previous: 210 },
+  { date: "2026-02-05T08:30:00-05:00", actual: 230, previous: 211 },
+  { date: "2026-02-12T08:30:00-05:00", actual: 230, previous: 230 },
+  { date: "2026-02-19T08:30:00-05:00", actual: 208, previous: 230 },
+  { date: "2026-02-26T08:30:00-05:00", actual: 211, previous: 208 },
+  { date: "2026-03-05T08:30:00-05:00", actual: 214, previous: 211 },
+  { date: "2026-03-12T08:30:00-04:00", actual: 213, previous: 214 },
+  { date: "2026-03-19T08:30:00-04:00", actual: 205, previous: 213 },
+  { date: "2026-03-26T08:30:00-04:00", actual: 211, previous: 205 },
+  { date: "2026-04-02T08:30:00-04:00", actual: 203, previous: 211 },
+  { date: "2026-04-09T08:30:00-04:00", actual: 218, previous: 203 },
+  { date: "2026-04-16T08:30:00-04:00", actual: 208, previous: 218 },
+  { date: "2026-04-23T08:30:00-04:00", actual: 215, previous: 208 },
+  { date: "2026-04-30T08:30:00-04:00", actual: 190, previous: 215 },
+  { date: "2026-05-07T08:30:00-04:00", actual: 199, previous: 190 },
+  { date: "2026-05-14T08:30:00-04:00", actual: 212, previous: 199 },
+  { date: "2026-05-21T08:30:00-04:00", actual: 210, previous: 212 },
+  { date: "2026-05-28T08:30:00-04:00", actual: 212, previous: 210 },
+  { date: "2026-06-04T08:30:00-04:00", actual: 225, previous: 212 },
+  { date: "2026-06-11T08:30:00-04:00", actual: 230, previous: 225 },
+  { date: "2026-06-18T08:30:00-04:00", actual: 227, previous: 230 },
+  { date: "2026-06-25T08:30:00-04:00", actual: 216, previous: 227 },
+  { date: "2026-07-02T08:30:00-04:00", actual: 217, previous: 216 },
+  { date: "2026-07-09T08:30:00-04:00", actual: 217, previous: 217 },
+  { date: "2026-07-16T08:30:00-04:00", actual: 209, previous: 217 },
+  { date: "2026-07-23T08:30:00-04:00", actual: 189, previous: 209 },
+  { date: "2026-07-30T08:30:00-04:00", actual: 198, previous: 189 },
+  { date: "2026-08-06T08:30:00-04:00", actual: 200, previous: 198 },
+  { date: "2026-08-13T08:30:00-04:00", actual: 209, previous: 200 },
+];
+function joblessClaimsFredFallback(dateIso: string): EventDetail | null {
+  const row = JOBLESS_CLAIMS_FRED_ACTUALS.find(r => r.date.slice(0, 10) === dateIso.slice(0, 10));
+  if (!row) return null;
+  const def = SIMPLE_CATEGORY_DEFS.find(d => d.key === "jobless_claims")!;
+  const ev: EconomicEvent = {
+    title: "Unemployment Claims", country: "USD", date: dateIso, impact: "Medium",
+    forecast: "", previous: row.previous !== null ? `${row.previous}K` : "", actual: `${row.actual}K`,
+  };
+  return interpretSimple(ev, def);
+}
+
+// PCE / Core PCE Price Index — free public BEA data (Personal Income and
+// Outlays report), so both the release schedule and real historical
+// actual/previous values are backfillable, same as CPI/Jobs/FOMC/Retail
+// Sales/Jobless Claims. Real gap Oct–Nov 2025 (same government-shutdown
+// disruption already documented elsewhere in this file), with two
+// close-together catch-up releases in December 2025 — pulled from ALFRED's
+// own realized-release-date archive, not computed/guessed. m/m % computed
+// from consecutive index levels the same way CPI's is.
+// Source: https://alfred.stlouisfed.org/release/downloaddates?rid=54&ff=txt
+// (release dates) and https://fred.stlouisfed.org/series/PCEPI /
+// PCEPILFE (headline / core index levels).
+const PCE_FRED_ACTUALS: { date: string; actual: number; previous: number | null; coreActual: number | null; corePrevious: number | null }[] = [
+  { date: "2025-01-31T08:30:00-05:00", actual: 0.3, previous: 0.1, coreActual: 0.2, corePrevious: 0.1 },
+  { date: "2025-02-28T08:30:00-05:00", actual: 0.4, previous: 0.3, coreActual: 0.3, corePrevious: 0.2 },
+  { date: "2025-03-28T08:30:00-04:00", actual: 0.4, previous: 0.4, coreActual: 0.4, corePrevious: 0.3 },
+  { date: "2025-04-30T08:30:00-04:00", actual: 0.0, previous: 0.4, coreActual: 0.1, corePrevious: 0.4 },
+  { date: "2025-05-30T08:30:00-04:00", actual: 0.2, previous: 0.0, coreActual: 0.2, corePrevious: 0.1 },
+  { date: "2025-06-27T08:30:00-04:00", actual: 0.2, previous: 0.2, coreActual: 0.2, corePrevious: 0.2 },
+  { date: "2025-07-31T08:30:00-04:00", actual: 0.3, previous: 0.2, coreActual: 0.3, corePrevious: 0.2 },
+  { date: "2025-08-29T08:30:00-04:00", actual: 0.2, previous: 0.3, coreActual: 0.2, corePrevious: 0.3 },
+  { date: "2025-09-26T08:30:00-04:00", actual: 0.3, previous: 0.2, coreActual: 0.2, corePrevious: 0.2 },
+  { date: "2025-12-05T08:30:00-05:00", actual: 0.3, previous: 0.3, coreActual: 0.2, corePrevious: 0.2 },
+  { date: "2025-12-23T08:30:00-05:00", actual: 0.2, previous: 0.3, coreActual: 0.2, corePrevious: 0.2 },
+  { date: "2026-01-22T08:30:00-05:00", actual: 0.2, previous: 0.2, coreActual: 0.2, corePrevious: 0.2 },
+  { date: "2026-02-20T08:30:00-05:00", actual: 0.3, previous: 0.2, coreActual: 0.3, corePrevious: 0.2 },
+  { date: "2026-03-13T08:30:00-04:00", actual: 0.3, previous: 0.3, coreActual: 0.4, corePrevious: 0.3 },
+  { date: "2026-04-09T08:30:00-04:00", actual: 0.4, previous: 0.3, coreActual: 0.4, corePrevious: 0.4 },
+  { date: "2026-04-30T08:30:00-04:00", actual: 0.7, previous: 0.4, coreActual: 0.3, corePrevious: 0.4 },
+  { date: "2026-05-28T08:30:00-04:00", actual: 0.4, previous: 0.7, coreActual: 0.2, corePrevious: 0.3 },
+  { date: "2026-06-25T08:30:00-04:00", actual: 0.5, previous: 0.4, coreActual: 0.3, corePrevious: 0.2 },
+  { date: "2026-07-30T08:30:00-04:00", actual: -0.1, previous: 0.5, coreActual: 0.1, corePrevious: 0.3 },
+];
+// Mirrors interpretCpi/interpretRetailSales: forecast-vs-actual when a live
+// release has one, falling back to the real month-over-month trend when it
+// doesn't (every FRED-backed entry here, since FRED has no forecasts).
+function interpretPce(headline?: EconomicEvent, core?: EconomicEvent): EventDetail | null {
+  if (!headline) return null;
+  const detail: EventDetail = { title: "PCE", headline: fieldDetail("PCE Price Index m/m", headline) };
+  if (core) detail.core = fieldDetail("Core PCE Price Index m/m", core);
+  const a = parseEconValue(headline.actual);
+  const f = parseEconValue(headline.forecast);
+  if (a && f) {
+    if (a.num > f.num)      { detail.tag = "HOT";      detail.direction = "Hawkish"; }
+    else if (a.num < f.num) { detail.tag = "COOL";     detail.direction = "Dovish"; }
+    else                    { detail.tag = "IN LINE";  detail.direction = "Neutral"; }
+  } else {
+    const p = parseEconValue(headline.previous);
+    if (a && p) {
+      if (a.num > p.num)      { detail.tag = "WARMING"; detail.direction = "Hawkish"; }
+      else if (a.num < p.num) { detail.tag = "COOLING"; detail.direction = "Dovish"; }
+      else                    { detail.tag = "STEADY";  detail.direction = "Neutral"; }
+    }
+  }
+  return detail;
+}
+function pceFredFallback(dateIso: string): EventDetail | null {
+  const row = PCE_FRED_ACTUALS.find(r => r.date.slice(0, 10) === dateIso.slice(0, 10));
+  if (!row) return null;
+  const ev = (title: string, actual: number | null, previous: number | null): EconomicEvent | undefined =>
+    actual === null ? undefined : { title, country: "USD", date: dateIso, impact: "High", forecast: "", previous: previous !== null ? `${previous}%` : "", actual: `${actual}%` };
+  return interpretPce(
+    ev("PCE Price Index m/m", row.actual, row.previous),
+    ev("Core PCE Price Index m/m", row.coreActual, row.corePrevious),
+  );
+}
+
+// GDP (Advance/Second/Third estimate) — real BEA release dates from ALFRED,
+// same as PCE (both ride the same release-schedule bundle, rid=53). Real
+// data, with one deliberate simplification: BEA revises each quarter's
+// growth rate across its three estimates, and getting the exact
+// as-first-published Advance-vs-Second-vs-Third number would need a
+// vintage-specific ALFRED query per release — this instead uses today's
+// current (fully revised) growth rate for that quarter on all three of its
+// releases. Real, sourced, never invented, just not vintage-precise about
+// small in-quarter revisions.
+// A stretch of 2026 dates (Jan 22 – Apr 9) is left out entirely rather than
+// guessed — the government shutdown disrupted the normal one-release-per-
+// month cadence badly enough there that which specific quarter each of
+// those catch-up releases covered can't be confidently determined; the
+// schedule resumes its normal pattern from Apr 30, 2026 (confirmed against
+// PCE's own catch-up, which resolved on the same date).
+// Source: https://alfred.stlouisfed.org/release/downloaddates?rid=53&ff=txt
+// (release dates) and https://fred.stlouisfed.org/series/A191RL1Q225SBEA
+// (real GDP, % change from preceding period, annualized).
+const GDP_FRED_ACTUALS: { date: string; actual: number; previous: number | null }[] = [
+  { date: "2025-01-30T08:30:00-05:00", actual: 1.9, previous: 3.3 },
+  { date: "2025-02-27T08:30:00-05:00", actual: 1.9, previous: 3.3 },
+  { date: "2025-03-27T08:30:00-04:00", actual: 1.9, previous: 3.3 },
+  { date: "2025-04-30T08:30:00-04:00", actual: -0.6, previous: 1.9 },
+  { date: "2025-05-29T08:30:00-04:00", actual: -0.6, previous: 1.9 },
+  { date: "2025-06-26T08:30:00-04:00", actual: -0.6, previous: 1.9 },
+  { date: "2025-07-30T08:30:00-04:00", actual: 3.8, previous: -0.6 },
+  { date: "2025-08-28T08:30:00-04:00", actual: 3.8, previous: -0.6 },
+  { date: "2025-09-25T08:30:00-04:00", actual: 3.8, previous: -0.6 },
+  { date: "2025-12-23T08:30:00-05:00", actual: 4.4, previous: 3.8 },
+  { date: "2026-04-30T08:30:00-04:00", actual: 2.1, previous: 4.4 },
+  { date: "2026-05-28T08:30:00-04:00", actual: 2.1, previous: 4.4 },
+  { date: "2026-06-25T08:30:00-04:00", actual: 2.1, previous: 4.4 },
+  { date: "2026-07-30T08:30:00-04:00", actual: 1.5, previous: 2.1 },
+];
+function gdpFredFallback(dateIso: string): EventDetail | null {
+  const row = GDP_FRED_ACTUALS.find(r => r.date.slice(0, 10) === dateIso.slice(0, 10));
+  if (!row) return null;
+  const def = SIMPLE_CATEGORY_DEFS.find(d => d.key === "gdp")!;
+  const ev: EconomicEvent = {
+    title: "GDP q/q", country: "USD", date: dateIso, impact: "High",
+    forecast: "", previous: row.previous !== null ? `${row.previous}%` : "", actual: `${row.actual}%`,
+  };
+  return interpretSimple(ev, def);
+}
+
+// JOLTS Job Openings — free public BLS data, ~2-month reporting lag. Unlike
+// GDP, these values are pulled directly from ALFRED's per-release vintage
+// (querying JTSJOL as it stood on each real release date, via
+// vintage_date), so both which month each release covered and its
+// actual/previous are exactly what was published that day — not today's
+// further-revised figure. Real gap Oct–Nov 2025 (same shutdown disruption
+// as elsewhere), resolved by the Dec 9, 2025 release delivering both
+// September and October data at once (confirmed via the vintage query, not
+// assumed) before normal monthly cadence resumed.
+// Source: https://alfred.stlouisfed.org/release/downloaddates?rid=192&ff=txt
+// (release dates) and https://fred.stlouisfed.org/series/JTSJOL (vintaged
+// via alfredgraph.csv?id=JTSJOL&vintage_date=...).
+const JOLTS_FRED_ACTUALS: { date: string; actual: number; previous: number }[] = [
+  { date: "2025-01-07T10:00:00-05:00", actual: 8.1,  previous: 7.84 },
+  { date: "2025-02-04T10:00:00-05:00", actual: 7.6,  previous: 8.16 },
+  { date: "2025-03-11T10:00:00-04:00", actual: 7.74, previous: 7.51 },
+  { date: "2025-04-01T10:00:00-04:00", actual: 7.57, previous: 7.76 },
+  { date: "2025-04-29T10:00:00-04:00", actual: 7.19, previous: 7.48 },
+  { date: "2025-06-03T10:00:00-04:00", actual: 7.39, previous: 7.2 },
+  { date: "2025-07-01T10:00:00-04:00", actual: 7.77, previous: 7.4 },
+  { date: "2025-07-29T10:00:00-04:00", actual: 7.44, previous: 7.71 },
+  { date: "2025-09-03T10:00:00-04:00", actual: 7.18, previous: 7.36 },
+  { date: "2025-09-30T10:00:00-04:00", actual: 7.23, previous: 7.21 },
+  { date: "2025-12-09T10:00:00-05:00", actual: 7.67, previous: 7.66 },
+  { date: "2026-01-07T10:00:00-05:00", actual: 7.15, previous: 7.45 },
+  { date: "2026-02-05T10:00:00-05:00", actual: 6.54, previous: 6.93 },
+  { date: "2026-03-13T10:00:00-04:00", actual: 6.95, previous: 6.55 },
+  { date: "2026-03-31T10:00:00-04:00", actual: 6.88, previous: 7.24 },
+  { date: "2026-05-05T10:00:00-04:00", actual: 6.87, previous: 6.92 },
+  { date: "2026-06-02T10:00:00-04:00", actual: 7.62, previous: 6.89 },
+  { date: "2026-06-30T10:00:00-04:00", actual: 7.59, previous: 7.59 },
+  { date: "2026-08-04T10:00:00-04:00", actual: 7.36, previous: 7.54 },
+];
+function joltsFredFallback(dateIso: string): EventDetail | null {
+  const row = JOLTS_FRED_ACTUALS.find(r => r.date.slice(0, 10) === dateIso.slice(0, 10));
+  if (!row) return null;
+  const def = SIMPLE_CATEGORY_DEFS.find(d => d.key === "jolts")!;
+  const ev: EconomicEvent = {
+    title: "JOLTS Job Openings", country: "USD", date: dateIso, impact: "Medium",
+    forecast: "", previous: `${row.previous}M`, actual: `${row.actual}M`,
+  };
+  return interpretSimple(ev, def);
+}
+
+// PPI / Core PPI (Final Demand) — free public BLS data. Same technique as
+// JOLTS: both actual and previous are pulled from ALFRED's per-release
+// vintage of the underlying index series (PPIFIS headline, PPIFES core —
+// "Final Demand" is the BLS's current headline PPI methodology), so this is
+// exactly what each release published that day, not today's revised
+// figure. Real gap in Oct 2025 (same shutdown disruption as elsewhere),
+// resolved by two close-together catch-up releases in Jan 2026.
+// Source: https://alfred.stlouisfed.org/release/downloaddates?rid=46&ff=txt
+// (release dates) and https://fred.stlouisfed.org/series/PPIFIS /
+// PPIFES (vintaged via alfredgraph.csv?vintage_date=...).
+const PPI_FRED_ACTUALS: { date: string; actual: number; previous: number; coreActual: number; corePrevious: number }[] = [
+  { date: "2025-01-14T08:30:00-05:00", actual: 0.2, previous: 0.4, coreActual: 0.0, corePrevious: 0.2 },
+  { date: "2025-02-13T08:30:00-05:00", actual: 0.4, previous: 0.5, coreActual: 0.3, corePrevious: 0.4 },
+  { date: "2025-03-13T08:30:00-04:00", actual: 0.0, previous: 0.6, coreActual: -0.1, corePrevious: 0.5 },
+  { date: "2025-04-11T08:30:00-04:00", actual: -0.4, previous: 0.1, coreActual: -0.1, corePrevious: 0.1 },
+  { date: "2025-05-15T08:30:00-04:00", actual: -0.5, previous: 0.0, coreActual: -0.4, corePrevious: 0.4 },
+  { date: "2025-06-12T08:30:00-04:00", actual: 0.1, previous: -0.2, coreActual: 0.1, corePrevious: -0.2 },
+  { date: "2025-07-16T08:30:00-04:00", actual: 0.0, previous: 0.3, coreActual: 0.0, corePrevious: 0.4 },
+  { date: "2025-08-14T08:30:00-04:00", actual: 0.9, previous: 0.0, coreActual: 0.9, corePrevious: 0.0 },
+  { date: "2025-09-10T08:30:00-04:00", actual: -0.1, previous: 0.7, coreActual: -0.1, corePrevious: 0.7 },
+  { date: "2025-11-25T08:30:00-05:00", actual: 0.3, previous: -0.1, coreActual: 0.1, corePrevious: -0.1 },
+  { date: "2026-01-14T08:30:00-05:00", actual: 0.2, previous: 0.1, coreActual: 0.0, corePrevious: 0.3 },
+  { date: "2026-01-30T08:30:00-05:00", actual: 0.5, previous: 0.2, coreActual: 0.7, corePrevious: 0.0 },
+  { date: "2026-02-27T08:30:00-05:00", actual: 0.5, previous: 0.4, coreActual: 0.8, corePrevious: 0.6 },
+  { date: "2026-03-18T08:30:00-04:00", actual: 0.7, previous: 0.5, coreActual: 0.5, corePrevious: 0.8 },
+  { date: "2026-04-14T08:30:00-04:00", actual: 0.5, previous: 0.5, coreActual: 0.1, corePrevious: 0.3 },
+  { date: "2026-05-13T08:30:00-04:00", actual: 1.4, previous: 0.7, coreActual: 1.0, corePrevious: 0.2 },
+  { date: "2026-06-11T08:30:00-04:00", actual: 1.1, previous: 1.1, coreActual: 0.4, corePrevious: 0.7 },
+  { date: "2026-07-15T08:30:00-04:00", actual: -0.3, previous: 0.6, coreActual: 0.2, corePrevious: 0.1 },
+];
+// Mirrors interpretCpi/interpretPce: forecast-vs-actual when a live release
+// has one, falling back to the real month-over-month trend when it doesn't.
+function interpretPpi(headline?: EconomicEvent, core?: EconomicEvent): EventDetail | null {
+  if (!headline) return null;
+  const detail: EventDetail = { title: "PPI", headline: fieldDetail("PPI m/m", headline) };
+  if (core) detail.core = fieldDetail("Core PPI m/m", core);
+  const a = parseEconValue(headline.actual);
+  const f = parseEconValue(headline.forecast);
+  if (a && f) {
+    if (a.num > f.num)      { detail.tag = "HOT";      detail.direction = "Hawkish"; }
+    else if (a.num < f.num) { detail.tag = "COOL";     detail.direction = "Dovish"; }
+    else                    { detail.tag = "IN LINE";  detail.direction = "Neutral"; }
+  } else {
+    const p = parseEconValue(headline.previous);
+    if (a && p) {
+      if (a.num > p.num)      { detail.tag = "WARMING"; detail.direction = "Hawkish"; }
+      else if (a.num < p.num) { detail.tag = "COOLING"; detail.direction = "Dovish"; }
+      else                    { detail.tag = "STEADY";  detail.direction = "Neutral"; }
+    }
+  }
+  return detail;
+}
+function ppiFredFallback(dateIso: string): EventDetail | null {
+  const row = PPI_FRED_ACTUALS.find(r => r.date.slice(0, 10) === dateIso.slice(0, 10));
+  if (!row) return null;
+  const ev = (title: string, actual: number, previous: number): EconomicEvent => ({
+    title, country: "USD", date: dateIso, impact: "Medium", forecast: "", previous: `${previous}%`, actual: `${actual}%`,
+  });
+  return interpretPpi(
+    ev("PPI m/m", row.actual, row.previous),
+    ev("Core PPI m/m", row.coreActual, row.corePrevious),
+  );
+}
+
 function eventNewsCategory(ev: EconomicEvent): NewsCategoryDef | null {
   const title = ev.title.toLowerCase();
   for (const def of NEWS_CATEGORY_DEFS) {
@@ -1226,13 +1924,481 @@ function eventNewsCategory(ev: EconomicEvent): NewsCategoryDef | null {
   return null;
 }
 
+// ─── Economic event interpretation (News indicator upgrade — Phase 1) ────────
+// Turns a marker from "CPI happened here" into "what the market learned from
+// CPI here" — actual vs forecast/previous, a surprise magnitude, and a short
+// interpretation tag. Every field is optional and degrades gracefully: this
+// only ever reads real actual/forecast/previous already present on a matched
+// EconomicEvent (from the live feed, or from the persisted economic_events
+// table — see get_stored_economic_events — which is what keeps that data
+// alive past the live feed's own current-week window). It never invents a
+// value or forces a classification it doesn't have the data to support.
+interface EventFieldDetail { label: string; actual?: string; forecast?: string; previous?: string; surprise?: string; }
+interface EventDetail {
+  title: string;
+  headline: EventFieldDetail;
+  core?: EventFieldDetail;
+  components?: EventFieldDetail[];
+  tag?: string;
+  direction?: "Hawkish" | "Dovish" | "Neutral" | "Mixed" | null;
+  // Free-text "→ ..." line for markers whose takeaway isn't a monetary-policy
+  // bias (e.g. Treasury auctions' "Yield Pressure ↑/↓") — falls back to
+  // `direction` in the tooltip when unset.
+  arrowLabel?: string;
+}
+
+// "3.1%", "+265K", "151.4B", "10.6" → { num, unit }. Range values (FOMC's
+// "4.25%-4.50%") aren't handled here — interpretFomc parses those separately
+// since only the upper bound matters for surprise/decision purposes.
+function parseEconValue(raw: string | undefined): { num: number; unit: string } | null {
+  if (!raw) return null;
+  const s = raw.trim();
+  if (s === "") return null;
+  const m = s.match(/^([+-]?[\d.]+)\s*([%KMB]?)$/i);
+  if (!m) return null;
+  const num = parseFloat(m[1]);
+  if (Number.isNaN(num)) return null;
+  return { num, unit: m[2].toUpperCase() };
+}
+
+// actual - forecast, formatted in the same unit. Undefined if either value is
+// missing/unparseable or the two units disagree — never guesses at a diff.
+function formatSurprise(actual: string | undefined, forecast: string | undefined): string | undefined {
+  const a = parseEconValue(actual);
+  const f = parseEconValue(forecast);
+  if (!a || !f || a.unit !== f.unit) return undefined;
+  const diff = Number((a.num - f.num).toFixed(2));
+  return `${diff > 0 ? "+" : ""}${diff}${a.unit}`;
+}
+
+function fieldDetail(label: string, ev?: EconomicEvent): EventFieldDetail {
+  return {
+    label,
+    actual:   ev?.actual   || undefined,
+    forecast: ev?.forecast || undefined,
+    previous: ev?.previous || undefined,
+    surprise: ev ? formatSurprise(ev.actual, ev.forecast) : undefined,
+  };
+}
+
+// CPI: actual > forecast = hotter inflation = generally hawkish.
+function interpretCpi(headline?: EconomicEvent, core?: EconomicEvent): EventDetail | null {
+  if (!headline) return null;
+  const detail: EventDetail = { title: "CPI", headline: fieldDetail("CPI", headline) };
+  if (core) detail.core = fieldDetail("Core CPI", core);
+  const a = parseEconValue(headline.actual);
+  const f = parseEconValue(headline.forecast);
+  if (a && f) {
+    if (a.num > f.num)      { detail.tag = "HOT";      detail.direction = "Hawkish"; }
+    else if (a.num < f.num) { detail.tag = "COOL";     detail.direction = "Dovish"; }
+    else                    { detail.tag = "IN LINE";  detail.direction = "Neutral"; }
+  } else {
+    // No forecast to compare against (e.g. the FRED-backed fallback for
+    // historical releases) — still give a rating, based on the real month-
+    // over-month trend (actual vs previous) instead of a forecast surprise,
+    // rather than leaving the popup with no read at all.
+    const p = parseEconValue(headline.previous);
+    if (a && p) {
+      if (a.num > p.num)      { detail.tag = "WARMING"; detail.direction = "Hawkish"; }
+      else if (a.num < p.num) { detail.tag = "COOLING"; detail.direction = "Dovish"; }
+      else                    { detail.tag = "STEADY";  detail.direction = "Neutral"; }
+    }
+  }
+  return detail;
+}
+
+// Jobs: NFP actual > forecast = stronger labor = hawkish. Unemployment rate
+// actual > forecast = weaker labor = dovish (inverse polarity of NFP).
+// Average Hourly Earnings follows NFP's polarity (hotter wages = hawkish).
+// Components that disagree report MIXED rather than forcing one conclusion.
+function interpretJobs(nfp?: EconomicEvent, unemployment?: EconomicEvent, earnings?: EconomicEvent): EventDetail | null {
+  if (!nfp && !unemployment && !earnings) return null;
+  const components: EventFieldDetail[] = [];
+  if (unemployment) components.push(fieldDetail("Unemployment Rate", unemployment));
+  if (earnings)      components.push(fieldDetail("Avg Hourly Earnings", earnings));
+  const detail: EventDetail = { title: "Jobs", headline: fieldDetail("NFP", nfp), components };
+
+  const scores: number[] = [];
+  // Falls back to actual-vs-previous (the real month-over-month trend) when
+  // there's no forecast to compare against — e.g. the FRED-backed fallback
+  // for historical releases — rather than silently contributing nothing.
+  const score = (actual: string | undefined, forecast: string | undefined, previous: string | undefined, invert = false) => {
+    const a = parseEconValue(actual);
+    const compareTo = parseEconValue(forecast) ?? parseEconValue(previous);
+    if (!a || !compareTo || a.num === compareTo.num) return;
+    scores.push((invert ? a.num < compareTo.num : a.num > compareTo.num) ? 1 : -1);
+  };
+  score(nfp?.actual, nfp?.forecast, nfp?.previous);
+  score(unemployment?.actual, unemployment?.forecast, unemployment?.previous, /* lower = stronger */ true);
+  score(earnings?.actual, earnings?.forecast, earnings?.previous);
+
+  if (scores.length === 0) return detail; // nothing to classify — degrade gracefully
+  if (scores.every(s => s > 0))      { detail.tag = "STRONG LABOR"; detail.direction = "Hawkish"; }
+  else if (scores.every(s => s < 0)) { detail.tag = "WEAK LABOR";   detail.direction = "Dovish"; }
+  else                                { detail.tag = "MIXED";        detail.direction = "Mixed"; }
+  return detail;
+}
+
+// Fed funds target range is quoted as "4.25%-4.50%" — the upper bound is what
+// this pulls out; a bare number (rare) is used as-is.
+function parseFomcRateUpper(raw: string | undefined): number | null {
+  if (!raw) return null;
+  const s = raw.trim();
+  if (s === "") return null;
+  const range = s.match(/([\d.]+)\s*%?\s*[-–]\s*([\d.]+)\s*%?/);
+  if (range) return parseFloat(range[2]);
+  const single = parseFloat(s);
+  return Number.isNaN(single) ? null : single;
+}
+
+// FOMC: decision (hike/cut/hold, in bp) from actual vs previous; surprise
+// (in line / hawkish / dovish) from actual vs consensus forecast.
+function interpretFomc(ev?: EconomicEvent): EventDetail | null {
+  if (!ev) return null;
+  const detail: EventDetail = { title: "FOMC", headline: fieldDetail("Fed Funds Rate", ev) };
+  const actual   = parseFomcRateUpper(ev.actual);
+  const previous = parseFomcRateUpper(ev.previous);
+  const forecast = parseFomcRateUpper(ev.forecast);
+  if (actual === null) return detail; // decision not out yet
+
+  let decision: string | null = null;
+  if (previous !== null) {
+    const bp = Math.round((actual - previous) * 100);
+    decision = bp === 0 ? "HOLD" : bp > 0 ? `HIKE ${bp} bp` : `CUT ${Math.abs(bp)} bp`;
+  }
+  if (forecast !== null) {
+    if (actual === forecast) { detail.tag = decision ? `${decision} — IN LINE` : "IN LINE"; detail.direction = null; }
+    else {
+      const hawkish = actual > forecast;
+      detail.tag = `${decision ? decision + " — " : ""}${hawkish ? "HAWKISH SURPRISE" : "DOVISH SURPRISE"}`;
+      detail.direction = hawkish ? "Hawkish" : "Dovish";
+    }
+  } else if (decision) {
+    detail.tag = decision;
+  }
+  return detail;
+}
+
+// SEP: compares this meeting's median projections to the immediately prior
+// SEP meeting's, year by year. The headline is whichever year moved the
+// most (in bp) — the "most important visual comparison" the feature spec
+// calls for — with every other year listed as a component row.
+interface SepDetail { headline: EventFieldDetail; components?: EventFieldDetail[]; tag?: string; direction?: "Hawkish" | "Dovish" | null }
+function interpretSep(dateIso: string): SepDetail | null {
+  const day = dateIso.slice(0, 10);
+  const idx = SEP_PROJECTIONS.findIndex(s => s.date === day);
+  if (idx === -1) return null;
+  const current = SEP_PROJECTIONS[idx].projections;
+  const prior = idx > 0 ? SEP_PROJECTIONS[idx - 1].projections : undefined;
+
+  const rows = Object.keys(current)
+    .sort((a, b) => (a === "longerRun" ? 1 : b === "longerRun" ? -1 : a.localeCompare(b)))
+    .map(key => ({
+      label: key === "longerRun" ? "Longer Run" : `${key} Median Rate`,
+      newV: current[key],
+      prevV: prior?.[key],
+    }));
+
+  let headline = rows[0];
+  let headlineBp = 0;
+  for (const r of rows) {
+    if (r.prevV === undefined) continue;
+    const bp = Math.round((r.newV - r.prevV) * 100);
+    if (Math.abs(bp) > Math.abs(headlineBp)) { headlineBp = bp; headline = r; }
+  }
+
+  const toField = (r: typeof rows[number]): EventFieldDetail => ({
+    label: r.label,
+    actual: `${r.newV.toFixed(2)}%`,
+    previous: r.prevV !== undefined ? `${r.prevV.toFixed(2)}%` : undefined,
+    surprise: r.prevV !== undefined
+      ? `${Math.round((r.newV - r.prevV) * 100) > 0 ? "+" : ""}${Math.round((r.newV - r.prevV) * 100)} bp`
+      : undefined,
+  });
+
+  const sep: SepDetail = {
+    headline: toField(headline),
+    components: rows.filter(r => r !== headline).map(toField),
+  };
+  if (headline.prevV !== undefined) {
+    if (headlineBp > 0)      { sep.tag = "HAWKISH SHIFT"; sep.direction = "Hawkish"; }
+    else if (headlineBp < 0) { sep.tag = "DOVISH SHIFT";  sep.direction = "Dovish"; }
+    else                     { sep.tag = "NO CHANGE"; }
+  }
+  return sep;
+}
+
+// Dispatches a single live-feed event (any country) to the right interpreter
+// by its News category — used for the non-USD leg, where each event is its
+// own standalone marker rather than part of a grouped US release.
+function interpretByCategory(key: NewsCategoryKey, ev: EconomicEvent): EventDetail | null {
+  if (key === "cpi") return interpretCpi(ev);
+  if (key === "fomc") return interpretFomc(ev);
+  const t = ev.title.toLowerCase();
+  if (t.includes("unemployment")) return interpretJobs(undefined, ev, undefined);
+  if (t.includes("earnings"))     return interpretJobs(undefined, undefined, ev);
+  return interpretJobs(ev, undefined, undefined);
+}
+
+// ─── Simple pool-driven categories (PCE, GDP, ISM, JOLTS, Retail Sales, PPI,
+// Initial Jobless Claims, Fed Chair Press Conference, FOMC Minutes) ──────────
+// Unlike FOMC/CPI/Jobs, none of these need a hand-maintained static date
+// table — every one of them already arrives as its own dated event in the
+// live/persisted feed, so a release simply appears once it's been polled
+// (real data only, same graceful-degradation model: nothing shows for a
+// release that predates this feature). match() runs against the event's own
+// lowercased title; hotLabel/coolLabel are omitted for the two markers
+// (press conference, minutes) that carry no numeric actual/forecast to
+// compare, so they render as plain informational markers instead of forcing
+// a hot/cool read that isn't there.
+interface SimpleCategoryDef {
+  key: NewsCategoryKey;
+  match: (titleLower: string) => boolean;
+  hotLabel?: string; coolLabel?: string;
+  invert?: boolean; // true: actual < forecast is the "hot/strong" outcome
+}
+const SIMPLE_CATEGORY_DEFS: SimpleCategoryDef[] = [
+  { key: "pce", match: t => t.includes("pce price index"), hotLabel: "HOT", coolLabel: "COOL" },
+  { key: "gdp", match: t => t.includes("gdp") && t.includes("q/q") && !t.includes("price index"),
+    hotLabel: "STRONG GROWTH", coolLabel: "WEAK GROWTH" },
+  { key: "ism", match: t => t.includes("ism"), hotLabel: "STRONG", coolLabel: "WEAK" },
+  { key: "jolts", match: t => t.includes("jolts"), hotLabel: "STRONG", coolLabel: "WEAK" },
+  { key: "retail_sales", match: t => t.includes("retail sales"), hotLabel: "STRONG", coolLabel: "WEAK" },
+  { key: "ppi", match: t => ["ppi m/m", "ppi y/y", "core ppi m/m", "core ppi y/y"].includes(t),
+    hotLabel: "HOT", coolLabel: "COOL" },
+  // More initial claims than expected = weaker labor market = inverted vs.
+  // the usual "actual > forecast is the strong outcome" polarity.
+  { key: "jobless_claims", match: t => t === "unemployment claims",
+    hotLabel: "STRONG LABOR", coolLabel: "WEAK LABOR", invert: true },
+];
+function interpretSimple(ev: EconomicEvent, def: SimpleCategoryDef): EventDetail {
+  const detail: EventDetail = { title: ev.title, headline: fieldDetail(ev.title, ev) };
+  if (!def.hotLabel || !def.coolLabel) return detail; // informational-only marker
+  const a = parseEconValue(ev.actual);
+  // Falls back to actual-vs-previous (the real trend) when there's no
+  // forecast to compare against — e.g. a FRED-backed historical fallback —
+  // same reasoning as CPI/Jobs/Retail Sales, so a rating still shows
+  // instead of nothing.
+  const compareTo = parseEconValue(ev.forecast) ?? parseEconValue(ev.previous);
+  if (a && compareTo && a.unit === compareTo.unit) {
+    const hot  = def.invert ? a.num < compareTo.num : a.num > compareTo.num;
+    const cool = def.invert ? a.num > compareTo.num : a.num < compareTo.num;
+    if (hot)       { detail.tag = def.hotLabel;  detail.direction = "Hawkish"; }
+    else if (cool) { detail.tag = def.coolLabel; detail.direction = "Dovish"; }
+    else           { detail.tag = "IN LINE";     detail.direction = "Neutral"; }
+  }
+  return detail;
+}
+
+// Matches a News category's static release date to the real USD event(s)
+// from the combined live+persisted event pool, by same calendar day (both
+// the static date and the feed's own `date` field are ISO strings already in
+// US Eastern offset, so comparing the first 10 characters is a same-day
+// check with no timezone math needed).
+function findCpiEvents(pool: EconomicEvent[], dateIso: string): { headline?: EconomicEvent; core?: EconomicEvent } {
+  const day = dateIso.slice(0, 10);
+  const usd = pool.filter(ev => ev.country?.toUpperCase() === "USD" && ev.date.slice(0, 10) === day);
+  const isHeadline = (t: string) => t === "cpi m/m" || t === "cpi y/y" || t === "cpi q/q";
+  const isCore      = (t: string) => t === "core cpi m/m" || t === "core cpi y/y";
+  const headline = usd.find(ev => ev.title.toLowerCase() === "cpi y/y") ?? usd.find(ev => isHeadline(ev.title.toLowerCase()));
+  const core      = usd.find(ev => ev.title.toLowerCase() === "core cpi y/y") ?? usd.find(ev => isCore(ev.title.toLowerCase()));
+  return { headline, core };
+}
+function findJobsEvents(pool: EconomicEvent[], dateIso: string): { nfp?: EconomicEvent; unemployment?: EconomicEvent; earnings?: EconomicEvent } {
+  const day = dateIso.slice(0, 10);
+  const usd = pool.filter(ev => ev.country?.toUpperCase() === "USD" && ev.date.slice(0, 10) === day);
+  const find = (t: string) => usd.find(ev => ev.title.toLowerCase() === t);
+  return {
+    nfp: find("non-farm employment change"),
+    unemployment: find("unemployment rate"),
+    earnings: find("average hourly earnings m/m") ?? find("average hourly earnings y/y"),
+  };
+}
+function findFomcEvent(pool: EconomicEvent[], dateIso: string): EconomicEvent | undefined {
+  const day = dateIso.slice(0, 10);
+  return pool.find(ev => ev.country?.toUpperCase() === "USD" && ev.date.slice(0, 10) === day && ev.title.toLowerCase() === "federal funds rate");
+}
+
+// ─── Treasury auction interpretation ──────────────────────────────────────────
+// TreasuryDirect's securityTerm for a 30-Year bond's *reopening* auctions is
+// its remaining maturity at issuance ("29-Year 10-Month", "29-Year
+// 11-Month", …), not "30-Year" — confirmed against the live API. Both count
+// as 30Y auctions for this marker; 20-Year bonds ("20-Year", "19-Year
+// Xx-Month") are excluded.
+function auctionTermLabel(term: string): "10Y" | "30Y" | null {
+  if (term === "10-Year" || term.startsWith("9-Year")) return "10Y";
+  if (term === "30-Year" || term.startsWith("29-Year")) return "30Y";
+  return null;
+}
+// US Eastern DST: 2nd Sunday of March through 1st Sunday of November (the
+// rule since 2007) — good enough here without a timezone library, matching
+// how the FOMC/CPI/Jobs date tables above already hand-encode ET offsets.
+function isUsEasternDst(year: number, month0: number, day: number): boolean {
+  const nthSundayOfMonth = (y: number, m0: number, n: number) => {
+    const firstDow = new Date(Date.UTC(y, m0, 1)).getUTCDay(); // 0 = Sunday
+    return 1 + ((7 - firstDow) % 7) + (n - 1) * 7;
+  };
+  const dstStartDay = nthSundayOfMonth(year, 2, 2);  // March
+  const dstEndDay   = nthSundayOfMonth(year, 10, 1); // November
+  const t = Date.UTC(year, month0, day);
+  return t >= Date.UTC(year, 2, dstStartDay) && t < Date.UTC(year, 10, dstEndDay);
+}
+// auctionDate is date-only (midnight, no timezone) — parsing that directly
+// put markers at midnight in whichever timezone the app happens to be
+// running in, not the real ~1pm ET auction time (confirmed on the live
+// data: "01:00 PM" on every recent 10Y/30Y record). Built as an explicit
+// ET-offset ISO string instead, so parsing is deterministic regardless of
+// the runtime's local timezone. Auctions before TreasuryDirect tracked
+// closingTimeCompetitive fall back to 1:00 PM, the long-standing close time.
+function auctionTimestamp(auction: TreasuryAuction): number | null {
+  const dateStr = auction.auctionDate.slice(0, 10); // "YYYY-MM-DD", string-sliced — no Date parsing of the untimezoned original
+  const [y, m, d] = dateStr.split("-").map(Number);
+  if (!y || !m || !d) return null;
+  const match = (auction.closingTimeCompetitive || "01:00 PM").match(/(\d{1,2}):(\d{2})\s*(AM|PM)/i);
+  let hour = 13, minute = 0;
+  if (match) {
+    hour = parseInt(match[1], 10) % 12;
+    minute = parseInt(match[2], 10);
+    if (match[3].toUpperCase() === "PM") hour += 12;
+  }
+  const offset = isUsEasternDst(y, m - 1, d) ? "-04:00" : "-05:00";
+  const t = Math.floor(new Date(`${dateStr}T${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}:00${offset}`).getTime() / 1000);
+  return Number.isNaN(t) ? null : t;
+}
+function acceptedPct(part: string, total: string): number | null {
+  const p = parseFloat(part), t = parseFloat(total);
+  if (!Number.isFinite(p) || !Number.isFinite(t) || t === 0) return null;
+  return (p / t) * 100;
+}
+// Treasury's own results have no "tail"/when-issued-yield field (that's a
+// market-quoted figure, never published in the official results), so bid-
+// to-cover is instead compared against the trailing average of the same
+// term's last 6 auctions — the spec's own fallback basis ("evaluated
+// relative to recent auctions when historical data is available").
+function interpretAuction(current: TreasuryAuction, history: TreasuryAuction[]): EventDetail | null {
+  const term = auctionTermLabel(current.securityTerm);
+  if (!term) return null;
+
+  const components: EventFieldDetail[] = [];
+  if (current.bidToCoverRatio) components.push({ label: "Bid-to-Cover", actual: current.bidToCoverRatio });
+  const indirectPct = acceptedPct(current.indirectBidderAccepted, current.totalAccepted);
+  const directPct   = acceptedPct(current.directBidderAccepted, current.totalAccepted);
+  const dealerPct   = acceptedPct(current.primaryDealerAccepted, current.totalAccepted);
+  if (indirectPct !== null) components.push({ label: "Indirect Bidders", actual: `${indirectPct.toFixed(1)}%` });
+  if (directPct   !== null) components.push({ label: "Direct Bidders",   actual: `${directPct.toFixed(1)}%` });
+  if (dealerPct   !== null) components.push({ label: "Primary Dealers",  actual: `${dealerPct.toFixed(1)}%` });
+  // Explicitly listed as unavailable rather than omitted — makes clear this
+  // was checked, not forgotten, per the "never fabricate" requirement.
+  components.push({ label: "Tail" }, { label: "WI Yield" });
+
+  const detail: EventDetail = {
+    title: `${term} Auction`,
+    headline: { label: `${term} Auction`, actual: current.highYield ? `${current.highYield}%` : undefined },
+    components,
+  };
+
+  const bidToCover = parseFloat(current.bidToCoverRatio);
+  const priorSameTerm = history
+    .filter(h => h.cusip !== current.cusip && auctionTermLabel(h.securityTerm) === term && Number.isFinite(parseFloat(h.bidToCoverRatio)))
+    .sort((a, b) => b.auctionDate.localeCompare(a.auctionDate))
+    .slice(0, 6);
+  if (Number.isFinite(bidToCover) && priorSameTerm.length > 0) {
+    const avg = priorSameTerm.reduce((s, h) => s + parseFloat(h.bidToCoverRatio), 0) / priorSameTerm.length;
+    if (bidToCover > avg)      { detail.tag = "STRONG AUCTION"; detail.arrowLabel = "Yield Pressure ↓"; }
+    else if (bidToCover < avg) { detail.tag = "WEAK AUCTION";   detail.arrowLabel = "Yield Pressure ↑"; }
+    else                       { detail.tag = "IN LINE"; }
+  }
+  return detail;
+}
+
+// The News marker hover/click detail tooltip — a compact "quick take" card
+// following the mouse: Actual/Forecast, then a bolded tag+surprise line
+// ("HOT +0.2%"), condensed one-line components ("Core: +0.1% surprise"),
+// then a closing "→ Hawkish"-style read. Degrades to a plain "unavailable"
+// message when the marker has no matching structured data (mainly
+// historical releases from before this feature started persisting events),
+// and to a bare "unavailable" value when a specific field just isn't there
+// — never fabricated.
+function EventQuickLine({ label, value, bold }: { label: string; value: string; bold?: boolean }) {
+  return (
+    <div style={{ fontSize: 11, color: "var(--text-secondary)", marginBottom: 2 }}>
+      {label}: <span style={{ color: "var(--text-primary)", fontWeight: bold ? 700 : 600 }}>{value}</span>
+    </div>
+  );
+}
+// Condensed to whichever's more informative: the surprise (if this field
+// has real forecast data to compare against, e.g. Jobs' Unemployment Rate)
+// or the bare actual (e.g. an auction's Bid-to-Cover, which has no
+// forecast/surprise concept at all).
+function EventQuickComponent({ f }: { f: EventFieldDetail }) {
+  const value = f.surprise !== undefined ? `${f.surprise} surprise` : f.actual ?? "unavailable";
+  return <EventQuickLine label={f.label} value={value} />;
+}
+// Full Actual/Forecast/Previous block — used for the headline field and for
+// Core, so a fallback-sourced field (e.g. CPI's FRED-backed historical
+// entries, which have real Actual/Previous but no Forecast at all) still
+// shows everything it does have instead of silently dropping lines.
+// Forecast is always shown, explicitly as "unavailable" when absent, so
+// it's clear that was checked rather than forgotten; Previous is only
+// shown when present since its absence isn't as load-bearing.
+function EventFieldBlock({ f, showLabel }: { f: EventFieldDetail; showLabel?: boolean }) {
+  return (
+    <div style={{ marginBottom: 2 }}>
+      {showLabel && (
+        <div style={{ fontSize: 9, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--text-muted)", marginTop: 4, marginBottom: 2 }}>
+          {f.label}
+        </div>
+      )}
+      <EventQuickLine label="Actual" value={f.actual ?? "unavailable"} bold />
+      <EventQuickLine label="Forecast" value={f.forecast ?? "unavailable"} />
+      {f.previous !== undefined && <EventQuickLine label="Previous" value={f.previous} />}
+    </div>
+  );
+}
+function NewsMarkerTooltip({ x, y, label, color, detail }: { x: number; y: number; label: string; color: string; detail?: EventDetail }) {
+  const directionColor = detail?.direction === "Hawkish" ? "#ef4444" : detail?.direction === "Dovish" ? "#3b82f6" : "var(--text-secondary)";
+  return createPortal(
+    <div style={{
+      position: "fixed", left: x + 12, top: y + 12, zIndex: 1200, pointerEvents: "none",
+      background: "var(--bg-panel)", border: `1px solid ${color}`, borderRadius: 10,
+      padding: "10px 12px", width: 200, boxShadow: "0 8px 24px rgba(0,0,0,0.45)",
+    }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}>
+        <span style={{ width: 8, height: 8, borderRadius: "50%", background: color, flexShrink: 0 }} />
+        <span style={{ fontSize: 12, fontWeight: 800, color }}>{detail?.title ?? label}</span>
+      </div>
+      {!detail && (
+        <div style={{ fontSize: 11, color: "var(--text-muted)" }}>
+          No structured data available for this release yet.
+        </div>
+      )}
+      {detail && (
+        <>
+          <EventFieldBlock f={detail.headline} />
+          {detail.tag && (
+            <div style={{ marginTop: 4, marginBottom: 2, fontSize: 12, fontWeight: 800, color: directionColor }}>
+              {detail.tag}{detail.headline.surprise ? ` ${detail.headline.surprise}` : ""}
+            </div>
+          )}
+          {detail.core && <EventFieldBlock f={detail.core} showLabel />}
+          {detail.components?.map((c, i) => <EventQuickComponent key={i} f={c} />)}
+          {(detail.arrowLabel || detail.direction) && (
+            <div style={{ marginTop: 4, fontSize: 11, fontWeight: 700, color: directionColor }}>&rarr; {detail.arrowLabel ?? detail.direction}</div>
+          )}
+        </>
+      )}
+    </div>,
+    document.body
+  );
+}
+
 // A line is positioned either by its real time (resolved to the nearest
 // loaded bar, for anything within the loaded candle range) or, for the one
 // upcoming preview per category that hasn't happened yet, by a projected
 // logical index past the last loaded bar — timeToIndex has no bar to
 // resolve a future timestamp to, since none of the candles for it exist
 // yet.
-interface NewsLineData { time: UTCTimestamp | null; futureIndex?: number; label: string; color: string; }
+interface NewsLineData { time: UTCTimestamp | null; futureIndex?: number; label: string; color: string; detail?: EventDetail; }
 class NewsLineRenderer {
   _p: NewsLinePrimitive;
   constructor(p: NewsLinePrimitive) { this._p = p; }
@@ -1240,7 +2406,12 @@ class NewsLineRenderer {
     const chart = this._p._chart;
     const series = this._p._series;
     const lines = this._p._lines;
-    if (!chart || !series || lines.length === 0) return;
+    // Cleared here rather than left for the block below — that block never
+    // runs when there's nothing to draw (News toggled off, or every line
+    // filtered out), which otherwise left stale hit-test entries from the
+    // last time it did, so a hover over where a line used to be kept
+    // showing its tooltip even with the indicator switched off.
+    if (!chart || !series || lines.length === 0) { this._p._hitTest = []; return; }
     target.useBitmapCoordinateSpace((scope: any) => {
       const ctx = scope.context;
       const hr = scope.horizontalPixelRatio;
@@ -1298,6 +2469,14 @@ class NewsLineRenderer {
       }
       resolved.sort((a, b) => a.x - b.x);
 
+      // Hover hit-test targets, in CSS pixels (xRaw, pre-hr-scaling) — read
+      // by the crosshair-move handler that drives the detail tooltip. Kept
+      // even for lines with no resolved `detail` (pre-persistence historical
+      // markers) so hovering them still surfaces a "data unavailable"
+      // tooltip instead of doing nothing, per the graceful-degradation
+      // requirement this feature was built around.
+      this._p._hitTest = resolved.map(r => ({ xCss: r.x / hr, label: r.l.label, color: r.l.color, detail: r.l.detail }));
+
       ctx.font = `${Math.round(9 * vr)}px sans-serif`;
       const rowGap  = 12 * vr;
       const padding = 4 * hr;
@@ -1343,6 +2522,9 @@ class NewsLinePrimitive {
   // sub-daily bar-correction (see there for why it's gated off for 1D/1W).
   _barTimes: number[] = [];
   _applyBarCorrection: boolean = true;
+  // Populated by the renderer on every draw — see there. Read by the
+  // crosshair-move handler that drives the hover/click detail tooltip.
+  _hitTest: { xCss: number; label: string; color: string; detail?: EventDetail }[] = [];
   _views: NewsLinePaneView[] = [];
   constructor(lines: NewsLineData[]) { this._lines = lines; }
   attached({ chart, series }: any) { this._chart = chart; this._series = series; this._views = [new NewsLinePaneView(this)]; }
@@ -1377,9 +2559,24 @@ function formatNyCrosshairTime(time: any): string {
   return `${NY_AXIS_DATE_FMT.format(d)} ${NY_AXIS_TIME_FMT.format(d)}`;
 }
 
-const EIGHT_AM_BOX_COLOR = { fill: "rgba(0,191,255,0.16)", stroke: "#00BFFF" };
+// ORB (Opening Range Breakout) boxes — one per market open, each anchored to
+// the first 15M candle of that session in SESSION_LOCAL_ZONE wall-clock time.
+interface OrbDef {
+  key: "ny" | "tokyo" | "london" | "ny930";
+  label: string;
+  hour: number; minute: number;
+  durationHours: number;
+  fill: string; stroke: string;
+}
+const ORB_DEFS: OrbDef[] = [
+  { key: "tokyo",  label: "Tokyo ORB",    hour: 19, minute: 0,  durationHours: 8, fill: "rgba(168,85,247,0.16)", stroke: "#a855f7" }, // purple
+  { key: "london", label: "London ORB",   hour: 3,  minute: 0,  durationHours: 9, fill: "rgba(59,130,246,0.16)",  stroke: "#3b82f6" }, // blue — runs until 12:00
+  { key: "ny",     label: "New York ORB", hour: 8,  minute: 0,  durationHours: 9, fill: "rgba(34,197,94,0.16)",   stroke: "#22c55e" }, // green — runs until 17:00
+  { key: "ny930",  label: "9:30 ORB",     hour: 9,  minute: 30, durationHours: 8, fill: "rgba(234,179,8,0.16)",   stroke: "#eab308" }, // yellow
+];
 
-function computeEightAmBoxes(candles: RawCandleTf[]): TimeRangeBox[] {
+function computeOrbBoxes(candles: RawCandleTf[], defs: OrbDef[]): TimeRangeBox[] {
+  if (defs.length === 0) return [];
   const fmt = new Intl.DateTimeFormat("en-US", {
     timeZone: SESSION_LOCAL_ZONE, hour: "2-digit", minute: "2-digit", hourCycle: "h23",
   });
@@ -1389,13 +2586,15 @@ function computeEightAmBoxes(candles: RawCandleTf[]): TimeRangeBox[] {
     const parts = fmt.formatToParts(d);
     const hour   = Number(parts.find(p => p.type === "hour")?.value);
     const minute = Number(parts.find(p => p.type === "minute")?.value);
-    if (hour === 8 && minute === 0) {
-      const startTime = Math.floor(d.getTime() / 1000) as UTCTimestamp;
-      boxes.push({
-        low: c.low, high: c.high, startTime, endTime: (startTime + 8 * 60 * 60) as UTCTimestamp,
-        fill: EIGHT_AM_BOX_COLOR.fill, stroke: EIGHT_AM_BOX_COLOR.stroke, midLine: true,
-        label: "8AM Box",
-      });
+    for (const def of defs) {
+      if (hour === def.hour && minute === def.minute) {
+        const startTime = Math.floor(d.getTime() / 1000) as UTCTimestamp;
+        boxes.push({
+          low: c.low, high: c.high, startTime, endTime: (startTime + def.durationHours * 60 * 60) as UTCTimestamp,
+          fill: def.fill, stroke: def.stroke, midLine: true,
+          label: def.label,
+        });
+      }
     }
   }
   return boxes;
@@ -1539,8 +2738,11 @@ function computeCurrentPivotBoxes(candles: RawCandleTf[]): TimeRangeBox[] {
 
 // Auto trendline overlay — diagonal support/resistance lines connecting the
 // two most recent qualifying swing pivots, extended to the last candle.
-// Always blue regardless of timeframe or type.
+// Color is per-timeframe, set on each TrendlineSegment when it's built (see
+// trendColors state + the recompute effect below).
 const TRENDLINE_COLOR = "#3b82f6";
+// Preset swatches offered in the per-timeframe trendline color picker.
+const TRENDLINE_COLOR_PRESETS = ["#3b82f6", "#a855f7", "#22c55e", "#eab308", "#ef4444", "#ec4899", "#06b6d4", "#f97316"];
 
 class TrendlineRenderer {
   _p: TrendlinePrimitive;
@@ -1658,10 +2860,11 @@ class TrendlineRenderer {
         const dx = x2 - x1;
         if (dx !== 0) yEnd = y2 + ((y2 - y1) / dx) * (w - x2);
 
+        const lineColor = l.color || TRENDLINE_COLOR;
         ctx.beginPath();
         ctx.moveTo(x1, y1);
         ctx.lineTo(xEnd, yEnd);
-        ctx.strokeStyle = TRENDLINE_COLOR;
+        ctx.strokeStyle = lineColor;
         ctx.lineWidth = hr;
         ctx.stroke();
 
@@ -1669,7 +2872,7 @@ class TrendlineRenderer {
           if (cxRaw === null || cyRaw === null) continue;
           ctx.beginPath();
           ctx.arc(cxRaw * hr, cyRaw * vr, 3 * hr, 0, Math.PI * 2);
-          ctx.fillStyle = TRENDLINE_COLOR;
+          ctx.fillStyle = lineColor;
           ctx.fill();
         }
       }
@@ -1697,13 +2900,283 @@ class TrendlinePrimitive {
   paneViews() { return this._views; }
 }
 
+// Ghosted instrument-name watermark — Quad View only (see PriceHistoryChart's
+// createSeries), large low-opacity text centered behind the candles so each
+// tile is identifiable at a glance without reading its small toolbar label.
+// zOrder "bottom" (same as ZoneBoxPrimitive) draws it under the candle series.
+class WatermarkRenderer {
+  _p: WatermarkPrimitive;
+  constructor(p: WatermarkPrimitive) { this._p = p; }
+  draw(target: any) {
+    const text = this._p._text;
+    if (!text) return;
+    target.useBitmapCoordinateSpace((scope: any) => {
+      const ctx = scope.context;
+      const w = scope.bitmapSize.width;
+      const h = scope.bitmapSize.height;
+      if (w === 0 || h === 0) return;
+      const fontSize = Math.max(9, Math.min(h * 0.17, (w / text.length) * 0.775));
+      ctx.save();
+      ctx.fillStyle = "rgba(148,163,184,0.12)";
+      ctx.font = `800 ${Math.round(fontSize)}px sans-serif`;
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(text, w / 2, h / 2);
+      ctx.restore();
+    });
+  }
+}
+class WatermarkPaneView {
+  _p: WatermarkPrimitive;
+  constructor(p: WatermarkPrimitive) { this._p = p; }
+  update() {}
+  zOrder() { return "bottom" as const; }
+  renderer() { return new WatermarkRenderer(this._p); }
+}
+class WatermarkPrimitive {
+  _chart: any = null;
+  _series: any = null;
+  _text: string;
+  _views: WatermarkPaneView[] = [];
+  constructor(text: string) { this._text = text; }
+  attached({ chart, series }: any) { this._chart = chart; this._series = series; this._views = [new WatermarkPaneView(this)]; }
+  detached() { this._chart = null; this._series = null; this._views = []; }
+  updateAllViews() { this._views.forEach(v => v.update()); }
+  paneViews() { return this._views; }
+}
+
+// ─── Quad Chart — condensed dropdown controls ─────────────────────────────────
+// Single-select (e.g. chart timeframe) and multi-select (e.g. Supply/Demand
+// or Trend Lines per-timeframe toggles) collapsed into one button + portaled
+// popover, so the equivalent full button row fits in a quarter-width tile.
+
+function TfDropdown<T extends string>({ value, options, onChange }: {
+  value: T; options: readonly T[]; onChange: (v: T) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
+  const btnRef = useRef<HTMLButtonElement>(null);
+  const popRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const close = (e: MouseEvent) => {
+      const target = e.target as Node;
+      if (!btnRef.current?.contains(target) && !popRef.current?.contains(target)) setOpen(false);
+    };
+    document.addEventListener("mousedown", close);
+    return () => document.removeEventListener("mousedown", close);
+  }, [open]);
+  return (
+    <div style={{ position: "relative", display: "inline-flex", flexShrink: 0 }}>
+      <button
+        ref={btnRef}
+        onClick={() => { const r = btnRef.current?.getBoundingClientRect(); if (r) setPos({ top: r.bottom + 6, left: r.left }); setOpen(v => !v); }}
+        style={{
+          fontSize: 9, fontWeight: 700, padding: "4px 6px",
+          textTransform: "uppercase", letterSpacing: "0.06em",
+          background: "var(--bg-panel-alt)", border: "1px solid var(--border-medium)",
+          color: "var(--text-secondary)", borderRadius: 8, cursor: "pointer",
+          display: "flex", alignItems: "center", gap: 3, whiteSpace: "nowrap",
+        }}
+      >
+        {value}
+        <ChevronDown size={10} />
+      </button>
+      {open && pos && createPortal(
+        <div ref={popRef} style={{
+          position: "fixed", top: pos.top, left: pos.left, zIndex: 1000,
+          background: "var(--bg-panel)", border: "1px solid var(--border-medium)",
+          borderRadius: 10, padding: 5, boxShadow: "0 8px 24px rgba(0,0,0,0.45)",
+          display: "flex", flexDirection: "column", gap: 2, minWidth: 68,
+        }}>
+          {options.map(opt => (
+            <button key={opt} onClick={() => { onChange(opt); setOpen(false); }} style={{
+              fontSize: 10, fontWeight: 700, padding: "4px 8px", textAlign: "left",
+              background: opt === value ? "var(--accent-dim)" : "transparent",
+              border: "none", color: opt === value ? "var(--accent-text)" : "var(--text-secondary)",
+              borderRadius: 6, cursor: "pointer",
+            }}>{opt}</button>
+          ))}
+        </div>,
+        document.body
+      )}
+    </div>
+  );
+}
+
+function MultiTfDropdown({ label, options, active, onToggle, accentColor = "var(--accent-text)" }: {
+  label: string; options: readonly string[]; active: Record<string, boolean>; onToggle: (key: string) => void; accentColor?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
+  const btnRef = useRef<HTMLButtonElement>(null);
+  const popRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const close = (e: MouseEvent) => {
+      const target = e.target as Node;
+      if (!btnRef.current?.contains(target) && !popRef.current?.contains(target)) setOpen(false);
+    };
+    document.addEventListener("mousedown", close);
+    return () => document.removeEventListener("mousedown", close);
+  }, [open]);
+  const activeCount = options.filter(o => active[o]).length;
+  return (
+    <div style={{ position: "relative", display: "inline-flex", flexShrink: 0 }}>
+      <button
+        ref={btnRef}
+        onClick={() => { const r = btnRef.current?.getBoundingClientRect(); if (r) setPos({ top: r.bottom + 6, left: r.left }); setOpen(v => !v); }}
+        style={{
+          fontSize: 9, fontWeight: 700, padding: "4px 6px",
+          textTransform: "uppercase", letterSpacing: "0.06em",
+          background: activeCount > 0 ? "var(--accent-dim)" : "var(--bg-panel-alt)",
+          border:     activeCount > 0 ? "1px solid var(--accent-border)" : "1px solid var(--border-medium)",
+          color:      activeCount > 0 ? "var(--accent-text)" : "var(--text-secondary)",
+          borderRadius: 8, cursor: "pointer",
+          display: "flex", alignItems: "center", gap: 3, whiteSpace: "nowrap",
+        }}
+      >
+        {label}
+        <ChevronDown size={10} />
+      </button>
+      {open && pos && createPortal(
+        <div ref={popRef} style={{
+          position: "fixed", top: pos.top, left: pos.left, zIndex: 1000,
+          background: "var(--bg-panel)", border: "1px solid var(--border-medium)",
+          borderRadius: 10, padding: "8px 10px", boxShadow: "0 8px 24px rgba(0,0,0,0.45)", minWidth: 130,
+        }}>
+          {options.map(opt => (
+            <button key={opt} onClick={() => onToggle(opt)} style={{
+              display: "flex", alignItems: "center", gap: 8, width: "100%",
+              background: "none", border: "none", padding: "4px 2px", cursor: "pointer", textAlign: "left",
+            }}>
+              <span style={{
+                width: 14, height: 14, borderRadius: 3, flexShrink: 0,
+                border: `2px solid ${accentColor}`, background: active[opt] ? accentColor : "transparent",
+              }} />
+              <span style={{ fontSize: 11, fontWeight: 600, color: active[opt] ? "var(--text-primary)" : "var(--text-secondary)" }}>
+                {opt}
+              </span>
+            </button>
+          ))}
+        </div>,
+        document.body
+      )}
+    </div>
+  );
+}
+
+// ─── Instrument picker (compact) ──────────────────────────────────────────
+// A small searchable pair-picker button, used by each Quad View tile (each
+// PriceHistoryChart instance in compact mode) to let the user change that
+// tile's instrument independently. Reuses the same ALL_ASSETS list as the
+// page-level PairSelector.
+function InstrumentPicker({ pair, onChange }: { pair: string; onChange: (p: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
+  const btnRef = useRef<HTMLButtonElement>(null);
+  const popRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const close = (e: MouseEvent) => {
+      const target = e.target as Node;
+      if (!btnRef.current?.contains(target) && !popRef.current?.contains(target)) setOpen(false);
+    };
+    document.addEventListener("mousedown", close);
+    return () => document.removeEventListener("mousedown", close);
+  }, [open]);
+  const norm = (s: string) => s.replace(/[\s/]/g, "").toLowerCase();
+  const results = (query.trim() ? ALL_ASSETS.filter(a => norm(a.pair).includes(norm(query))) : ALL_ASSETS).slice(0, 30);
+  return (
+    <div style={{ position: "relative", display: "inline-flex", flexShrink: 0 }}>
+      <button
+        ref={btnRef}
+        onClick={() => { const r = btnRef.current?.getBoundingClientRect(); if (r) setPos({ top: r.bottom + 6, left: r.left }); setQuery(""); setOpen(v => !v); }}
+        title="Change this chart's instrument"
+        style={{
+          fontSize: 11, fontWeight: 800, padding: "4px 7px",
+          background: "var(--bg-panel-alt)", border: "1px solid var(--border-medium)",
+          color: "var(--text-primary)", borderRadius: 8, cursor: "pointer",
+          display: "flex", alignItems: "center", gap: 4, whiteSpace: "nowrap",
+        }}
+      >
+        {pair}
+        <ChevronDown size={10} />
+      </button>
+      {open && pos && createPortal(
+        <div ref={popRef} style={{
+          position: "fixed", top: pos.top, left: pos.left, zIndex: 1000,
+          background: "var(--bg-panel)", border: "1px solid var(--border-medium)",
+          borderRadius: 10, padding: 6, boxShadow: "0 8px 24px rgba(0,0,0,0.45)", width: 180,
+        }}>
+          <input
+            autoFocus
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search instrument…"
+            style={{
+              width: "100%", fontSize: 11, padding: "5px 7px", marginBottom: 4, boxSizing: "border-box",
+              background: "var(--bg-panel-alt)", border: "1px solid var(--border-medium)",
+              color: "var(--text-primary)", borderRadius: 6, outline: "none",
+            }}
+          />
+          <div style={{ maxHeight: 220, overflowY: "auto", display: "flex", flexDirection: "column", gap: 1 }}>
+            {results.length === 0 ? (
+              <span style={{ fontSize: 10, color: "var(--text-muted)", padding: "4px 6px" }}>No matches</span>
+            ) : results.map(a => (
+              <button key={a.pair} onClick={() => { onChange(a.pair); setOpen(false); }} style={{
+                fontSize: 11, fontWeight: 600, padding: "4px 7px", textAlign: "left",
+                background: a.pair === pair ? "var(--accent-dim)" : "transparent",
+                border: "none", color: a.pair === pair ? "var(--accent-text)" : "var(--text-secondary)",
+                borderRadius: 6, cursor: "pointer",
+              }}>{a.pair}</button>
+            ))}
+          </div>
+        </div>,
+        document.body
+      )}
+    </div>
+  );
+}
+
 // ─── Price history chart ────────────────────────────────────────────────────────
 
-function PriceHistoryChart({ rows, pair, chartTf, setChartTf, livePrice, expandWidth, expandHeight, heightBoost, allPanelsCollapsed, onToggleAllPanels, rightOfChartCollapsed, onHeightChange, calendarEvents }: { rows: SheetRow[]; pair: string; chartTf: "1W" | "1D" | "4H" | "1H" | "15M" | "5M" | "1M"; setChartTf: (tf: "1W" | "1D" | "4H" | "1H" | "15M" | "5M" | "1M") => void; livePrice: number | null; expandWidth: boolean; expandHeight: boolean; heightBoost: number; allPanelsCollapsed: boolean; onToggleAllPanels: () => void; rightOfChartCollapsed: boolean; onHeightChange: (h: number) => void; calendarEvents: EconomicEvent[] }) {
+function PriceHistoryChart({
+  rows, pair, onPairChange, chartTf: chartTfProp, setChartTf: setChartTfProp, livePrice, expandWidth, expandHeight, heightBoost,
+  allPanelsCollapsed, onToggleAllPanels, rightOfChartCollapsed, onHeightChange, calendarEvents, storedEconomicEvents, treasuryAuctions,
+  compact = false, quadView, onToggleQuadView, showSnapshotAndExpand = true, snapshotTargetRef,
+  quadLocked = false, onToggleQuadLocked,
+}: {
+  rows: SheetRow[]; pair: string; onPairChange?: (pair: string) => void;
+  chartTf?: "1W" | "1D" | "4H" | "1H" | "15M" | "5M" | "1M"; setChartTf?: (tf: "1W" | "1D" | "4H" | "1H" | "15M" | "5M" | "1M") => void;
+  livePrice: number | null; expandWidth: boolean; expandHeight: boolean; heightBoost: number;
+  allPanelsCollapsed: boolean; onToggleAllPanels: () => void; rightOfChartCollapsed: boolean; onHeightChange: (h: number) => void;
+  calendarEvents: EconomicEvent[]; storedEconomicEvents: EconomicEvent[]; treasuryAuctions: TreasuryAuction[];
+  compact?: boolean; quadView: boolean; onToggleQuadView: () => void;
+  // Quad View shows only one Snapshot + Expand pair (on the designated tile)
+  // rather than one per tile. When snapshotTargetRef is given, Snapshot
+  // captures that element (the whole grid) instead of this tile's own chart.
+  showSnapshotAndExpand?: boolean; snapshotTargetRef?: React.RefObject<HTMLDivElement | null>;
+  // Quad View lock — when on, the primary tile (showSnapshotAndExpand===true)
+  // broadcasts its toolbar settings via quadSyncEvents and the other 3 apply
+  // them; onToggleQuadLocked only needs to be wired up on the primary tile,
+  // since that's the only one rendering the lock button.
+  quadLocked?: boolean; onToggleQuadLocked?: () => void;
+}) {
+  // Quad View tiles (compact=true) each need their own independent
+  // timeframe — the page only owns one chartTf/setChartTf pair (for the
+  // single-chart view), so compact instances fall back to local state
+  // instead of the prop. Every other reference to chartTf/setChartTf below
+  // stays unchanged thanks to this shadowing.
+  const [compactChartTf, setCompactChartTf] = useState<"1W" | "1D" | "4H" | "1H" | "15M" | "5M" | "1M">("15M");
+  const chartTf    = compact ? compactChartTf    : chartTfProp!;
+  const setChartTf = compact ? setCompactChartTf : setChartTfProp!;
+
   const [viewMode,   setViewMode]   = useState<"candles" | "line">("candles");
   const [tfRows,     setTfRows]     = useState<RawCandleTf[]>([]);
   const [tfLoading,  setTfLoading]  = useState(false);
-  const [activeInds, setActiveInds] = useState<Set<IndKey>>(new Set());
+  const [activeInds, setActiveInds] = useState<Set<IndKey>>(() => new Set(["volume"]));
 
   // Open positions on the currently viewed instrument, from the Trade Log —
   // an "open" trade is one with no closedAt yet. Plotted as full-width
@@ -1723,30 +3196,47 @@ function PriceHistoryChart({ rows, pair, chartTf, setChartTf, livePrice, expandW
   // switching instruments still picks up the right decimal precision.
   const pairRef = useRef(pair);
   useEffect(() => { pairRef.current = pair; }, [pair]);
+  // Quad View tiles can change instrument in place (InstrumentPicker) without
+  // remounting the chart, so the watermark primitive's text needs its own
+  // sync effect rather than only being set once at createSeries time.
+  useEffect(() => {
+    if (watermarkPrimRef.current) {
+      watermarkPrimRef.current._text = pair;
+      chartRef.current?.applyOptions({});
+    }
+  }, [pair]);
   const [showCandleSettings, setShowCandleSettings] = useState(false);
   const [candleSettingsPos, setCandleSettingsPos] = useState<{ top: number; left: number } | null>(null);
   const viewModeBtnRef = useRef<HTMLButtonElement>(null);
   const candleSettingsPopoverRef = useRef<HTMLDivElement>(null);
 
-  // Supply/demand zone toggles — Daily on by default, 4H/1H opt-in
-  const [showDailyZones, setShowDailyZones] = useState(true);
+  // Supply/demand zone toggles — all opt-in, none on by default
+  const [showDailyZones, setShowDailyZones] = useState(false);
   const [show4HZones,    setShow4HZones]    = useState(false);
   const [show1HZones,    setShow1HZones]    = useState(false);
+  const [show15MZones,   setShow15MZones]   = useState(false);
+  const [show5MZones,    setShow5MZones]    = useState(false);
   const [dailyZoneCandles, setDailyZoneCandles] = useState<RawCandleTf[]>([]);
   const [h4ZoneCandles,    setH4ZoneCandles]    = useState<RawCandleTf[]>([]);
   const [h1ZoneCandles,    setH1ZoneCandles]    = useState<RawCandleTf[]>([]);
+  const [m15ZoneCandles,   setM15ZoneCandles]   = useState<RawCandleTf[]>([]);
+  const [m5ZoneCandles,    setM5ZoneCandles]    = useState<RawCandleTf[]>([]);
 
-  // Auto trendline toggles — Weekly on by default, Daily/4H/1H/15M off
+  // Auto trendline toggles — Weekly on by default, Daily/4H/1H/15M/5M/1M off
   const [showWeeklyTrend, setShowWeeklyTrend] = useState(true);
   const [showDailyTrend,  setShowDailyTrend]  = useState(false);
   const [show4HTrend,     setShow4HTrend]     = useState(false);
   const [show1HTrend,     setShow1HTrend]     = useState(false);
   const [show15MTrend,    setShow15MTrend]    = useState(false);
+  const [show5MTrend,     setShow5MTrend]     = useState(false);
+  const [show1MTrend,     setShow1MTrend]     = useState(false);
   const [weeklyTrendCandles, setWeeklyTrendCandles] = useState<RawCandleTf[]>([]);
   const [dailyTrendCandles,  setDailyTrendCandles]  = useState<RawCandleTf[]>([]);
   const [h4TrendCandles,     setH4TrendCandles]     = useState<RawCandleTf[]>([]);
   const [h1TrendCandles,     setH1TrendCandles]     = useState<RawCandleTf[]>([]);
   const [m15TrendCandles,    setM15TrendCandles]    = useState<RawCandleTf[]>([]);
+  const [m5TrendCandles,     setM5TrendCandles]     = useState<RawCandleTf[]>([]);
+  const [m1TrendCandles,     setM1TrendCandles]     = useState<RawCandleTf[]>([]);
 
   // Pivot Points toggles — master on/off lives on activeInds ("pivots"),
   // same as Reversal/8AM Box; these four control which timeframe(s) render
@@ -1769,7 +3259,9 @@ function PriceHistoryChart({ rows, pair, chartTf, setChartTf, livePrice, expandW
   // panel (no separate fetch).
   const [showNews, setShowNews] = useState(false);
   const [newsCategoryVisibility, setNewsCategoryVisibility] = useState<Record<NewsCategoryKey, boolean>>({
-    fomc: true, cpi: true, jobs: true,
+    fomc: true, sep: true, fomc_presser: true, fomc_minutes: true,
+    cpi: true, pce: true, jobs: true, gdp: true, ism: true, jolts: true, retail_sales: true, ppi: true, jobless_claims: true,
+    auction: true,
   });
   // Per-category, per-currency sub-filter — CPI and Jobs Reports both
   // release under multiple countries (e.g. EUR/USD's own CPI plus every
@@ -1786,11 +3278,21 @@ function PriceHistoryChart({ rows, pair, chartTf, setChartTf, livePrice, expandW
   const [newsSettingsPos, setNewsSettingsPos] = useState<{ top: number; left: number } | null>(null);
   const newsBtnRef = useRef<HTMLButtonElement>(null);
   const newsSettingsPopoverRef = useRef<HTMLDivElement>(null);
+  // Hover/click detail tooltip for a News marker — driven by the chart's
+  // native crosshair-move subscription (see the chart-init effect), matched
+  // against NewsLinePrimitive._hitTest (set by the renderer on every draw).
+  const [newsHover, setNewsHover] = useState<{ x: number; y: number; label: string; color: string; detail?: EventDetail } | null>(null);
 
   // Trendline count per timeframe — how many support + resistance rays to
   // draw for each, configurable from the Lines settings panel.
-  const [trendCounts, setTrendCounts] = useState<{ W: number; D: number; H4: number; H1: number; M15: number }>({
-    W: 1, D: 1, H4: 1, H1: 1, M15: 1,
+  const [trendCounts, setTrendCounts] = useState<{ W: number; D: number; H4: number; H1: number; M15: number; M5: number; M1: number }>({
+    W: 1, D: 1, H4: 1, H1: 1, M15: 1, M5: 1, M1: 1,
+  });
+  // Trendline color per timeframe, configurable from the same Lines settings
+  // panel — all default to the original blue.
+  const [trendColors, setTrendColors] = useState<{ W: string; D: string; H4: string; H1: string; M15: string; M5: string; M1: string }>({
+    W: TRENDLINE_COLOR, D: TRENDLINE_COLOR, H4: TRENDLINE_COLOR, H1: TRENDLINE_COLOR,
+    M15: TRENDLINE_COLOR, M5: TRENDLINE_COLOR, M1: TRENDLINE_COLOR,
   });
   const [showTrendSettings, setShowTrendSettings] = useState(false);
   const [trendSettingsPos, setTrendSettingsPos] = useState<{ top: number; left: number } | null>(null);
@@ -1804,6 +3306,12 @@ function PriceHistoryChart({ rows, pair, chartTf, setChartTf, livePrice, expandW
   const zoneSettingsPopoverRef = useRef<HTMLDivElement>(null);
   const [showTappedZone, setShowTappedZone] = useState(true);
   const [tapFadeCandles, setTapFadeCandles] = useState(DEFAULT_TAP_FADE_CANDLES);
+
+  // Quad View toggle button — quadView/onToggleQuadView are owned by the
+  // page (it decides whether to render this one chart or a 2x2 grid of 4),
+  // this component just renders the button on every instance so it's always
+  // reachable to switch modes.
+  const quadBtnRef = useRef<HTMLButtonElement>(null);
 
   // Chart + toolbar screenshot → save to a trade's Entry/Exit/Additional slot
   const captureRef = useRef<HTMLDivElement>(null);
@@ -1877,13 +3385,16 @@ function PriceHistoryChart({ rows, pair, chartTf, setChartTf, livePrice, expandW
   const priceLineRef  = useRef<any>(null);
   const openTradePriceLinesRef = useRef<any[]>([]);
   const indSeriesRef  = useRef<Partial<Record<IndKey, any[]>>>({});
+  const bbFillPrimRef   = useRef<any>(null);
+  const ichiCloudPrimRef = useRef<any>(null);
   const tfRowsRef     = useRef<RawCandleTf[]>([]);
   const viewModeRef   = useRef(viewMode);
-  const activeIndsRef = useRef<Set<IndKey>>(new Set());
+  const activeIndsRef = useRef<Set<IndKey>>(new Set(["volume"]));
   const zonePrimRef   = useRef<ZoneBoxPrimitive | null>(null);
   const zoneBoxesRef  = useRef<ZoneBox[]>([]);
   const trendPrimRef  = useRef<TrendlinePrimitive | null>(null);
   const trendLinesRef = useRef<TrendlineSegment[]>([]);
+  const watermarkPrimRef = useRef<WatermarkPrimitive | null>(null);
   const eightAmBoxPrimRef = useRef<TimeRangeBoxPrimitive | null>(null);
   const eightAmBoxesRef   = useRef<TimeRangeBox[]>([]);
   const marketSessionPrimRef  = useRef<TimeRangeBoxPrimitive | null>(null);
@@ -1897,13 +3408,23 @@ function PriceHistoryChart({ rows, pair, chartTf, setChartTf, livePrice, expandW
   // O/H/L/C can refresh without yanking the user's view.
   const shouldResetViewRef = useRef(true);
 
-  // 8AM session box — independent 15M candle fetch, mirrors the zone-candle
-  // fetch pattern below, only active while the indicator toggle is on.
+  // ORB (Opening Range Breakout) boxes — independent 15M candle fetch,
+  // mirrors the zone-candle fetch pattern below, only active while the
+  // indicator toggle is on. NY defaults on (matches the tool's prior 8AM
+  // Box behavior); Tokyo/London/9:30 are opt-in.
   const [eightAmCandles, setEightAmCandles] = useState<RawCandleTf[]>([]);
-  // 4H/1D/1W have no bar sitting exactly on 8:00/16:00 NY time, so the box
-  // can't anchor to a real candle at those timeframes — hide it above 1H.
+  // 4H/1D/1W have no bar sitting exactly on the session-open minute, so the
+  // box can't anchor to a real candle at those timeframes — hide it above 1H.
   const eightAmBoxEligibleTf = chartTf === "1H" || chartTf === "15M" || chartTf === "5M" || chartTf === "1M";
   const showEightAmBox = activeInds.has("session8am") && eightAmBoxEligibleTf;
+  const [showOrbNY,     setShowOrbNY]     = useState(true);
+  const [showOrbTokyo,  setShowOrbTokyo]  = useState(true);
+  const [showOrbLondon, setShowOrbLondon] = useState(true);
+  const [showOrb930,    setShowOrb930]    = useState(false);
+  const [showOrbSettings, setShowOrbSettings] = useState(false);
+  const [orbSettingsPos, setOrbSettingsPos] = useState<{ top: number; left: number } | null>(null);
+  const orbBtnRef = useRef<HTMLButtonElement>(null);
+  const orbSettingsPopoverRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!showEightAmBox) { setEightAmCandles([]); return; }
     const load = () => getLiveCandles(pair, "15M")
@@ -1913,9 +3434,15 @@ function PriceHistoryChart({ rows, pair, chartTf, setChartTf, livePrice, expandW
     const id = setInterval(load, 10_000);
     return () => clearInterval(id);
   }, [showEightAmBox, pair]);
+  const activeOrbDefs = useMemo(() => ORB_DEFS.filter(d =>
+    (d.key === "ny" && showOrbNY) ||
+    (d.key === "tokyo" && showOrbTokyo) ||
+    (d.key === "london" && showOrbLondon) ||
+    (d.key === "ny930" && showOrb930)
+  ), [showOrbNY, showOrbTokyo, showOrbLondon, showOrb930]);
   const eightAmBoxes = useMemo(
-    () => showEightAmBox ? computeEightAmBoxes(eightAmCandles) : [],
-    [showEightAmBox, eightAmCandles]
+    () => showEightAmBox ? computeOrbBoxes(eightAmCandles, activeOrbDefs) : [],
+    [showEightAmBox, eightAmCandles, activeOrbDefs]
   );
   useEffect(() => {
     eightAmBoxesRef.current = eightAmBoxes;
@@ -2023,6 +3550,28 @@ function PriceHistoryChart({ rows, pair, chartTf, setChartTf, livePrice, expandW
     return () => clearInterval(id);
   }, [show1HZones, pair]);
 
+  // 15M zone candles — fetched + polled only while the 15M zone toggle is on
+  useEffect(() => {
+    if (!show15MZones) { setM15ZoneCandles([]); return; }
+    const load = () => getLiveCandles(pair, "15M")
+      .then(candles => setM15ZoneCandles(candles))
+      .catch(() => setM15ZoneCandles([]));
+    load();
+    const id = setInterval(load, 10_000);
+    return () => clearInterval(id);
+  }, [show15MZones, pair]);
+
+  // 5M zone candles — fetched + polled only while the 5M zone toggle is on
+  useEffect(() => {
+    if (!show5MZones) { setM5ZoneCandles([]); return; }
+    const load = () => getLiveCandles(pair, "5M")
+      .then(candles => setM5ZoneCandles(candles))
+      .catch(() => setM5ZoneCandles([]));
+    load();
+    const id = setInterval(load, 10_000);
+    return () => clearInterval(id);
+  }, [show5MZones, pair]);
+
   // Fair-value-gap zone detection is O(n^2)-ish over the candle series — run
   // it once per timeframe whenever that timeframe's candles actually change,
   // not on every 5s live-price tick (the zone-box effect below only needs a
@@ -2030,6 +3579,8 @@ function PriceHistoryChart({ rows, pair, chartTf, setChartTf, livePrice, expandW
   const dailyZonesAll = useMemo(() => computeSupplyDemandZones(dailyZoneCandles), [dailyZoneCandles]);
   const h4ZonesAll    = useMemo(() => computeSupplyDemandZones(h4ZoneCandles),    [h4ZoneCandles]);
   const h1ZonesAll    = useMemo(() => computeSupplyDemandZones(h1ZoneCandles),    [h1ZoneCandles]);
+  const m15ZonesAll   = useMemo(() => computeSupplyDemandZones(m15ZoneCandles),   [m15ZoneCandles]);
+  const m5ZonesAll    = useMemo(() => computeSupplyDemandZones(m5ZoneCandles),    [m5ZoneCandles]);
 
   // Weekly trendline candles — fetched only while the Weekly trendline toggle is on
   useEffect(() => {
@@ -2071,19 +3622,38 @@ function PriceHistoryChart({ rows, pair, chartTf, setChartTf, livePrice, expandW
       .catch(() => setM15TrendCandles([]));
   }, [show15MTrend, pair]);
 
+  // 5M trendline candles — fetched only while the 5M trendline toggle is on
+  useEffect(() => {
+    if (!show5MTrend) { setM5TrendCandles([]); return; }
+    getLiveCandles(pair, "5M")
+      .then(candles => setM5TrendCandles(candles))
+      .catch(() => setM5TrendCandles([]));
+  }, [show5MTrend, pair]);
+
+  // 1M trendline candles — fetched only while the 1M trendline toggle is on
+  useEffect(() => {
+    if (!show1MTrend) { setM1TrendCandles([]); return; }
+    getLiveCandles(pair, "1M")
+      .then(candles => setM1TrendCandles(candles))
+      .catch(() => setM1TrendCandles([]));
+  }, [show1MTrend, pair]);
+
   // Recompute trendline segments + repaint the primitive whenever inputs change
   useEffect(() => {
     let lines: TrendlineSegment[] = [];
-    if (showWeeklyTrend) lines = lines.concat(computeAutoTrendlines(weeklyTrendCandles, 2, trendCounts.W));
-    if (showDailyTrend)  lines = lines.concat(computeAutoTrendlines(dailyTrendCandles,  2, trendCounts.D));
-    if (show4HTrend)     lines = lines.concat(computeAutoTrendlines(h4TrendCandles,     2, trendCounts.H4));
-    if (show1HTrend)     lines = lines.concat(computeAutoTrendlines(h1TrendCandles,     2, trendCounts.H1));
-    if (show15MTrend)    lines = lines.concat(computeAutoTrendlines(m15TrendCandles,    2, trendCounts.M15));
+    if (showWeeklyTrend) lines = lines.concat(computeAutoTrendlines(weeklyTrendCandles, 2, trendCounts.W,   trendColors.W));
+    if (showDailyTrend)  lines = lines.concat(computeAutoTrendlines(dailyTrendCandles,  2, trendCounts.D,   trendColors.D));
+    if (show4HTrend)     lines = lines.concat(computeAutoTrendlines(h4TrendCandles,     2, trendCounts.H4,  trendColors.H4));
+    if (show1HTrend)     lines = lines.concat(computeAutoTrendlines(h1TrendCandles,     2, trendCounts.H1,  trendColors.H1));
+    if (show15MTrend)    lines = lines.concat(computeAutoTrendlines(m15TrendCandles,    2, trendCounts.M15, trendColors.M15));
+    if (show5MTrend)     lines = lines.concat(computeAutoTrendlines(m5TrendCandles,     2, trendCounts.M5,  trendColors.M5));
+    if (show1MTrend)     lines = lines.concat(computeAutoTrendlines(m1TrendCandles,     2, trendCounts.M1,  trendColors.M1));
     trendLinesRef.current = lines;
     if (trendPrimRef.current) trendPrimRef.current._lines = lines;
     chartRef.current?.applyOptions({});
-  }, [showWeeklyTrend, showDailyTrend, show4HTrend, show1HTrend, show15MTrend,
-      weeklyTrendCandles, dailyTrendCandles, h4TrendCandles, h1TrendCandles, m15TrendCandles, trendCounts]);
+  }, [showWeeklyTrend, showDailyTrend, show4HTrend, show1HTrend, show15MTrend, show5MTrend, show1MTrend,
+      weeklyTrendCandles, dailyTrendCandles, h4TrendCandles, h1TrendCandles, m15TrendCandles, m5TrendCandles, m1TrendCandles,
+      trendCounts, trendColors]);
 
   // Pivot Points candles — one independent fetch per timeframe toggle,
   // same pattern as the trendline candles above.
@@ -2137,7 +3707,6 @@ function PriceHistoryChart({ rows, pair, chartTf, setChartTf, livePrice, expandW
   // currencies — an EUR/USD chart has no use for a GBP jobs report line.
   useEffect(() => {
     const lines: NewsLineData[] = [];
-    let futureBarsNeeded = 0;
     if (showNews && tfRows.length > 0) {
       // Static-table dates (FOMC/CPI/Jobs) span years, but the chart only
       // ever has whatever candle range is currently loaded (e.g. a handful
@@ -2147,13 +3716,11 @@ function PriceHistoryChart({ rows, pair, chartTf, setChartTf, livePrice, expandW
       // not drawing it, which is what made every out-of-range future FOMC
       // date pile up on the single most-recent candle. Bound to the
       // loaded range (with one bar's slack past the last candle so a
-      // same-day event on the still-forming bar isn't excluded) — except
-      // for exactly one soonest-still-to-come date per category, tracked
-      // separately below and projected past the last bar instead of
-      // dropped, so News always previews what's coming next.
+      // same-day event on the still-forming bar isn't excluded); dates
+      // outside that range — including upcoming/future releases — are
+      // simply not drawn.
       const firstT = Math.floor(new Date(tfRows[0].timestamp).getTime() / 1000);
       const lastRow = tfRows[tfRows.length - 1];
-      const lastIndex = tfRows.length - 1;
       const lastRowT = Math.floor(new Date(lastRow.timestamp).getTime() / 1000);
       const barSeconds = tfRows.length > 1
         ? lastRowT - Math.floor(new Date(tfRows[tfRows.length - 2].timestamp).getTime() / 1000)
@@ -2161,14 +3728,23 @@ function PriceHistoryChart({ rows, pair, chartTf, setChartTf, livePrice, expandW
       const lastT = lastRowT + barSeconds;
       const inRange = (t: number) => t >= firstT && t <= lastT;
 
-      const nextFuture: Partial<Record<NewsCategoryKey, { time: number; label: string; color: string }>> = {};
-      const considerFuture = (key: NewsCategoryKey, t: number, label: string, color: string) => {
-        if (t <= lastT) return;
-        const cur = nextFuture[key];
-        if (!cur || t < cur.time) nextFuture[key] = { time: t, label, color };
-      };
-
       const currencies = relevantNewsCurrencies(pair);
+      // Combined lookup pool for the surprise/interpretation tooltip: the
+      // live feed first (freshest copy of whatever's currently in view),
+      // then everything ever persisted (see get_stored_economic_events) —
+      // which is what makes a release's actual/forecast/previous still
+      // resolvable once it's scrolled out of the live feed's own
+      // current-week window.
+      const eventPool = [...calendarEvents, ...storedEconomicEvents];
+      // Same pool, deduplicated by title+date (live feed wins over its own
+      // persisted copy) — needed for the simple-category loop below since
+      // that one draws a line per matching event rather than just looking
+      // up a single match, so an event present in both arrays would
+      // otherwise double-draw.
+      const dedupedEventPool = [...new Map(
+        [...storedEconomicEvents, ...calendarEvents].map(ev => [`${ev.title}|${ev.date}`, ev])
+      ).values()];
+
       // FOMC/CPI/Jobs all come from the static tables above, not the live
       // feed, so they can plot across the whole loaded chart history
       // instead of only whatever happens to fall in the feed's current
@@ -2190,13 +3766,76 @@ function PriceHistoryChart({ rows, pair, chartTf, setChartTf, livePrice, expandW
           // in different years (e.g. Aug 12, 2025 and 2026).
           const year = iso.slice(0, 4);
           const label = key === "fomc" ? def.label : `${def.label} USD (${year})`;
-          if (inRange(t)) lines.push({ time: t as UTCTimestamp, label, color: def.color });
-          else considerFuture(key, t, key === "fomc" ? `${def.label} (Next)` : `${def.label} USD (Next)`, def.color);
+          const detail = key === "fomc" ? interpretFomc(findFomcEvent(eventPool, iso)) ?? fomcFredFallback(iso)
+            : key === "cpi" ? (({ headline, core }) => interpretCpi(headline, core))(findCpiEvents(eventPool, iso)) ?? cpiFredFallback(iso)
+            : (({ nfp, unemployment, earnings }) => interpretJobs(nfp, unemployment, earnings))(findJobsEvents(eventPool, iso)) ?? jobsFredFallback(iso);
+          if (inRange(t)) lines.push({ time: t as UTCTimestamp, label, color: def.color, detail: detail ?? undefined });
         }
       };
       addStatic("fomc", FOMC_STATEMENT_DATES);
       addStatic("cpi",  CPI_RELEASE_DATES);
       addStatic("jobs", JOBS_RELEASE_DATES);
+
+      // SEP / Dot Plot — its own independent marker on whichever FOMC
+      // meeting dates actually released one, gated only on its own toggle
+      // (previously nested inside the "fomc" block above, which meant it
+      // silently did nothing whenever the base FOMC toggle was off — SEP is
+      // listed as its own independent item in the settings popout, so it
+      // needs to behave like one).
+      if (newsCategoryVisibility.sep && currencies.includes("USD")) {
+        const sepDef = NEWS_CATEGORY_DEFS.find(d => d.key === "sep")!;
+        for (const iso of FOMC_STATEMENT_DATES) {
+          const t = Math.floor(new Date(iso).getTime() / 1000);
+          if (Number.isNaN(t) || !inRange(t)) continue;
+          const sep = interpretSep(iso);
+          if (!sep) continue; // this particular meeting had no SEP release
+          lines.push({ time: t as UTCTimestamp, label: sepDef.label, color: sepDef.color, detail: { title: sepDef.label, ...sep } });
+        }
+      }
+
+      // Fed Chair Press Conference — every FOMC meeting has held one since
+      // Feb 2019 (which covers this entire static table), so it's drawn
+      // from FOMC_STATEMENT_DATES directly rather than depending on the
+      // live feed ever having its own distinct "FOMC Press Conference"
+      // entry, which — like the base rate decision — only exists in the
+      // feed's current ~1-week window and is otherwise unrecoverable. A
+      // press conference isn't its own data release (no actual/forecast of
+      // its own), it's a live Q&A about that same rate decision, so its
+      // popup reuses the real FOMC decision detail (via the same
+      // interpretFomc/fomcFredFallback pair "fomc" itself uses) instead of
+      // showing nothing.
+      if (newsCategoryVisibility.fomc_presser && currencies.includes("USD")) {
+        const presserDef = NEWS_CATEGORY_DEFS.find(d => d.key === "fomc_presser")!;
+        for (const iso of FOMC_STATEMENT_DATES) {
+          const t = Math.floor(new Date(iso).getTime() / 1000) + 30 * 60; // presser starts ~30 min after the statement
+          if (Number.isNaN(t) || !inRange(t)) continue;
+          const decision = interpretFomc(findFomcEvent(eventPool, iso)) ?? fomcFredFallback(iso);
+          const detail: EventDetail = decision
+            ? { title: presserDef.label, headline: decision.headline, tag: decision.tag, direction: decision.direction }
+            : { title: presserDef.label, headline: fieldDetail("Fed Funds Rate", undefined) };
+          lines.push({ time: t as UTCTimestamp, label: presserDef.label, color: presserDef.color, detail });
+        }
+      }
+
+      // FOMC Minutes — 3 weeks after the meeting they're the minutes OF, on
+      // its own real schedule (see FOMC_MINUTES_DATES above), not the live
+      // feed's own current-week window. Same reasoning as the press
+      // conference: minutes aren't a numeric data release, they're a
+      // (delayed) account of that same meeting's decision, so the popup
+      // reuses that meeting's real decision detail via meetingDate rather
+      // than showing nothing.
+      if (newsCategoryVisibility.fomc_minutes && currencies.includes("USD")) {
+        const minutesDef = NEWS_CATEGORY_DEFS.find(d => d.key === "fomc_minutes")!;
+        for (const { meetingDate, minutesDate } of FOMC_MINUTES_DATES) {
+          const t = Math.floor(new Date(minutesDate).getTime() / 1000);
+          if (Number.isNaN(t) || !inRange(t)) continue;
+          const decision = interpretFomc(findFomcEvent(eventPool, meetingDate)) ?? fomcFredFallback(meetingDate);
+          const detail: EventDetail = decision
+            ? { title: minutesDef.label, headline: decision.headline, tag: decision.tag, direction: decision.direction }
+            : { title: minutesDef.label, headline: fieldDetail("Fed Funds Rate", undefined) };
+          lines.push({ time: t as UTCTimestamp, label: minutesDef.label, color: minutesDef.color, detail });
+        }
+      }
 
       // Live feed still covers the non-USD leg (e.g. EUR CPI on a EUR/USD
       // chart) — just the current week, same limitation as the Economic
@@ -2214,23 +3853,192 @@ function PriceHistoryChart({ rows, pair, chartTf, setChartTf, livePrice, expandW
         if (!isNewsCurrencyVisible(def.key, country)) continue;
         const t = Math.floor(new Date(ev.date).getTime() / 1000);
         if (Number.isNaN(t)) continue;
-        if (inRange(t)) lines.push({ time: t as UTCTimestamp, label: `${ev.title} (${ev.country})`, color: def.color });
-        else considerFuture(def.key, t, `${ev.title} (${ev.country}, Next)`, def.color);
+        const detail = interpretByCategory(def.key, ev);
+        if (inRange(t)) lines.push({ time: t as UTCTimestamp, label: `${ev.title} (${ev.country})`, color: def.color, detail: detail ?? undefined });
       }
 
-      // Project exactly one upcoming date per category past the last bar,
-      // using the current timeframe's own bar spacing — approximate (a
-      // future date has no real candle to align to yet, unlike history,
-      // where every line sits on an actual bar), and capped so a distant
-      // date on a fine timeframe (e.g. next FOMC, weeks out, on a 1-minute
-      // chart) doesn't demand an absurd amount of empty chart space.
-      const MAX_FUTURE_BARS = 60;
-      if (barSeconds > 0) {
-        for (const next of Object.values(nextFuture)) {
-          if (!next) continue;
-          const bars = Math.min(MAX_FUTURE_BARS, Math.max(1, Math.round((next.time - lastRowT) / barSeconds)));
-          futureBarsNeeded = Math.max(futureBarsNeeded, bars);
-          lines.push({ time: null, futureIndex: lastIndex + bars, label: next.label, color: next.color });
+      // Treasury auctions — own pipeline (TreasuryDirect, not the
+      // ForexFactory calendar feed), always USD, so gated the same way as
+      // FOMC/CPI/Jobs on the charted pair actually involving USD.
+      const auctionDef = NEWS_CATEGORY_DEFS.find(d => d.key === "auction")!;
+      if (newsCategoryVisibility.auction && currencies.includes("USD")) {
+        for (const auction of treasuryAuctions) {
+          const term = auctionTermLabel(auction.securityTerm);
+          if (!term) continue;
+          const t = auctionTimestamp(auction);
+          if (t === null || !inRange(t)) continue;
+          const detail = interpretAuction(auction, treasuryAuctions);
+          lines.push({ time: t as UTCTimestamp, label: `${term} Auction`, color: auctionDef.color, detail: detail ?? undefined });
+        }
+      }
+
+      // Fed Chair Press Conference, FOMC Minutes — pool-driven, no static
+      // date table (see SIMPLE_CATEGORY_DEFS above). Any currency relevant
+      // to the charted pair, same as CPI/Jobs' non-USD leg — a GBP/USD
+      // chart should see UK Retail Sales/GDP/PPI too, not just the US
+      // release (which is why USD Retail Sales/Jobless Claims/GDP/PPI alone
+      // are excluded here — they have their own static-schedule blocks
+      // below, same reasoning as ISM, except these four also have real
+      // historical values to backfill). PCE/JOLTS are excluded outright,
+      // same as ISM — both are US-only with no non-USD leg to still serve
+      // here.
+      for (const ev of dedupedEventPool) {
+        const country = ev.country?.toUpperCase();
+        if (!country || !currencies.includes(country)) continue;
+        const titleLower = ev.title.toLowerCase();
+        const scDef = SIMPLE_CATEGORY_DEFS.find(d =>
+          d.key !== "ism" && d.key !== "pce" && d.key !== "jolts"
+          && !(d.key === "retail_sales" && country === "USD")
+          && !(d.key === "jobless_claims" && country === "USD")
+          && !(d.key === "gdp" && country === "USD")
+          && !(d.key === "ppi" && country === "USD")
+          && d.match(titleLower)
+        );
+        if (!scDef || !newsCategoryVisibility[scDef.key]) continue;
+        if (!isNewsCurrencyVisible(scDef.key, country)) continue;
+        const t = Math.floor(new Date(ev.date).getTime() / 1000);
+        if (Number.isNaN(t) || !inRange(t)) continue;
+        const catDef = NEWS_CATEGORY_DEFS.find(d => d.key === scDef.key)!;
+        lines.push({ time: t as UTCTimestamp, label: `${ev.title} (${country})`, color: catDef.color, detail: interpretSimple(ev, scDef) });
+      }
+
+      // ISM Manufacturing/Services PMI — drawn from the real release
+      // schedule (ISM_MANUFACTURING_DATES/ISM_SERVICES_DATES above) rather
+      // than only the pool scan above, since there's no free source for
+      // historical index values to backfill (ISM's data is commercially
+      // licensed, and FRED's old free mirror is discontinued) — a
+      // pool-only match would only ever plot in the rare week the live
+      // feed happens to carry one, exactly the problem CPI/Jobs/FOMC had
+      // before their real backfills. The schedule itself is real, so it
+      // plots reliably; the popup shows real actual/forecast whenever a
+      // live/persisted match exists (via the same USD event pool) and
+      // "unavailable" otherwise — never a fabricated index value.
+      if (newsCategoryVisibility.ism && currencies.includes("USD")) {
+        const ismCatDef = NEWS_CATEGORY_DEFS.find(d => d.key === "ism")!;
+        const ismSimpleDef = SIMPLE_CATEGORY_DEFS.find(d => d.key === "ism")!;
+        const drawIsm = (title: string, dates: string[]) => {
+          for (const iso of dates) {
+            const t = Math.floor(new Date(iso).getTime() / 1000);
+            if (Number.isNaN(t) || !inRange(t)) continue;
+            const day = iso.slice(0, 10);
+            const ev = dedupedEventPool.find(e => e.country?.toUpperCase() === "USD" && e.date.slice(0, 10) === day && e.title.toLowerCase() === title.toLowerCase());
+            const detail: EventDetail = ev ? interpretSimple(ev, ismSimpleDef) : { title, headline: fieldDetail(title, undefined) };
+            lines.push({ time: t as UTCTimestamp, label: title, color: ismCatDef.color, detail });
+          }
+        };
+        drawIsm("ISM Manufacturing PMI", ISM_MANUFACTURING_DATES);
+        drawIsm("ISM Services PMI", ISM_SERVICES_DATES);
+      }
+
+      // Retail Sales (USD leg) — drawn from the real Census Bureau release
+      // schedule (RETAIL_SALES_DATES above), with real FRED-backed
+      // actual/previous (RETAIL_SALES_FRED_ACTUALS) as a fallback whenever
+      // there's no live/persisted match — same reasoning and pattern as
+      // CPI/Jobs/FOMC, unlike ISM which only has the schedule.
+      if (newsCategoryVisibility.retail_sales && currencies.includes("USD")) {
+        const rsCatDef = NEWS_CATEGORY_DEFS.find(d => d.key === "retail_sales")!;
+        for (const iso of RETAIL_SALES_DATES) {
+          const t = Math.floor(new Date(iso).getTime() / 1000);
+          if (Number.isNaN(t) || !inRange(t)) continue;
+          const day = iso.slice(0, 10);
+          const headline = dedupedEventPool.find(e => e.country?.toUpperCase() === "USD" && e.date.slice(0, 10) === day && e.title.toLowerCase() === "retail sales m/m");
+          const core = dedupedEventPool.find(e => e.country?.toUpperCase() === "USD" && e.date.slice(0, 10) === day && e.title.toLowerCase() === "core retail sales m/m");
+          const detail = interpretRetailSales(headline, core) ?? retailSalesFredFallback(iso);
+          lines.push({ time: t as UTCTimestamp, label: rsCatDef.label, color: rsCatDef.color, detail: detail ?? undefined });
+        }
+      }
+
+      // Initial Jobless Claims (USD leg) — drawn from the real weekly DOL
+      // release schedule (JOBLESS_CLAIMS_FRED_ACTUALS' own dates double as
+      // the schedule, since that table has full real coverage with no
+      // gaps), with real FRED-backed actual/previous as a fallback whenever
+      // there's no live/persisted match — same pattern as CPI/Jobs/FOMC/
+      // Retail Sales.
+      if (newsCategoryVisibility.jobless_claims && currencies.includes("USD")) {
+        const jcCatDef = NEWS_CATEGORY_DEFS.find(d => d.key === "jobless_claims")!;
+        const jcSimpleDef = SIMPLE_CATEGORY_DEFS.find(d => d.key === "jobless_claims")!;
+        for (const row of JOBLESS_CLAIMS_FRED_ACTUALS) {
+          const iso = row.date;
+          const t = Math.floor(new Date(iso).getTime() / 1000);
+          if (Number.isNaN(t) || !inRange(t)) continue;
+          const day = iso.slice(0, 10);
+          const ev = dedupedEventPool.find(e => e.country?.toUpperCase() === "USD" && e.date.slice(0, 10) === day && e.title.toLowerCase() === "unemployment claims");
+          const detail = (ev ? interpretSimple(ev, jcSimpleDef) : null) ?? joblessClaimsFredFallback(iso);
+          lines.push({ time: t as UTCTimestamp, label: jcCatDef.label, color: jcCatDef.color, detail: detail ?? undefined });
+        }
+      }
+
+      // PCE / Core PCE (USD leg) — drawn from the real BEA release schedule
+      // (PCE_FRED_ACTUALS' own dates double as the schedule, same as
+      // Jobless Claims), with real FRED-backed actual/previous as a
+      // fallback whenever there's no live/persisted match — same pattern
+      // as CPI/Jobs/FOMC/Retail Sales/Jobless Claims.
+      if (newsCategoryVisibility.pce && currencies.includes("USD")) {
+        const pceCatDef = NEWS_CATEGORY_DEFS.find(d => d.key === "pce")!;
+        for (const row of PCE_FRED_ACTUALS) {
+          const iso = row.date;
+          const t = Math.floor(new Date(iso).getTime() / 1000);
+          if (Number.isNaN(t) || !inRange(t)) continue;
+          const day = iso.slice(0, 10);
+          const headline = dedupedEventPool.find(e => e.country?.toUpperCase() === "USD" && e.date.slice(0, 10) === day && e.title.toLowerCase() === "pce price index m/m");
+          const core = dedupedEventPool.find(e => e.country?.toUpperCase() === "USD" && e.date.slice(0, 10) === day && e.title.toLowerCase() === "core pce price index m/m");
+          const detail = interpretPce(headline, core) ?? pceFredFallback(iso);
+          lines.push({ time: t as UTCTimestamp, label: pceCatDef.label, color: pceCatDef.color, detail: detail ?? undefined });
+        }
+      }
+
+      // GDP (USD leg) — drawn from the real BEA release schedule
+      // (GDP_FRED_ACTUALS' own dates), with real FRED-backed actual/
+      // previous as a fallback whenever there's no live/persisted match —
+      // same pattern as CPI/Jobs/FOMC/Retail Sales/Jobless Claims/PCE.
+      if (newsCategoryVisibility.gdp && currencies.includes("USD")) {
+        const gdpCatDef = NEWS_CATEGORY_DEFS.find(d => d.key === "gdp")!;
+        const gdpSimpleDef = SIMPLE_CATEGORY_DEFS.find(d => d.key === "gdp")!;
+        for (const row of GDP_FRED_ACTUALS) {
+          const iso = row.date;
+          const t = Math.floor(new Date(iso).getTime() / 1000);
+          if (Number.isNaN(t) || !inRange(t)) continue;
+          const day = iso.slice(0, 10);
+          const ev = dedupedEventPool.find(e => e.country?.toUpperCase() === "USD" && e.date.slice(0, 10) === day && e.title.toLowerCase().includes("gdp") && e.title.toLowerCase().includes("q/q") && !e.title.toLowerCase().includes("price index"));
+          const detail = (ev ? interpretSimple(ev, gdpSimpleDef) : null) ?? gdpFredFallback(iso);
+          lines.push({ time: t as UTCTimestamp, label: gdpCatDef.label, color: gdpCatDef.color, detail: detail ?? undefined });
+        }
+      }
+
+      // JOLTS Job Openings (USD leg) — drawn from the real BLS release
+      // schedule (JOLTS_FRED_ACTUALS' own dates), with real vintage-exact
+      // actual/previous as a fallback whenever there's no live/persisted
+      // match — same pattern as CPI/Jobs/FOMC/Retail Sales/Jobless Claims/
+      // PCE/GDP.
+      if (newsCategoryVisibility.jolts && currencies.includes("USD")) {
+        const joltsCatDef = NEWS_CATEGORY_DEFS.find(d => d.key === "jolts")!;
+        const joltsSimpleDef = SIMPLE_CATEGORY_DEFS.find(d => d.key === "jolts")!;
+        for (const row of JOLTS_FRED_ACTUALS) {
+          const iso = row.date;
+          const t = Math.floor(new Date(iso).getTime() / 1000);
+          if (Number.isNaN(t) || !inRange(t)) continue;
+          const day = iso.slice(0, 10);
+          const ev = dedupedEventPool.find(e => e.country?.toUpperCase() === "USD" && e.date.slice(0, 10) === day && e.title.toLowerCase().includes("jolts"));
+          const detail = (ev ? interpretSimple(ev, joltsSimpleDef) : null) ?? joltsFredFallback(iso);
+          lines.push({ time: t as UTCTimestamp, label: joltsCatDef.label, color: joltsCatDef.color, detail: detail ?? undefined });
+        }
+      }
+
+      // PPI / Core PPI (USD leg) — drawn from the real BLS release schedule
+      // (PPI_FRED_ACTUALS' own dates), with real vintage-exact
+      // actual/previous as a fallback whenever there's no live/persisted
+      // match — same pattern as everything else above.
+      if (newsCategoryVisibility.ppi && currencies.includes("USD")) {
+        const ppiCatDef = NEWS_CATEGORY_DEFS.find(d => d.key === "ppi")!;
+        for (const row of PPI_FRED_ACTUALS) {
+          const iso = row.date;
+          const t = Math.floor(new Date(iso).getTime() / 1000);
+          if (Number.isNaN(t) || !inRange(t)) continue;
+          const day = iso.slice(0, 10);
+          const headline = dedupedEventPool.find(e => e.country?.toUpperCase() === "USD" && e.date.slice(0, 10) === day && e.title.toLowerCase() === "ppi m/m");
+          const core = dedupedEventPool.find(e => e.country?.toUpperCase() === "USD" && e.date.slice(0, 10) === day && e.title.toLowerCase() === "core ppi m/m");
+          const detail = interpretPpi(headline, core) ?? ppiFredFallback(iso);
+          lines.push({ time: t as UTCTimestamp, label: ppiCatDef.label, color: ppiCatDef.color, detail: detail ?? undefined });
         }
       }
     }
@@ -2239,18 +4047,8 @@ function PriceHistoryChart({ rows, pair, chartTf, setChartTf, livePrice, expandW
       newsLinePrimRef.current._barTimes = tfRows.map(r => Math.floor(new Date(r.timestamp).getTime() / 1000));
       newsLinePrimRef.current._applyBarCorrection = chartTf !== "1D" && chartTf !== "1W";
     }
-    // Give the projected future line(s) room to actually be visible without
-    // the user having to scroll — reset to 0 (the chart's normal framing)
-    // once none are needed, rather than leaving stale extra margin behind.
-    // Guarded on the value actually changing so this doesn't re-nudge the
-    // user's own pan/zoom on every ~10s candle poll when the upcoming
-    // event (and therefore the offset it needs) hasn't changed.
-    const chartTs = chartRef.current?.timeScale();
-    if (chartTs && chartTs.options().rightOffset !== futureBarsNeeded) {
-      chartTs.applyOptions({ rightOffset: futureBarsNeeded });
-    }
     chartRef.current?.applyOptions({});
-  }, [showNews, newsCategoryVisibility, newsCurrencyVisibility, isNewsCurrencyVisible, calendarEvents, pair, tfRows, chartTf]);
+  }, [showNews, newsCategoryVisibility, newsCurrencyVisibility, isNewsCurrencyVisible, calendarEvents, storedEconomicEvents, treasuryAuctions, pair, tfRows, chartTf]);
 
   // Open positions for the currently viewed instrument — polled every 30s
   // (trades are logged manually, not high-frequency, so this is just to
@@ -2354,17 +4152,19 @@ function PriceHistoryChart({ rows, pair, chartTf, setChartTf, livePrice, expandW
 
     let freshBoxes: ZoneBox[] = [];
     let tappedBoxes: ZoneBox[] = [];
-    if (showDailyZones) { const r = processTf("D",  dailyZonesAll, dailyZoneCandles); freshBoxes = freshBoxes.concat(r.fresh); tappedBoxes = tappedBoxes.concat(r.tapped); }
-    if (show4HZones)    { const r = processTf("4H", h4ZonesAll,    h4ZoneCandles);    freshBoxes = freshBoxes.concat(r.fresh); tappedBoxes = tappedBoxes.concat(r.tapped); }
-    if (show1HZones)    { const r = processTf("1H", h1ZonesAll,    h1ZoneCandles);    freshBoxes = freshBoxes.concat(r.fresh); tappedBoxes = tappedBoxes.concat(r.tapped); }
+    if (showDailyZones) { const r = processTf("D",   dailyZonesAll, dailyZoneCandles); freshBoxes = freshBoxes.concat(r.fresh); tappedBoxes = tappedBoxes.concat(r.tapped); }
+    if (show4HZones)    { const r = processTf("4H",  h4ZonesAll,    h4ZoneCandles);    freshBoxes = freshBoxes.concat(r.fresh); tappedBoxes = tappedBoxes.concat(r.tapped); }
+    if (show1HZones)    { const r = processTf("1H",  h1ZonesAll,    h1ZoneCandles);    freshBoxes = freshBoxes.concat(r.fresh); tappedBoxes = tappedBoxes.concat(r.tapped); }
+    if (show15MZones)   { const r = processTf("15M", m15ZonesAll,   m15ZoneCandles);   freshBoxes = freshBoxes.concat(r.fresh); tappedBoxes = tappedBoxes.concat(r.tapped); }
+    if (show5MZones)    { const r = processTf("5M",  m5ZonesAll,    m5ZoneCandles);    freshBoxes = freshBoxes.concat(r.fresh); tappedBoxes = tappedBoxes.concat(r.tapped); }
 
     const boxes = showTappedZone ? [...freshBoxes, ...tappedBoxes] : freshBoxes;
     zoneBoxesRef.current = boxes;
     if (zonePrimRef.current) zonePrimRef.current._zones = boxes;
     chartRef.current?.applyOptions({});
-  }, [showDailyZones, show4HZones, show1HZones,
-      dailyZoneCandles, h4ZoneCandles, h1ZoneCandles,
-      dailyZonesAll, h4ZonesAll, h1ZonesAll, tfRows, livePrice, showTappedZone, tapFadeCandles]);
+  }, [showDailyZones, show4HZones, show1HZones, show15MZones, show5MZones,
+      dailyZoneCandles, h4ZoneCandles, h1ZoneCandles, m15ZoneCandles, m5ZoneCandles,
+      dailyZonesAll, h4ZonesAll, h1ZonesAll, m15ZonesAll, m5ZonesAll, tfRows, livePrice, showTappedZone, tapFadeCandles]);
 
   // ── Indicator series helpers ────────────────────────────────────────────────
 
@@ -2374,13 +4174,24 @@ function PriceHistoryChart({ rows, pair, chartTf, setChartTf, livePrice, expandW
       existing.forEach((s: any) => { try { chartRef.current!.removeSeries(s); } catch (_) {} });
     }
     delete indSeriesRef.current[key];
+    if (key === "bb") bbFillPrimRef.current = null;
+    if (key === "ichi") ichiCloudPrimRef.current = null;
   }, []);
 
+  // On the 10s live-candle poll tfRows gets a new array reference with the
+  // same pair/tf, and this used to unconditionally destroy + recreate every
+  // active indicator's chart series (removeIndSeries + addSeries) on top of
+  // recomputing them — needless series churn on every tick since only the
+  // data changes, not the indicator set or the instrument's price precision.
+  // Reusing the existing series via setData() when one is already present
+  // for this key (only true on a same-pair/tf live tick — a genuine
+  // pair/tf change clears indSeriesRef via removeIndSeries first, see the
+  // chartTf/pair effect above) keeps the chart-object churn to new-load and
+  // toggle-on/off only.
   const addIndSeries = useCallback((key: IndKey, candles: RawCandleTf[]) => {
     if (key === "reversal" || key === "session8am" || key === "pivots") return; // driven by their own effects, not a line series
     const chart = chartRef.current;
     if (!chart || candles.length === 0) return;
-    removeIndSeries(key);
 
     const times  = candles.map(r => Math.floor(new Date(r.timestamp).getTime() / 1000) as UTCTimestamp);
     const closes = candles.map(r => r.close);
@@ -2397,6 +4208,16 @@ function PriceHistoryChart({ rows, pair, chartTf, setChartTf, livePrice, expandW
       const { upper, middle, lower } = computeBB(closes);
       const upperData = toData(upper);
       const lowerData = toData(lower);
+      const middleData = toData(middle);
+
+      const existing = indSeriesRef.current.bb;
+      if (existing && existing.length === 3 && bbFillPrimRef.current) {
+        existing[0].setData(upperData); existing[1].setData(middleData); existing[2].setData(lowerData);
+        bbFillPrimRef.current._upper = upperData;
+        bbFillPrimRef.current._lower = lowerData;
+        return;
+      }
+      removeIndSeries(key);
 
       // Border lines
       const mk = (color: string, style: LineStyle) => {
@@ -2406,11 +4227,12 @@ function PriceHistoryChart({ rows, pair, chartTf, setChartTf, livePrice, expandW
       const uS = mk("rgba(100,181,246,0.85)", LineStyle.Solid);
       const mS = mk("rgba(100,181,246,0.5)",  LineStyle.Dashed);
       const lS = mk("rgba(100,181,246,0.85)", LineStyle.Solid);
-      uS.setData(upperData); mS.setData(toData(middle)); lS.setData(lowerData);
+      uS.setData(upperData); mS.setData(middleData); lS.setData(lowerData);
 
       // Light-blue fill between upper and lower bands — drawn behind candles
       const fillPrim = new BBFillPrimitive(upperData, lowerData);
       (uS as any).attachPrimitive(fillPrim);
+      bbFillPrimRef.current = fillPrim;
 
       indSeriesRef.current.bb = [uS, mS, lS];
 
@@ -2425,6 +4247,36 @@ function PriceHistoryChart({ rows, pair, chartTf, setChartTf, livePrice, expandW
          - Math.floor(new Date(candles[n - 2].timestamp).getTime() / 1000))
         : 86400;
 
+      // Senkou A & B — shifted +26 bars forward (project future cloud past last bar)
+      const spanAData: { time: UTCTimestamp; value: number }[] = [];
+      const spanBData: { time: UTCTimestamp; value: number }[] = [];
+      for (let i = 0; i < n; i++) {
+        if (spanA[i] === null || spanB[i] === null) continue;
+        const t = (i + OFFSET < n
+          ? times[i + OFFSET]
+          : (times[n - 1] + (i + OFFSET - n + 1) * candleDur)) as UTCTimestamp;
+        spanAData.push({ time: t, value: spanA[i]! });
+        spanBData.push({ time: t, value: spanB[i]! });
+      }
+      // Chikou — close shifted -26 bars backward
+      const chikouData: { time: UTCTimestamp; value: number }[] = [];
+      for (let i = OFFSET; i < n; i++)
+        chikouData.push({ time: times[i - OFFSET], value: closes[i] });
+
+      const existing = indSeriesRef.current.ichi;
+      if (existing && existing.length === 5 && ichiCloudPrimRef.current) {
+        const [tenkanS, kijunS, spanAS, spanBS, chikouS] = existing;
+        tenkanS.setData(toData(tenkan));
+        kijunS.setData(toData(kijun));
+        spanAS.setData(spanAData);
+        spanBS.setData(spanBData);
+        chikouS.setData(chikouData);
+        ichiCloudPrimRef.current._spanA = spanAData;
+        ichiCloudPrimRef.current._spanB = spanBData;
+        return;
+      }
+      removeIndSeries(key);
+
       const mkLine = (color: string, width: 1 | 2, style: LineStyle) => {
         const s = chart.addSeries(LineSeries, { color, lineWidth: width, lineStyle: style });
         s.applyOptions(indOpts);
@@ -2437,39 +4289,60 @@ function PriceHistoryChart({ rows, pair, chartTf, setChartTf, livePrice, expandW
       tenkanS.setData(toData(tenkan));
       kijunS.setData(toData(kijun));
 
-      // Senkou A & B — shifted +26 bars forward (project future cloud past last bar)
-      const spanAData: { time: UTCTimestamp; value: number }[] = [];
-      const spanBData: { time: UTCTimestamp; value: number }[] = [];
-      for (let i = 0; i < n; i++) {
-        if (spanA[i] === null || spanB[i] === null) continue;
-        const t = (i + OFFSET < n
-          ? times[i + OFFSET]
-          : (times[n - 1] + (i + OFFSET - n + 1) * candleDur)) as UTCTimestamp;
-        spanAData.push({ time: t, value: spanA[i]! });
-        spanBData.push({ time: t, value: spanB[i]! });
-      }
       const spanAS = mkLine("#60a5fa", 1, LineStyle.Dashed);
       const spanBS = mkLine("#a78bfa", 1, LineStyle.Dashed);
       spanAS.setData(spanAData);
       spanBS.setData(spanBData);
       const cloudPrim = new IchiCloudPrimitive(spanAData, spanBData);
       (spanAS as any).attachPrimitive(cloudPrim);
+      ichiCloudPrimRef.current = cloudPrim;
 
-      // Chikou — close shifted -26 bars backward
-      const chikouData: { time: UTCTimestamp; value: number }[] = [];
-      for (let i = OFFSET; i < n; i++)
-        chikouData.push({ time: times[i - OFFSET], value: closes[i] });
       const chikouS = mkLine("#a78bfa", 1, LineStyle.Dashed);
       chikouS.setData(chikouData);
 
       indSeriesRef.current.ichi = [tenkanS, kijunS, spanAS, spanBS, chikouS];
 
+    } else if (key === "volume") {
+      const { up, down } = VOLUME_COLOR_SCHEMES[candleColorSchemeRef.current];
+      const volData = candles.map((r, i) => ({
+        time: times[i], value: r.volume,
+        color: r.close >= r.open ? up : down,
+      }));
+
+      const existing = indSeriesRef.current.volume;
+      if (existing && existing.length === 1) {
+        existing[0].setData(volData);
+        return;
+      }
+      removeIndSeries(key);
+
+      const s = chart.addSeries(HistogramSeries, {
+        priceFormat: { type: "volume" },
+        priceScaleId: "volume",
+        lastValueVisible: false, priceLineVisible: false,
+      });
+      chart.priceScale("volume").applyOptions({
+        scaleMargins: { top: 0.82, bottom: 0 }, // pinned to the bottom ~18% of the pane
+        visible: false, // own axis labels would just clutter the price scale
+      });
+      s.setData(volData);
+      indSeriesRef.current.volume = [s];
+
     } else {
       const period = ({ ema9: 9, ema20: 20, ema50: 50, ema200: 200 } as Record<string, number>)[key]!;
-      const color  = IND_DEFS.find(d => d.key === key)!.color;
+      const emaData = toData(computeEMA(closes, period));
+
+      const existing = indSeriesRef.current[key];
+      if (existing && existing.length === 1) {
+        existing[0].setData(emaData);
+        return;
+      }
+      removeIndSeries(key);
+
+      const color = IND_DEFS.find(d => d.key === key)!.color;
       const s = chart.addSeries(LineSeries, { color, lineWidth: 1 });
       s.applyOptions(indOpts);
-      s.setData(toData(computeEMA(closes, period)));
+      s.setData(emaData);
       indSeriesRef.current[key] = [s];
     }
   }, [removeIndSeries]);
@@ -2564,8 +4437,10 @@ function PriceHistoryChart({ rows, pair, chartTf, setChartTf, livePrice, expandW
   // changed so the yellow highlights stay in sync.
   useEffect(() => {
     if (activeInds.has("reversal") && tfRows.length > 0) applyData(tfRows, viewModeRef.current, false);
-  }, [showDailyZones, show4HZones, show1HZones, dailyZonesAll, h4ZonesAll, h1ZonesAll,
-      dailyZoneCandles, h4ZoneCandles, h1ZoneCandles, livePrice, activeInds, tfRows, applyData,
+  }, [showDailyZones, show4HZones, show1HZones, show15MZones, show5MZones,
+      dailyZonesAll, h4ZonesAll, h1ZonesAll, m15ZonesAll, m5ZonesAll,
+      dailyZoneCandles, h4ZoneCandles, h1ZoneCandles, m15ZoneCandles, m5ZoneCandles,
+      livePrice, activeInds, tfRows, applyData,
       showEightAmBox, eightAmBoxes,
       showWeeklyTrend, showDailyTrend, show4HTrend, show1HTrend, show15MTrend,
       weeklyTrendCandles, dailyTrendCandles, h4TrendCandles, h1TrendCandles, m15TrendCandles, trendCounts,
@@ -2581,7 +4456,7 @@ function PriceHistoryChart({ rows, pair, chartTf, setChartTf, livePrice, expandW
   }, [addIndSeries, removeIndSeries, applyData]);
 
   const createSeries = useCallback((chart: IChartApi, mode: string) => {
-    if (seriesRef.current) { chart.removeSeries(seriesRef.current); seriesRef.current = null; priceLineRef.current = null; zonePrimRef.current = null; trendPrimRef.current = null; eightAmBoxPrimRef.current = null; marketSessionPrimRef.current = null; reversalMarkerPrimRef.current = null; pivotPrimRef.current = null; newsLinePrimRef.current = null; }
+    if (seriesRef.current) { chart.removeSeries(seriesRef.current); seriesRef.current = null; priceLineRef.current = null; zonePrimRef.current = null; trendPrimRef.current = null; eightAmBoxPrimRef.current = null; marketSessionPrimRef.current = null; reversalMarkerPrimRef.current = null; pivotPrimRef.current = null; newsLinePrimRef.current = null; watermarkPrimRef.current = null; }
     if (mode === "candles") {
       const { up, down } = CANDLE_COLOR_SCHEMES[candleColorSchemeRef.current];
       const s = chart.addSeries(CandlestickSeries, {
@@ -2622,11 +4497,17 @@ function PriceHistoryChart({ rows, pair, chartTf, setChartTf, livePrice, expandW
     const newsLinePrim = new NewsLinePrimitive([]);
     (seriesRef.current as any).attachPrimitive(newsLinePrim);
     newsLinePrimRef.current = newsLinePrim;
+    // Ghosted instrument watermark — Quad View tiles only.
+    if (compact) {
+      const watermarkPrim = new WatermarkPrimitive(pairRef.current);
+      (seriesRef.current as any).attachPrimitive(watermarkPrim);
+      watermarkPrimRef.current = watermarkPrim;
+    }
     // False: this fires on mount (no data yet, so a no-op) and on viewMode
     // toggle (candles/line) — the series is recreated, but the user's
     // existing pan/zoom on this same instrument's data shouldn't reset.
     if (tfRowsRef.current.length > 0) applyData(tfRowsRef.current, mode, false);
-  }, [applyData]);
+  }, [applyData, compact]);
 
   // Live color-scheme swap for the already-attached candlestick series —
   // no need to tear down/recreate the series (that would reset zoom/pan)
@@ -2648,6 +4529,17 @@ function PriceHistoryChart({ rows, pair, chartTf, setChartTf, livePrice, expandW
         const isUp = rows.length > 1 ? last.close >= rows[rows.length - 2].close : true;
         priceLineRef.current.applyOptions({ color: isUp ? up : down });
       }
+    }
+    // Volume bars are colored per-point (not via series-level up/down
+    // options like candlesticks), so a scheme change needs a re-setData.
+    const volSeries = indSeriesRef.current.volume?.[0];
+    if (volSeries) {
+      const { up: volUp, down: volDown } = VOLUME_COLOR_SCHEMES[candleColorScheme];
+      const rows = tfRowsRef.current;
+      volSeries.setData(rows.map(r => ({
+        time: Math.floor(new Date(r.timestamp).getTime() / 1000) as UTCTimestamp,
+        value: r.volume, color: r.close >= r.open ? volUp : volDown,
+      })));
     }
   }, [candleColorScheme, viewMode]);
 
@@ -2688,9 +4580,28 @@ function PriceHistoryChart({ rows, pair, chartTf, setChartTf, livePrice, expandW
       prevWidth = w;
     });
     ro.observe(containerRef.current);
+
+    // News marker hover/click detail — hit-tests the mouse's chart-pane x
+    // against NewsLinePrimitive._hitTest (CSS-pixel positions the renderer
+    // records on every draw). Reads newsLinePrimRef.current dynamically
+    // rather than closing over one primitive instance, since the viewMode
+    // effect below can recreate the series (and its attached primitive).
+    const onCrosshairMove = (param: any) => {
+      const hitTest = newsLinePrimRef.current?._hitTest ?? [];
+      const x = param?.point?.x;
+      if (x === undefined || hitTest.length === 0) { setNewsHover(null); return; }
+      const hit = hitTest.find(h => Math.abs(h.xCss - x) <= 4);
+      if (!hit) { setNewsHover(null); return; }
+      const rect = containerRef.current?.getBoundingClientRect();
+      if (!rect) { setNewsHover(null); return; }
+      setNewsHover({ x: rect.left + x, y: rect.top + (param.point.y ?? 0), label: hit.label, color: hit.color, detail: hit.detail });
+    };
+    chart.subscribeCrosshairMove(onCrosshairMove);
+
     return () => {
+      chart.unsubscribeCrosshairMove(onCrosshairMove);
       ro.disconnect(); chart.remove();
-      chartRef.current = null; seriesRef.current = null; indSeriesRef.current = {}; zonePrimRef.current = null; trendPrimRef.current = null; eightAmBoxPrimRef.current = null; marketSessionPrimRef.current = null; newsLinePrimRef.current = null; openTradePriceLinesRef.current = [];
+      chartRef.current = null; seriesRef.current = null; indSeriesRef.current = {}; bbFillPrimRef.current = null; ichiCloudPrimRef.current = null; zonePrimRef.current = null; trendPrimRef.current = null; eightAmBoxPrimRef.current = null; marketSessionPrimRef.current = null; newsLinePrimRef.current = null; watermarkPrimRef.current = null; openTradePriceLinesRef.current = [];
     };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -2810,6 +4721,18 @@ function PriceHistoryChart({ rows, pair, chartTf, setChartTf, livePrice, expandW
   }, [showPivotSettings]);
 
   useEffect(() => {
+    if (!showOrbSettings) return;
+    const close = (e: MouseEvent) => {
+      const target = e.target as Node;
+      const insideButton  = orbBtnRef.current?.contains(target);
+      const insidePopover = orbSettingsPopoverRef.current?.contains(target);
+      if (!insideButton && !insidePopover) setShowOrbSettings(false);
+    };
+    document.addEventListener("mousedown", close);
+    return () => document.removeEventListener("mousedown", close);
+  }, [showOrbSettings]);
+
+  useEffect(() => {
     if (!showNewsSettings) return;
     const close = (e: MouseEvent) => {
       const target = e.target as Node;
@@ -2865,9 +4788,10 @@ function PriceHistoryChart({ rows, pair, chartTf, setChartTf, livePrice, expandW
     setSnapshotKind("entry");
     setSnapshotDataUrl(null);
     setShowSnapshotPicker(true);
-    if (captureRef.current) {
+    const target = snapshotTargetRef?.current ?? captureRef.current;
+    if (target) {
       try {
-        const dataUrl = await toPng(captureRef.current, { pixelRatio: 2, backgroundColor: "#0f1117" });
+        const dataUrl = await toPng(target, { pixelRatio: 2, backgroundColor: "#0f1117" });
         setSnapshotDataUrl(dataUrl);
       } catch (err) {
         console.error("[PriceHistoryChart] screenshot capture failed:", err);
@@ -2921,6 +4845,63 @@ function PriceHistoryChart({ rows, pair, chartTf, setChartTf, livePrice, expandW
   // the same activeInds Set, but shouldn't inflate this badge.
   const activeIndDefsCount = IND_DEFS.filter((d) => activeInds.has(d.key)).length;
   const anyActive = activeIndDefsCount > 0;
+
+  // Quad View lock — this tile is "remote-controlled" (and its toolbar
+  // greyed out) whenever it's a non-primary tile and the primary has locked.
+  const quadDisabled = compact && quadLocked && !showSnapshotAndExpand;
+
+  // Primary tile broadcasts its toolbar settings whenever any of them change
+  // while locked. Deliberately re-broadcasts on every relevant change rather
+  // than diffing — cheap (a handful of tiles, plain object), and guarantees
+  // followers can't drift out of sync.
+  useEffect(() => {
+    if (!compact || !quadLocked || !showSnapshotAndExpand) return;
+    quadSyncEvents.publish({
+      chartTf, activeInds: [...activeInds],
+      showDailyZones, show4HZones, show1HZones, show15MZones, show5MZones,
+      showWeeklyTrend, showDailyTrend, show4HTrend, show1HTrend, show15MTrend, show5MTrend, show1MTrend,
+      showOrbNY, showOrbTokyo, showOrbLondon, showOrb930,
+      showSessions, showNews, viewMode, candleColorScheme,
+    });
+  }, [compact, quadLocked, showSnapshotAndExpand, chartTf, activeInds,
+      showDailyZones, show4HZones, show1HZones, show15MZones, show5MZones,
+      showWeeklyTrend, showDailyTrend, show4HTrend, show1HTrend, show15MTrend, show5MTrend, show1MTrend,
+      showOrbNY, showOrbTokyo, showOrbLondon, showOrb930,
+      showSessions, showNews, viewMode, candleColorScheme]);
+
+  // Non-primary tiles apply whatever the primary broadcasts while locked.
+  // activeInds specifically needs toggleInd (not a plain setter) since it
+  // also attaches/detaches the corresponding chart series.
+  useEffect(() => {
+    if (!compact || showSnapshotAndExpand) return;
+    return quadSyncEvents.subscribe((settings) => {
+      if (!quadLocked) return;
+      setChartTf(settings.chartTf);
+      setShowDailyZones(settings.showDailyZones);
+      setShow4HZones(settings.show4HZones);
+      setShow1HZones(settings.show1HZones);
+      setShow15MZones(settings.show15MZones);
+      setShow5MZones(settings.show5MZones);
+      setShowWeeklyTrend(settings.showWeeklyTrend);
+      setShowDailyTrend(settings.showDailyTrend);
+      setShow4HTrend(settings.show4HTrend);
+      setShow1HTrend(settings.show1HTrend);
+      setShow15MTrend(settings.show15MTrend);
+      setShow5MTrend(settings.show5MTrend);
+      setShow1MTrend(settings.show1MTrend);
+      setShowOrbNY(settings.showOrbNY);
+      setShowOrbTokyo(settings.showOrbTokyo);
+      setShowOrbLondon(settings.showOrbLondon);
+      setShowOrb930(settings.showOrb930);
+      setShowSessions(settings.showSessions);
+      setShowNews(settings.showNews);
+      setViewMode(settings.viewMode);
+      setCandleColorScheme(settings.candleColorScheme);
+      const incoming = new Set(settings.activeInds);
+      for (const key of activeIndsRef.current) if (!incoming.has(key)) toggleInd(key);
+      for (const key of incoming) if (!activeIndsRef.current.has(key)) toggleInd(key);
+    });
+  }, [compact, showSnapshotAndExpand, quadLocked, toggleInd]);
 
   // Mirrors the instrument/price header in the (now-collapsed) panel right
   // of the chart, so identity + price stay visible in the toolbar.
@@ -2976,33 +4957,85 @@ function PriceHistoryChart({ rows, pair, chartTf, setChartTf, livePrice, expandW
       // under the page's scrollbar. Deliberately no flex-grow here (even
       // when expandHeight is true) — this width must stay constant whether
       // or not the panels below the chart are collapsed; height still
-      // stretches to fill via the parent row's alignItems:stretch.
+      // stretches to fill via the parent row's alignItems:stretch — except
+      // in compact (Quad View tile) mode, where the parent is a grid cell,
+      // not a stretching flex row, so it needs an explicit height:100%.
       width: expandWidth ? "100%" : "76%", marginBottom: 10,
       flexShrink: expandWidth ? 1 : 0,
       ...(expandHeight ? { display: "flex", flexDirection: "column", minHeight: 0 } : {}),
+      ...(compact ? { height: "100%" } : {}),
     }}>
       {/* Toolbar: timeframes · Indicators button · view mode */}
-      <div style={{ display: "flex", alignItems: "center", marginBottom: 4, flexShrink: 0, overflowX: "auto", minHeight: 34 }}>
-        <div style={{ display: "flex", gap: 3, alignItems: "center", flexShrink: 0 }}>
-          <span style={{
-            fontSize: 9, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em",
-            color: "var(--text-muted)", marginRight: 2, whiteSpace: "nowrap",
-          }}>
-            Chart
-          </span>
-          {(["1W","1D","4H","1H","15M","5M","1M"] as const).map(tf => (
-            <button key={tf} onClick={() => setChartTf(tf)} style={{
-              fontSize: 9, fontWeight: 700, padding: "4px 3px",
-              textTransform: "uppercase", letterSpacing: "0.08em",
-              background: chartTf === tf ? "var(--accent-dim)"    : "var(--bg-panel-alt)",
-              border:     chartTf === tf ? "1px solid var(--accent-border)" : "1px solid var(--border-medium)",
-              color:      chartTf === tf   ? "var(--accent-text)"   : "var(--text-secondary)",
-              borderRadius: 8, cursor: "pointer",
-            }}>{tf}</button>
-          ))}
-        </div>
-        <div style={{ width: 1, height: 18, background: "var(--border-medium)", flexShrink: 0, margin: "0 6px" }} />
-        {/* Zone + trendline toggles */}
+      <div style={{ display: "flex", alignItems: "center", marginBottom: 4, flexShrink: 0, overflowX: "auto", minHeight: 34, paddingLeft: compact ? 10 : 0 }}>
+        {/* Compact mode (each Quad View tile is its own PriceHistoryChart
+            instance) — instrument picker + condensed Chart-TF/Supply-Demand/
+            Trend-Lines dropdowns instead of the full button rows below, so a
+            quarter-width tile still has every control, just collapsed. */}
+        {compact && (
+          <div style={{ display: "flex", gap: 6, alignItems: "center", flexShrink: 0 }}>
+            <InstrumentPicker pair={pair} onChange={(p) => onPairChange?.(p)} />
+            {/* Timeframe/Supply-Demand/Trend Lines are synced while locked
+                (see quadSyncEvents) — greyed out + non-interactive on the
+                non-primary tiles receiving that sync, since they're being
+                driven by the primary tile's toolbar instead. Instrument stays
+                independently editable either way (see InstrumentPicker above). */}
+            <div style={{
+              display: "flex", gap: 6, alignItems: "center", flexShrink: 0,
+              opacity: quadDisabled ? 0.35 : 1, pointerEvents: quadDisabled ? "none" : "auto",
+            }}>
+            <TfDropdown value={chartTf} options={["1W","1D","4H","1H","15M","5M","1M"] as const} onChange={setChartTf} />
+            <MultiTfDropdown
+              label="Supply / Demand"
+              options={["D", "4H", "1H", "15M", "5M"]}
+              active={{ D: showDailyZones, "4H": show4HZones, "1H": show1HZones, "15M": show15MZones, "5M": show5MZones }}
+              onToggle={(k) => {
+                if (k === "D") setShowDailyZones(v => !v);
+                else if (k === "4H") setShow4HZones(v => !v);
+                else if (k === "1H") setShow1HZones(v => !v);
+                else if (k === "15M") setShow15MZones(v => !v);
+                else if (k === "5M") setShow5MZones(v => !v);
+              }}
+            />
+            <MultiTfDropdown
+              label="Trend Lines"
+              options={["W", "D", "4H", "1H", "15M", "5M", "1M"]}
+              active={{ W: showWeeklyTrend, D: showDailyTrend, "4H": show4HTrend, "1H": show1HTrend, "15M": show15MTrend, "5M": show5MTrend, "1M": show1MTrend }}
+              onToggle={(k) => {
+                if (k === "W") setShowWeeklyTrend(v => !v);
+                else if (k === "D") setShowDailyTrend(v => !v);
+                else if (k === "4H") setShow4HTrend(v => !v);
+                else if (k === "1H") setShow1HTrend(v => !v);
+                else if (k === "15M") setShow15MTrend(v => !v);
+                else if (k === "5M") setShow5MTrend(v => !v);
+                else if (k === "1M") setShow1MTrend(v => !v);
+              }}
+              accentColor="#3b82f6"
+            />
+            </div>
+          </div>
+        )}
+        {!compact && (
+          <div style={{ display: "flex", gap: 3, alignItems: "center", flexShrink: 0 }}>
+            <span style={{
+              fontSize: 9, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em",
+              color: "var(--text-muted)", marginRight: 2, whiteSpace: "nowrap",
+            }}>
+              Chart
+            </span>
+            {(["1W","1D","4H","1H","15M","5M","1M"] as const).map(tf => (
+              <button key={tf} onClick={() => setChartTf(tf)} style={{
+                fontSize: 9, fontWeight: 700, padding: "4px 3px",
+                textTransform: "uppercase", letterSpacing: "0.08em",
+                background: chartTf === tf ? "var(--accent-dim)"    : "var(--bg-panel-alt)",
+                border:     chartTf === tf ? "1px solid var(--accent-border)" : "1px solid var(--border-medium)",
+                color:      chartTf === tf   ? "var(--accent-text)"   : "var(--text-secondary)",
+                borderRadius: 8, cursor: "pointer",
+              }}>{tf}</button>
+            ))}
+          </div>
+        )}
+        {!compact && <div style={{ width: 1, height: 18, background: "var(--border-medium)", flexShrink: 0, margin: "0 6px" }} />}
+        {!compact && (
         <div style={{ display: "flex", flexShrink: 0 }}>
           <div style={{ display: "flex", gap: 6, alignItems: "center", flexShrink: 0 }}>
             <div ref={zoneSettingsGroupRef} style={{ display: "flex", gap: 3, alignItems: "center", flexShrink: 0 }} data-zone-settings-panel>
@@ -3010,12 +5043,14 @@ function PriceHistoryChart({ rows, pair, chartTf, setChartTf, livePrice, expandW
                 fontSize: 9, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em",
                 color: "var(--text-muted)", marginRight: 2, whiteSpace: "nowrap",
               }}>
-                Supply & Demand Zones
+                Supply / Demand
               </span>
               {([
-                ["D",  showDailyZones, setShowDailyZones],
-                ["4H", show4HZones,    setShow4HZones],
-                ["1H", show1HZones,    setShow1HZones],
+                ["D",   showDailyZones,  setShowDailyZones],
+                ["4H",  show4HZones,     setShow4HZones],
+                ["1H",  show1HZones,     setShow1HZones],
+                ["15M", show15MZones,    setShow15MZones],
+                ["5M",  show5MZones,     setShow5MZones],
               ] as const).map(([label, active, setter]) => (
                 <button
                   key={label}
@@ -3105,6 +5140,8 @@ function PriceHistoryChart({ rows, pair, chartTf, setChartTf, livePrice, expandW
                 ["4H", show4HTrend,     setShow4HTrend],
                 ["1H", show1HTrend,     setShow1HTrend],
                 ["15M", show15MTrend,   setShow15MTrend],
+                ["5M", show5MTrend,     setShow5MTrend],
+                ["1M", show1MTrend,     setShow1MTrend],
               ] as const).map(([label, active, setter]) => (
                 <button
                   key={label}
@@ -3142,29 +5179,47 @@ function PriceHistoryChart({ rows, pair, chartTf, setChartTf, livePrice, expandW
                     ["H4",  "4H"]     as const,
                     ["H1",  "1H"]     as const,
                     ["M15", "15M"]    as const,
+                    ["M5",  "5M"]     as const,
+                    ["M1",  "1M"]     as const,
                   ]).map(([key, label]) => (
-                    <div key={key} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "4px 0" }}>
-                      <span style={{ fontSize: 11, color: "var(--text-secondary)" }}>{label}</span>
-                      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                        <button
-                          onClick={() => setTrendCounts(c => ({ ...c, [key]: Math.max(0, c[key] - 1) }))}
-                          style={{
-                            width: 18, height: 18, borderRadius: 4, cursor: "pointer",
-                            background: "var(--bg-panel-alt)", border: "1px solid var(--border-medium)",
-                            color: "var(--text-secondary)", fontSize: 11, lineHeight: 1,
-                          }}
-                        >−</button>
-                        <span style={{ fontSize: 11, fontWeight: 700, color: "var(--text-primary)", width: 14, textAlign: "center" }}>
-                          {trendCounts[key]}
-                        </span>
-                        <button
-                          onClick={() => setTrendCounts(c => ({ ...c, [key]: Math.min(10, c[key] + 1) }))}
-                          style={{
-                            width: 18, height: 18, borderRadius: 4, cursor: "pointer",
-                            background: "var(--bg-panel-alt)", border: "1px solid var(--border-medium)",
-                            color: "var(--text-secondary)", fontSize: 11, lineHeight: 1,
-                          }}
-                        >+</button>
+                    <div key={key} style={{ padding: "4px 0", borderBottom: "1px solid var(--border-medium)" }}>
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                        <span style={{ fontSize: 11, color: "var(--text-secondary)" }}>{label}</span>
+                        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                          <button
+                            onClick={() => setTrendCounts(c => ({ ...c, [key]: Math.max(0, c[key] - 1) }))}
+                            style={{
+                              width: 18, height: 18, borderRadius: 4, cursor: "pointer",
+                              background: "var(--bg-panel-alt)", border: "1px solid var(--border-medium)",
+                              color: "var(--text-secondary)", fontSize: 11, lineHeight: 1,
+                            }}
+                          >−</button>
+                          <span style={{ fontSize: 11, fontWeight: 700, color: "var(--text-primary)", width: 14, textAlign: "center" }}>
+                            {trendCounts[key]}
+                          </span>
+                          <button
+                            onClick={() => setTrendCounts(c => ({ ...c, [key]: Math.min(10, c[key] + 1) }))}
+                            style={{
+                              width: 18, height: 18, borderRadius: 4, cursor: "pointer",
+                              background: "var(--bg-panel-alt)", border: "1px solid var(--border-medium)",
+                              color: "var(--text-secondary)", fontSize: 11, lineHeight: 1,
+                            }}
+                          >+</button>
+                        </div>
+                      </div>
+                      <div style={{ display: "flex", gap: 4, marginTop: 4 }}>
+                        {TRENDLINE_COLOR_PRESETS.map(c => (
+                          <button
+                            key={c}
+                            onClick={() => setTrendColors(prev => ({ ...prev, [key]: c }))}
+                            title={c}
+                            style={{
+                              width: 14, height: 14, borderRadius: "50%", cursor: "pointer",
+                              background: c, padding: 0,
+                              border: trendColors[key] === c ? "2px solid var(--text-primary)" : "1px solid var(--border-medium)",
+                            }}
+                          />
+                        ))}
                       </div>
                     </div>
                   ))}
@@ -3174,8 +5229,15 @@ function PriceHistoryChart({ rows, pair, chartTf, setChartTf, livePrice, expandW
             </div>
           </div>
         </div>
+        )}
         <div style={{ width: 1, height: 18, background: "var(--border-medium)", flexShrink: 0, margin: "0 6px" }} />
-        <div style={{ display: "flex", gap: 5, alignItems: "center", flexShrink: 0 }}>
+        {/* Reversal through Candles — all synced while Quad View is locked;
+            greyed out + non-interactive on non-primary tiles receiving that
+            sync (see quadDisabled / quadSyncEvents). */}
+        <div style={{
+          display: "flex", gap: 5, alignItems: "center", flexShrink: 0,
+          opacity: quadDisabled ? 0.35 : 1, pointerEvents: quadDisabled ? "none" : "auto",
+        }}>
           {/* Reversal Candles toggle — right-click for settings */}
           <button
             ref={reversalBtnRef}
@@ -3226,7 +5288,7 @@ function PriceHistoryChart({ rows, pair, chartTf, setChartTf, livePrice, expandW
                 </button>
                 <button
                   onClick={() => setReversalEightAmBoxFilter(v => !v)}
-                  title="Either bias, inside/on the 8am box"
+                  title="Either bias, inside/on an active ORB box"
                   style={{
                     fontSize: 9, fontWeight: 700, padding: "4px 6px", flex: 1,
                     textTransform: "uppercase", letterSpacing: "0.06em",
@@ -3236,7 +5298,7 @@ function PriceHistoryChart({ rows, pair, chartTf, setChartTf, livePrice, expandW
                     borderRadius: 6, cursor: "pointer",
                   }}
                 >
-                  8AM Box
+                  ORB
                 </button>
                 <button
                   onClick={() => setReversalTrendlineFilter(v => !v)}
@@ -3300,9 +5362,19 @@ function PriceHistoryChart({ rows, pair, chartTf, setChartTf, livePrice, expandW
             </div>,
             document.body
           )}
-          {/* 8AM Box toggle — standalone button, not part of the Indicators dropdown */}
+          {/* ORB toggle — standalone button, not part of the Indicators dropdown.
+              Click toggles the feature on/off; right-click opens the settings
+              popover to pick which session opens (Tokyo/London/NY/9:30) draw. */}
           <button
+            ref={orbBtnRef}
             onClick={() => toggleInd("session8am")}
+            onContextMenu={(e) => {
+              e.preventDefault();
+              const rect = orbBtnRef.current?.getBoundingClientRect();
+              if (rect) setOrbSettingsPos({ top: rect.bottom + 6, left: rect.left });
+              setShowOrbSettings(v => !v);
+            }}
+            title="Click to toggle, right-click for settings"
             style={{
               fontSize: 9, fontWeight: 700, padding: "4px 5px",
               textTransform: "uppercase", letterSpacing: "0.08em",
@@ -3312,8 +5384,43 @@ function PriceHistoryChart({ rows, pair, chartTf, setChartTf, livePrice, expandW
               borderRadius: 8, cursor: "pointer",
             }}
           >
-            8AM Box
+            ORB
           </button>
+          {showOrbSettings && orbSettingsPos && createPortal(
+            <div ref={orbSettingsPopoverRef} style={{
+              position: "fixed", top: orbSettingsPos.top, left: orbSettingsPos.left, zIndex: 1000,
+              background: "var(--bg-panel)", border: "1px solid var(--border-medium)",
+              borderRadius: 10, padding: "10px 12px", width: 170,
+              boxShadow: "0 8px 24px rgba(0,0,0,0.45)",
+            }}>
+              <div style={{ fontSize: 9, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.1em",
+                color: "var(--text-muted)", marginBottom: 8 }}>
+                ORB Sessions
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                {([
+                  ["New York (8:00)",  showOrbNY,     setShowOrbNY,     "#22c55e"],
+                  ["Tokyo (19:00)",    showOrbTokyo,  setShowOrbTokyo,  "#a855f7"],
+                  ["London (3:00)",    showOrbLondon, setShowOrbLondon, "#3b82f6"],
+                  ["9:30",             showOrb930,    setShowOrb930,    "#eab308"],
+                ] as const).map(([label, on, setter, color]) => (
+                  <button key={label} onClick={() => setter(v => !v)} style={{
+                    display: "flex", alignItems: "center", gap: 8, width: "100%",
+                    background: "none", border: "none", padding: "4px 2px", cursor: "pointer", textAlign: "left",
+                  }}>
+                    <span style={{
+                      width: 14, height: 14, borderRadius: 3, flexShrink: 0,
+                      border: `2px solid ${color}`, background: on ? color : "transparent",
+                    }} />
+                    <span style={{ fontSize: 11, fontWeight: 600, color: on ? "var(--text-primary)" : "var(--text-secondary)" }}>
+                      {label}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </div>,
+            document.body
+          )}
           {/* Sessions button — right-click for settings */}
           <div style={{ position: "relative", display: "flex", gap: 3, alignItems: "center" }} data-sessions-panel>
             <button
@@ -3478,73 +5585,109 @@ function PriceHistoryChart({ rows, pair, chartTf, setChartTf, livePrice, expandW
             <div ref={newsSettingsPopoverRef} style={{
               position: "fixed", top: newsSettingsPos.top, left: newsSettingsPos.left, zIndex: 1000,
               background: "var(--bg-panel)", border: "1px solid var(--border-medium)",
-              borderRadius: 10, padding: "10px 12px", width: 220,
+              borderRadius: 10, padding: "10px 12px", width: 340,
               boxShadow: "0 8px 24px rgba(0,0,0,0.45)",
             }}>
-              <div style={{ fontSize: 9, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.1em",
-                color: "var(--text-muted)", marginBottom: 8 }}>
-                News Event Types
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+                <div style={{ fontSize: 9, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.1em",
+                  color: "var(--text-muted)" }}>
+                  News Event Types
+                </div>
+                <button
+                  onClick={() => {
+                    const allOn = NEWS_CATEGORY_DEFS.every(d => newsCategoryVisibility[d.key]);
+                    const next = {} as Record<NewsCategoryKey, boolean>;
+                    for (const d of NEWS_CATEGORY_DEFS) next[d.key] = !allOn;
+                    setNewsCategoryVisibility(next);
+                  }}
+                  style={{
+                    fontSize: 9, fontWeight: 700, padding: "2px 8px",
+                    textTransform: "uppercase", letterSpacing: "0.06em",
+                    background: NEWS_CATEGORY_DEFS.every(d => newsCategoryVisibility[d.key]) ? "var(--accent-dim)" : "var(--bg-panel-alt)",
+                    border:     NEWS_CATEGORY_DEFS.every(d => newsCategoryVisibility[d.key]) ? "1px solid var(--accent-border)" : "1px solid var(--border-medium)",
+                    color:      NEWS_CATEGORY_DEFS.every(d => newsCategoryVisibility[d.key]) ? "var(--accent-text)" : "var(--text-secondary)",
+                    borderRadius: 6, cursor: "pointer",
+                  }}
+                >
+                  All
+                </button>
               </div>
-              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                {NEWS_CATEGORY_DEFS.map(def => {
-                  const on = newsCategoryVisibility[def.key];
-                  // CPI and Jobs Reports both release under multiple
-                  // countries (a EUR/USD chart's own USD releases plus
-                  // whatever the live feed has for EUR that week) — FOMC
-                  // is USD-only, so it never needs this. Only worth
-                  // showing when the charted pair actually has two
-                  // currencies to choose between (a real forex pair, not
-                  // an index/stock/ETF, which only ever has USD anyway).
-                  const showCurrencyChips = (def.key === "cpi" || def.key === "jobs") && pairCurrencies.length === 2;
-                  return (
-                    <div key={def.key}>
-                      <button
-                        onClick={() => setNewsCategoryVisibility(v => ({ ...v, [def.key]: !v[def.key] }))}
-                        style={{
-                          display: "flex", alignItems: "center", gap: 8, width: "100%",
-                          background: "none", border: "none", padding: "4px 2px", cursor: "pointer", textAlign: "left",
-                        }}
-                      >
-                        <span style={{
-                          width: 14, height: 14, borderRadius: 3, flexShrink: 0,
-                          border: `2px solid ${def.color}`, background: on ? def.color : "transparent",
-                        }} />
-                        <span style={{ fontSize: 11, fontWeight: 600, color: on ? "var(--text-primary)" : "var(--text-secondary)" }}>
-                          {def.label}
-                        </span>
-                      </button>
-                      {showCurrencyChips && (
-                        <div style={{ display: "flex", gap: 4, marginLeft: 22, marginTop: 2, marginBottom: 2 }}>
-                          {pairCurrencies.map(cur => {
-                            const curOn = isNewsCurrencyVisible(def.key, cur);
-                            return (
-                              <button
-                                key={cur}
-                                onClick={() => setNewsCurrencyVisibility(v => ({ ...v, [`${def.key}:${cur}`]: !curOn }))}
-                                style={{
-                                  fontSize: 9, fontWeight: 700, padding: "2px 6px",
-                                  textTransform: "uppercase", letterSpacing: "0.04em",
-                                  background: curOn ? "var(--accent-dim)" : "var(--bg-panel-alt)",
-                                  border:     curOn ? "1px solid var(--accent-border)" : "1px solid var(--border-medium)",
-                                  color:      curOn ? "var(--accent-text)" : "var(--text-muted)",
-                                  borderRadius: 6, cursor: "pointer",
-                                }}
-                              >
-                                {cur}
-                              </button>
-                            );
-                          })}
-                        </div>
-                      )}
+              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                {(["Monetary Policy", "Inflation / Growth / Labor", "Bond Market"] as const satisfies readonly NewsCategoryGroup[]).map(group => (
+                  <div key={group}>
+                    <div style={{ fontSize: 11.5, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.05em",
+                      color: GROUP_COLORS[group], marginBottom: 6, paddingBottom: 4,
+                      borderBottom: `1px solid ${GROUP_COLORS[group]}` }}>
+                      {group}
                     </div>
-                  );
-                })}
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "2px 10px" }}>
+                      {NEWS_CATEGORY_DEFS.filter(d => d.group === group).map(def => {
+                        const on = newsCategoryVisibility[def.key];
+                        // CPI and Jobs Reports both release under multiple
+                        // countries (a EUR/USD chart's own USD releases plus
+                        // whatever the live feed has for EUR that week) — FOMC
+                        // is USD-only, so it never needs this. Only worth
+                        // showing when the charted pair actually has two
+                        // currencies to choose between (a real forex pair, not
+                        // an index/stock/ETF, which only ever has USD anyway).
+                        const showCurrencyChips = (def.key === "cpi" || def.key === "jobs") && pairCurrencies.length === 2;
+                        return (
+                          <div key={def.key}>
+                            <button
+                              onClick={() => setNewsCategoryVisibility(v => ({ ...v, [def.key]: !v[def.key] }))}
+                              style={{
+                                display: "flex", alignItems: "center", gap: 8, width: "100%",
+                                background: "none", border: "none", padding: "4px 2px", cursor: "pointer", textAlign: "left",
+                              }}
+                            >
+                              <span style={{
+                                width: 14, height: 14, borderRadius: 3, flexShrink: 0,
+                                border: `2px solid ${def.color}`, background: on ? def.color : "transparent",
+                              }} />
+                              <span style={{ fontSize: 11, fontWeight: 600, color: on ? "var(--text-primary)" : "var(--text-secondary)" }}>
+                                {def.label}
+                              </span>
+                            </button>
+                            {showCurrencyChips && (
+                              <div style={{ display: "flex", gap: 4, marginLeft: 22, marginTop: 2, marginBottom: 2 }}>
+                                {pairCurrencies.map(cur => {
+                                  const curOn = isNewsCurrencyVisible(def.key, cur);
+                                  return (
+                                    <button
+                                      key={cur}
+                                      onClick={() => setNewsCurrencyVisibility(v => ({ ...v, [`${def.key}:${cur}`]: !curOn }))}
+                                      style={{
+                                        fontSize: 9, fontWeight: 700, padding: "2px 6px",
+                                        textTransform: "uppercase", letterSpacing: "0.04em",
+                                        background: curOn ? "var(--accent-dim)" : "var(--bg-panel-alt)",
+                                        border:     curOn ? "1px solid var(--accent-border)" : "1px solid var(--border-medium)",
+                                        color:      curOn ? "var(--accent-text)" : "var(--text-muted)",
+                                        borderRadius: 6, cursor: "pointer",
+                                      }}
+                                    >
+                                      {cur}
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ))}
               </div>
-              <div style={{ fontSize: 10, color: "var(--text-muted)", marginTop: 8, paddingTop: 8, borderTop: "1px solid var(--border-subtle)", lineHeight: 1.4 }}>
-                Only shows events relevant to {pair} — its two currencies if it's a forex pair, USD only otherwise (indices, stocks, ETFs, commodities, crypto). USD releases: FOMC covers 2023–2026, CPI and Jobs Reports cover 2025–2026. Non-USD releases only cover the current calendar week (the live feed has no historical archive). Each enabled type also gets one "(Next)" preview projected past the last candle for its soonest upcoming release.
+              <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 8, paddingTop: 8, borderTop: "1px solid var(--border-subtle)" }}>
+                <HoverTooltip tip={`Only shows events relevant to ${pair} — its two currencies if it's a forex pair, USD only otherwise (indices, stocks, ETFs, commodities, crypto). FOMC, CPI, Jobs Reports, Retail Sales, Initial Jobless Claims, PCE/Core PCE, GDP, JOLTS, and PPI/Core PPI all have real actual/previous backfilled from FRED for their full static history (no forecast/surprise on those older entries — FRED has no consensus data; each still gets a real read — hold/cut/hike, strong/weak, accelerating/slowing, warming/cooling — from actual vs previous alone) until a live release is captured, which then takes over. Jobless Claims is weekly (every Thursday, shifted a day around New Year's/July 4th/Juneteenth/Veterans Day/Christmas/Thanksgiving) rather than monthly like the others. GDP's Advance/Second/Third estimates each show that quarter's current published growth rate rather than the exact as-first-published vintage number, and a stretch of early-2026 dates is left out where the shutdown made which quarter a catch-up release covered too uncertain to plot confidently. JOLTS and PPI instead use exact per-release vintage data, so they're precise about which month and value each release actually published. 10Y/30Y Auctions cover TreasuryDirect's full history back to 1979, SEP/Dot Plot covers all 14 quarterly releases 2023–2026. Fed Chair Press Conference and FOMC Minutes reuse that same meeting's real decision. ISM Manufacturing/Services plot on their real release schedule (2025–2026, computed from ISM's own publication rule) but can't show historical index values — ISM's data is commercially licensed and FRED's old free mirror is discontinued — so older ISM markers show "unavailable" until a live release is captured. Non-USD releases everywhere are limited to the live feed's current calendar week. Only events within the currently loaded candle range are shown. Hover a marker for actual/forecast/surprise where available.`}>
+                  <Info size={13} style={{ color: "var(--text-muted)", cursor: "help" }} />
+                </HoverTooltip>
               </div>
             </div>,
             document.body
+          )}
+          {newsHover && (
+            <NewsMarkerTooltip x={newsHover.x} y={newsHover.y} label={newsHover.label} color={newsHover.color} detail={newsHover.detail} />
           )}
           {/* Indicators button + dropdown — portaled + fixed-positioned (like the
               Reversal settings popover) so it floats over everything instead of
@@ -3566,7 +5709,7 @@ function PriceHistoryChart({ rows, pair, chartTf, setChartTf, livePrice, expandW
                 borderRadius: 8, cursor: "pointer",
               }}
             >
-              Indicators{anyActive ? ` (${activeIndDefsCount})` : ""}
+              Indicators
             </button>
             {showIndPanel && indPanelPos && createPortal(
               <div ref={indPanelPopoverRef} style={{
@@ -3789,11 +5932,55 @@ function PriceHistoryChart({ rows, pair, chartTf, setChartTf, livePrice, expandW
             which sits directly above the chart's price scale below. */}
         <div style={{ display: "flex", alignItems: "center", gap: 5, flexShrink: 0, marginLeft: rightOfChartCollapsed ? 0 : "auto" }}>
           <div style={{ width: 1, height: 18, background: "var(--border-medium)", flexShrink: 0 }} />
-          {snapshotButton}
-          {masterCollapseButton}
+          {/* Quad View lock — this tile's toolbar (timeframe, overlays, view
+              mode, candle colors) drives the other 3 while locked; only
+              shown on the primary tile, and only in Quad View. */}
+          {compact && showSnapshotAndExpand && (
+            <button
+              onClick={onToggleQuadLocked}
+              title={quadLocked ? "Unlock — let each tile's toolbar control itself again" : "Lock — this toolbar controls all 4 charts"}
+              style={{
+                display: "flex", alignItems: "center", justifyContent: "center",
+                width: 22, height: 22, padding: 0, flexShrink: 0,
+                background: quadLocked ? "var(--accent-dim)" : "var(--bg-panel-alt)",
+                border:     quadLocked ? "1px solid var(--accent-border)" : "1px solid var(--border-medium)",
+                borderRadius: 8, color: quadLocked ? "var(--accent-text)" : "var(--text-secondary)", cursor: "pointer",
+              }}
+            >
+              {quadLocked ? <Lock size={12} /> : <Unlock size={12} />}
+            </button>
+          )}
+          {showSnapshotAndExpand && snapshotButton}
+          {/* Quad View toggle — 2x2 grid of 4 independent charts, each with
+              its own instrument, timeframe, and full toolbar (this same
+              component, rendered 4x with compact=true by the page). Shown
+              only on the designated tile (same one as Snapshot/Expand) once
+              in Quad View, rather than on all 4. */}
+          {showSnapshotAndExpand && (
+            <button
+              ref={quadBtnRef}
+              onClick={onToggleQuadView}
+              title={quadView ? "Exit Quad View" : "Quad View — 4 independent charts"}
+              style={{
+                display: "flex", alignItems: "center", justifyContent: "center",
+                width: 22, height: 22, padding: 0, flexShrink: 0,
+                background: quadView ? "var(--accent-dim)" : "var(--bg-panel-alt)",
+                border:     quadView ? "1px solid var(--accent-border)" : "1px solid var(--border-medium)",
+                borderRadius: 8, color: quadView ? "var(--accent-text)" : "var(--text-secondary)", cursor: "pointer",
+              }}
+            >
+              <LayoutGrid size={12} />
+            </button>
+          )}
+          {/* Quad View already forces every panel around the chart hidden
+              (see effectiveAisRowCollapsed etc. in the page component) and
+              manages its own collapse behavior on entry, so this button —
+              redundant there, and previously a source of layout bugs when
+              clicked mid-Quad-View — is only shown outside Quad View. */}
+          {!quadView && masterCollapseButton}
         </div>
       </div>
-      <div style={{ borderRadius: 14, overflow: "hidden", position: "relative", ...(expandHeight ? { flex: 1, minHeight: 0 } : {}) }}>
+      <div style={{ borderRadius: compact ? 0 : 14, overflow: "hidden", position: "relative", ...((expandHeight || compact) ? { flex: 1, minHeight: 0 } : {}) }}>
         {tfLoading && (
           <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", zIndex: 10, pointerEvents: "none" }}>
             <span style={{ fontSize: 11, color: "var(--text-muted)", letterSpacing: "0.05em" }}>Loading…</span>
@@ -3814,7 +6001,7 @@ function PriceHistoryChart({ rows, pair, chartTf, setChartTf, livePrice, expandW
             ))}
           </div>
         )}
-        <div ref={containerRef} style={{ height: expandHeight ? "100%" : 480 + heightBoost, opacity: tfLoading ? 0.3 : 1 }} />
+        <div ref={containerRef} style={{ height: (expandHeight || compact) ? "100%" : 480 + heightBoost, opacity: tfLoading ? 0.3 : 1 }} />
       </div>
     </div>
   );
@@ -4553,19 +6740,6 @@ function Rsi14PanelBodyImpl({ pair, indicatorTf, expanded }: { pair: string; ind
   const tickStyle  = { fill: "var(--text-muted)", fontSize: expanded ? 12 : 9 };
   const yAxisWidth = expanded ? 36 : 28;
   const analysis   = useMemo(() => expanded ? buildRsi14Analysis(rows) : null, [rows, expanded]);
-
-  const yDomain = useMemo(() => {
-    const vals: number[] = [];
-    data.forEach(d => {
-      if (showRsi14) vals.push(d.rsi14);
-      if (showTrend) vals.push(d.trend);
-    });
-    if (!vals.length) return [0, 100] as const;
-    const min = Math.min(...vals);
-    const max = Math.max(...vals);
-    const pad = (max - min) * 0.25;
-    return [Math.max(0, min - pad), Math.min(100, max + pad)] as const;
-  }, [data, showRsi14, showTrend]);
 
   if (loading) return (
     <div className="flex h-full items-center justify-center" style={{ color: "var(--text-muted)", fontSize: 11 }}>Loading…</div>
@@ -5896,8 +8070,6 @@ function SessionPanelBodyImpl({ rows, expanded }: { rows: SheetRow[]; expanded?:
     return [-(abs + pad), abs + pad] as const;
   }, [data]);
 
-  const latest = data[data.length - 1];
-
   return (
     <div className="flex flex-col h-full">
       {expanded && analysis && (
@@ -6168,8 +8340,6 @@ function AvgPricePanelBodyImpl({ pair, indicatorTf, expanded }: { pair: string; 
     return [min - pad, max + pad] as const;
   }, [data, showClose, showAvgPrice]);
 
-  const latest = data[data.length - 1];
-
   if (loading) return (
     <div className="flex h-full items-center justify-center" style={{ color: "var(--text-muted)", fontSize: 11 }}>Loading…</div>
   );
@@ -6414,7 +8584,6 @@ function buildVolatilityAnalysis(rows: VolaRow[]): { headline: string; bullets: 
   const { close, bbUpper, bbMiddle, bbLower, histVol } = cur;
 
   const bandwidth  = bbUpper - bbLower;
-  const halfBand   = bandwidth / 2;
   const bbPct      = bandwidth > 0 ? ((close - bbLower) / bandwidth) * 100 : 50;
   const bwPips     = Math.round(bandwidth * 10000);
 
@@ -6956,10 +9125,6 @@ function SqueezePanelBodyImpl({ pair, indicatorTf, expanded }: { pair: string; i
   );
 }
 
-// ─── AI Chat ─────────────────────────────────────────────────────────────────
-const CLAUDE_API_KEY_PATH = 'C:\\Users\\Geoff\\.trademirror\\claude-api-key.txt';
-
-
 // ─── Failure Swing ────────────────────────────────────────────────────────────
 // Forex pairs are quoted with a pip convention (1 pip = 0.0001), so the wick
 // is scaled to pip units. Everything else (indices, commodities, crypto,
@@ -7412,24 +9577,7 @@ function MarketStructurePanelBodyImpl({ pair, indicatorTf, expanded }: { pair: s
     return [min - pad, max + pad] as const;
   }, [data]);
 
-  const { state } = structure;
-  const stateColor =
-    state === "Bullish" || state === "Strong Bullish" ? "#60a5fa" :
-    state === "Bearish" || state === "Strong Bearish" ? "#a78bfa" :
-    "#94a3b8";
   const analysis   = useMemo(() => expanded ? buildMarketStructureAnalysis(rows) : null, [rows, expanded]);
-
-  const lastBos = useMemo(() => {
-    const ev = [...structure.events].reverse().find(e => e.type === "BOS");
-    if (!ev) return null;
-    return { direction: ev.direction === "bull" ? "Bullish" : "Bearish", barsAgo: rows.length - 1 - ev.idx };
-  }, [structure, rows.length]);
-
-  const lastChoch = useMemo(() => {
-    const ev = [...structure.events].reverse().find(e => e.type === "CHOCH");
-    if (!ev) return null;
-    return { direction: ev.direction === "bull" ? "Bullish" : "Bearish", barsAgo: rows.length - 1 - ev.idx };
-  }, [structure, rows.length]);
 
   if (loading) return (
     <div className="flex h-full items-center justify-center" style={{ color: "var(--text-muted)", fontSize: 11 }}>Loading…</div>
@@ -7598,8 +9746,6 @@ function MarketStructurePanelBodyImpl({ pair, indicatorTf, expanded }: { pair: s
                 const TRI_H   = 8;
                 const PILL_H  = expanded ? 14 : 11;
                 const GAP     = expanded ? 4 : 3;
-                const bw      = expanded ? 38 : 28;
-                const glow    = (c: string) => ({ filter: `drop-shadow(0 0 4px ${c})` });
 
                 const above: React.ReactNode[] = [];
                 const below: React.ReactNode[] = [];
@@ -7751,10 +9897,10 @@ function VolatilityPanelBodyImpl({ pair, indicatorTf, expanded }: { pair: string
   const maxOffset  = Math.max(0, rows.length - windowSize);
   const [offset, setOffset] = useState(0);
   useEffect(() => setOffset(0), [indicatorTf, pair]);
-  const [showClose,   setShowClose]   = useState(true);
-  const [showUpper,   setShowUpper]   = useState(true);
-  const [showMid,     setShowMid]     = useState(true);
-  const [showLower,   setShowLower]   = useState(true);
+  const [showClose]   = useState(true);
+  const [showUpper]   = useState(true);
+  const [showMid]     = useState(true);
+  const [showLower]   = useState(true);
   const [showCandles, setShowCandles] = useState(() => localStorage.getItem("tm_bb_show_candles") === "1");
   const chartRef  = useRef<HTMLDivElement>(null);
   const [chartSize, setChartSize] = useState<{ w: number; h: number } | null>(null);
@@ -7821,8 +9967,6 @@ function VolatilityPanelBodyImpl({ pair, indicatorTf, expanded }: { pair: string
     obs.observe(el);
     return () => obs.disconnect();
   }, [loading]);
-
-  const latest = data[data.length - 1];
 
   if (loading) return (
     <div className="flex h-full items-center justify-center" style={{ color: "var(--text-muted)", fontSize: 11 }}>Loading…</div>
@@ -8182,7 +10326,6 @@ function buildWrAnalysis(rows: WrRow[]): { headline: string; bullets: string[]; 
   const wrR     = Math.round(wr * 10) / 10;
   const overbought = wr > -20;
   const oversold   = wr < -80;
-  const neutral    = !overbought && !oversold;
   const zone    = overbought ? "Overbought (above −20)" : oversold ? "Oversold (below −80)" : wr <= -50 ? "Lower neutral range" : "Upper neutral range";
   const sessionsInZone = prev5.filter(v => overbought ? v > -20 : oversold ? v < -80 : true).length + 1;
   const bullets = [
@@ -9639,7 +11782,12 @@ function computeReversalFlags(
   const demandZones = zones.filter(z => z.type === "demand");
   const supplyZones = zones.filter(z => z.type === "supply");
   const anyFilterOn = zoneFilterOn || eightAmBoxFilterOn || trendlineFilterOn;
-  for (let i = 1; i < rows.length; i++) {
+  // rows' final entry is still the forming candle (live poll updates it in
+  // place until the bar closes) — its O/H/L/C can still change, so it must
+  // never be flagged as a reversal even if it currently matches a pattern's
+  // shape. Stopping one short of rows.length leaves flags[rows.length - 1]
+  // at its untouched `null` default.
+  for (let i = 1; i < rows.length - 1; i++) {
     const window = rows.slice(Math.max(0, i - 11), i + 1);
     const patterns = detectCandlePatterns(window).filter(p => enabledPatterns.has(p.name));
     if (patterns.length === 0) continue;
@@ -9885,19 +12033,6 @@ function RegimePanelBodyImpl({ pair, indicatorTf, expanded, showCandles, onToggl
     });
   }, [rows, offset, windowSize, regimeSeq]);
 
-  const latest    = data[data.length - 1];
-  const curRegime = latest?.regime     ?? "Ranging";
-  const curVol    = latest?.volatility ?? "Neutral";
-
-  const regimeColor = curRegime === "StrongTrending" ? "#34d399"
-                    : curRegime === "Trending"       ? "#60a5fa"
-                    : curRegime === "Compression"    ? "#f59e0b"
-                    : curRegime === "Expansion"      ? "#f87171"
-                    : "#94a3b8";
-  const volColor    = curVol === "Expanding"   ? "#f87171"
-                    : curVol === "Contracting" ? "#34d399"
-                    : "#94a3b8";
-
   const tickStyle  = { fill: "var(--text-muted)", fontSize: expanded ? 12 : 9 };
   const yAxisWidth = expanded ? 52 : 40;
   const analysis   = useMemo(() => expanded ? buildRegimeAnalysis(rows) : null, [rows, expanded]);
@@ -10114,7 +12249,6 @@ function RegimePanelBodyImpl({ pair, indicatorTf, expanded, showCandles, onToggl
 function CandleContextPanelBodyImpl({ pair, indicatorTf, expanded }: { pair: string; indicatorTf: string; expanded?: boolean }) {
   const [liveRows, setLiveRows] = useState<CandleCtxRow[]>([]);
   const [loading,  setLoading]  = useState(false);
-  const [ohlcOpen, setOhlcOpen] = useState(false);
 
   useEffect(() => {
     setLoading(true);
@@ -10677,7 +12811,7 @@ function MarketStructureStackPanelBodyImpl({ pair, expanded }: { pair: string; e
   );
 }
 
-function BlankPanel({ area, label, sub, style, onExpand, badge, subtitle, subtitle2, children,
+function BlankPanel({ area, label, style, onExpand, badge, subtitle, subtitle2, children,
   isDragging, isDragOver, containerRef, onHeaderMouseDown, pinned, headerActions,
 }: {
   area?: string;
@@ -10846,11 +12980,11 @@ function isFtmoRestricted(ev: EconomicEvent): boolean {
   return keywords.some(kw => title.includes(kw));
 }
 
-function EconomicCalendarPanel({ events, loading, impactFilter, restrictedOnly, filterByInstrument, pair }: {
+function EconomicCalendarPanelImpl({ events, loading, impactFilter, restrictedOnly, filterByInstrument, pair }: {
   events: EconomicEvent[]; loading: boolean; impactFilter: Set<CalendarImpact>; restrictedOnly: boolean;
   filterByInstrument: boolean; pair: string;
 }) {
-  const pairCurrencies = pair.split("/").map(c => c.toUpperCase());
+  const pairCurrencies = relevantNewsCurrencies(pair);
   // Restricted Events Only bypasses the impact checkboxes rather than
   // AND-ing with them — restricted events span High and Low impact (e.g.
   // Crude Oil Inventories is Low), so requiring the matching impact box to
@@ -10973,8 +13107,12 @@ function EconomicCalendarPanel({ events, loading, impactFilter, restrictedOnly, 
     </div>
   );
 }
+// Parent re-renders every 5s (livePrice tick); without memo this re-ran the
+// events.filter()/day-grouping pass every tick even though calendarEvents
+// itself only changes on a much slower cadence.
+const EconomicCalendarPanel = memo(EconomicCalendarPanelImpl);
 
-function NewsAndCalendarPanel({
+function NewsAndCalendarPanelImpl({
   news, newsLoading, pair, calendarEvents, calendarLoading,
 }: {
   news: NewsArticle[]; newsLoading: boolean; pair: string;
@@ -11133,6 +13271,10 @@ function NewsAndCalendarPanel({
     </div>
   );
 }
+// Same rationale as EconomicCalendarPanel above — parent re-renders on every
+// 5s livePrice tick, this only needs to re-render when news/calendar data or
+// the active tab/pair actually change.
+const NewsAndCalendarPanel = memo(NewsAndCalendarPanelImpl);
 
 function ForexNewsPanel({ news, loading, pair }: { news: NewsArticle[]; loading: boolean; pair: string }) {
   return (
@@ -11222,24 +13364,125 @@ const SqueezeStackPanelBody        = memo(SqueezeStackPanelBodyImpl);
 const CciStackPanelBody            = memo(CciStackPanelBodyImpl);
 const MarketStructureStackPanelBody = memo(MarketStructureStackPanelBodyImpl);
 
+// Quad View default confirmation set — per primary instrument, which 3
+// other instruments best corroborate whether a move is broad/genuine rather
+// than isolated noise (see toggleQuadView). Covers every instrument in
+// ALL_ASSETS. General method per category:
+//  - FX crosses: the base currency's own USD pair, the quote currency's own
+//    USD pair (so a XXX/YYY move can be attributed to XXX strength, YYY
+//    weakness, or both), plus one macro proxy (gold for risk/safe-haven
+//    currencies, oil for CAD, US10Y for rate-sensitive JPY/CHF/majors).
+//  - USD majors: two other USD majors/proxies plus US10Y (the core USD rate driver).
+//  - Indices: the other two comparable indices (same country/region) plus a
+//    macro driver (US10Y for US indices, the relevant local FX pair for
+//    non-US ones).
+//  - Rates: the neighboring points on the yield curve plus gold (the classic
+//    inverse-of-real-yields hedge).
+//  - Commodities: the closest sibling commodity plus a currency/index proxy
+//    tied to that commodity's usual driver (oil->CAD, copper->AUD/China).
+//  - Crypto: BTC/ETH as the market-wide anchors plus a growth-asset proxy (US100/US10Y).
+const QUAD_CONFIRMATION_SET: Record<string, [string, string, string]> = {
+  // ── Forex ──
+  "AUD/CAD": ["AUD/USD", "USD/CAD", "XAU/USD"],
+  "AUD/CHF": ["AUD/USD", "USD/CHF", "XAU/USD"],
+  "AUD/JPY": ["AUD/USD", "USD/JPY", "US100"],
+  "AUD/NZD": ["AUD/USD", "NZD/USD", "XAU/USD"],
+  "AUD/USD": ["EUR/USD", "XAU/USD", "US10Y"],
+  "CAD/CHF": ["USD/CAD", "USD/CHF", "USOIL"],
+  "CAD/JPY": ["USD/CAD", "USD/JPY", "USOIL"],
+  "CHF/JPY": ["USD/CHF", "USD/JPY", "XAU/USD"],
+  "EUR/AUD": ["EUR/USD", "AUD/USD", "XAU/USD"],
+  "EUR/CAD": ["EUR/USD", "USD/CAD", "USOIL"],
+  "EUR/CHF": ["EUR/USD", "USD/CHF", "US10Y"],
+  "EUR/GBP": ["EUR/USD", "GBP/USD", "DE30"],
+  "EUR/JPY": ["EUR/USD", "USD/JPY", "US10Y"],
+  "EUR/NZD": ["EUR/USD", "NZD/USD", "XAU/USD"],
+  "EUR/USD": ["GBP/USD", "USD/JPY", "US10Y"],
+  "GBP/AUD": ["GBP/USD", "AUD/USD", "XAU/USD"],
+  "GBP/CAD": ["GBP/USD", "USD/CAD", "USOIL"],
+  "GBP/CHF": ["GBP/USD", "USD/CHF", "US10Y"],
+  "GBP/JPY": ["GBP/USD", "USD/JPY", "US100"],
+  "GBP/NZD": ["GBP/USD", "NZD/USD", "XAU/USD"],
+  "GBP/USD": ["EUR/USD", "USD/JPY", "US10Y"],
+  "NZD/CAD": ["NZD/USD", "USD/CAD", "XAU/USD"],
+  "NZD/CHF": ["NZD/USD", "USD/CHF", "XAU/USD"],
+  "NZD/JPY": ["NZD/USD", "USD/JPY", "US100"],
+  "NZD/USD": ["AUD/USD", "XAU/USD", "US10Y"],
+  "USD/CAD": ["USOIL", "EUR/USD", "US10Y"],
+  "USD/CHF": ["EUR/USD", "XAU/USD", "US10Y"],
+  "USD/JPY": ["US10Y", "EUR/USD", "US100"],
+  "USD/MXN": ["USOIL", "US10Y", "EUR/USD"],
+  "USD/SEK": ["EUR/USD", "US10Y", "DE30"],
+  "USD/ZAR": ["XAU/USD", "US10Y", "EUR/USD"],
+  // ── Indices ──
+  US30:  ["US100", "US500", "US10Y"],
+  US100: ["US30", "US500", "US10Y"],
+  US500: ["US100", "US30", "US10Y"], // Nasdaq + Dow for cross-index breadth, 10Y yield for the rates driver
+  DE30:  ["EU50", "UK100", "EUR/USD"],
+  UK100: ["DE30", "EU50", "GBP/USD"],
+  FR40:  ["DE30", "EU50", "EUR/USD"],
+  EU50:  ["DE30", "FR40", "EUR/USD"],
+  JP225: ["US100", "USD/JPY", "US10Y"],
+  HK33:  ["US100", "AUD/USD", "XCU/USD"], // China-growth proxies
+  AU200: ["AUD/USD", "XAU/USD", "US100"],
+  // ── Rates ──
+  US02Y: ["US10Y", "US30Y", "XAU/USD"],
+  US05Y: ["US02Y", "US10Y", "XAU/USD"],
+  US10Y: ["US02Y", "US30Y", "US500"],
+  US30Y: ["US10Y", "US02Y", "XAU/USD"],
+  // ── Commodities ──
+  "XAU/USD": ["XAG/USD", "US10Y", "USD/JPY"],
+  "XAG/USD": ["XAU/USD", "XCU/USD", "US10Y"],
+  USOIL:     ["NATGAS", "USD/CAD", "XAU/USD"],
+  "XCU/USD": ["USOIL", "AUD/USD", "HK33"],
+  "XPT/USD": ["XAU/USD", "XPD/USD", "XAG/USD"],
+  "XPD/USD": ["XPT/USD", "XAU/USD", "XCU/USD"],
+  NATGAS:    ["USOIL", "USD/CAD", "XAU/USD"],
+  // ── Crypto ──
+  "BTC/USD":  ["ETH/USD", "US100", "US10Y"],
+  "ETH/USD":  ["BTC/USD", "SOL/USD", "US100"],
+  "SOL/USD":  ["BTC/USD", "ETH/USD", "US100"],
+  "XRP/USD":  ["BTC/USD", "ETH/USD", "BNB/USD"],
+  "BNB/USD":  ["BTC/USD", "ETH/USD", "SOL/USD"],
+  "DOGE/USD": ["BTC/USD", "ETH/USD", "XRP/USD"],
+};
+
 export function AnalyticsV3() {
-  const { analysisResult, eurusdSnapshot, sheetRows } = useAnalytics();
-  const [error, setError]       = useState<string | null>(null);
+  const { analysisResult, sheetRows } = useAnalytics();
+  const [, setError]       = useState<string | null>(null);
   const [synthesis, setSynthesis] = useState<Synthesis | null>(null);
-  const [selectedPair, setSelectedPair] = useState("EUR/USD");
-  // Lets a Sidebar favorite click switch this (already-mounted, possibly
-  // hidden) page to the requested pair without prop-drilling through AppShell.
-  useEffect(() => pairSelectionEvents.subscribe((pair) => setSelectedPair(pair)), []);
+  // Lets a Sidebar favorite click switch this page to the requested pair
+  // without prop-drilling through AppShell. AppShell actually unmounts this
+  // page on every navigation away, so a favorite clicked from elsewhere
+  // mounts a fresh instance — consume() picks up that request even though
+  // it was dispatched before this component (and its subscribe below,
+  // which only covers a favorite clicked while already on this page) existed.
+  const [selectedPair, setSelectedPair] = useState(() => pairSelectionEvents.consume() ?? "EUR/USD");
   const [aisRowCollapsed, setAisRowCollapsed] = useState(true);
   const [belowChartCollapsed, setBelowChartCollapsed] = useState(false);
   const [rightOfChartCollapsed, setRightOfChartCollapsed] = useState(false);
+  // Quad View state declared here (rather than down by the rest of the Quad
+  // View logic below) so the "effective collapsed" derivations right after
+  // it can see it — Quad View always forces every panel around the chart
+  // hidden, regardless of these three booleans' own persisted values (see
+  // effectiveAisRowCollapsed etc.).
+  const [quadView, setQuadView] = useState(false);
   const allPanelsCollapsed = aisRowCollapsed && belowChartCollapsed && rightOfChartCollapsed;
+  // "Effective" — what the layout should actually behave as, folding in
+  // Quad View's always-collapsed requirement on top of the raw toggle state.
+  // Using these (not the raw booleans) for every SIZING calculation below
+  // means the "collapse panels around chart" button can't desync the quad
+  // grid's dimensions even if something still flips the raw state while
+  // Quad View is active.
+  const effectiveAisRowCollapsed      = quadView || aisRowCollapsed;
+  const effectiveBelowChartCollapsed  = quadView || belowChartCollapsed;
+  const effectiveRightOfChartCollapsed = quadView || rightOfChartCollapsed;
   // The AI Synthesis/Alerts row is a fixed 160px block + 10px padding-bottom.
   // Collapsing it should grow the chart by exactly that freed height. It
   // can't be done via flex-grow on the chart row (like belowChartCollapsed
   // does) because the below-chart panels sibling is still mounted and
   // doesn't shrink — competing for space that way collapses the chart to 0.
-  const chartHeightBoost = aisRowCollapsed ? 170 : 0;
+  const chartHeightBoost = effectiveAisRowCollapsed ? 170 : 0;
 
   // News/Calendar panel must bottom-align with the chart regardless of the
   // chart's actual rendered height (fixed 480/+boost, or 100% when
@@ -11271,6 +13514,7 @@ export function AnalyticsV3() {
     setAisRowCollapsed(collapse);
     setBelowChartCollapsed(collapse);
     setRightOfChartCollapsed(collapse);
+    sidebarEvents.setCollapsed(collapse);
   }, [allPanelsCollapsed]);
   const [alerts, setAlerts] = useState<Alert[]>([]);
   const [toasts, setToasts] = useState<AlertToast[]>([]);
@@ -11279,6 +13523,16 @@ export function AnalyticsV3() {
   const [newsLoading, setNewsLoading] = useState(false);
   const [calendarEvents, setCalendarEvents]   = useState<EconomicEvent[]>([]);
   const [calendarLoading, setCalendarLoading] = useState(false);
+  // Every economic event ever persisted (see get_stored_economic_events) —
+  // separate from calendarEvents (which is just the live feed's current
+  // Sun-Sat window). This is what lets the News indicator's surprise
+  // tooltip still resolve actual/forecast/previous for a release once it's
+  // scrolled out of the live feed entirely.
+  const [storedEconomicEvents, setStoredEconomicEvents] = useState<EconomicEvent[]>([]);
+  // 10Y/30Y Treasury auction results, from TreasuryDirect (see
+  // sync_treasury_auctions/get_stored_treasury_auctions) — a separate
+  // pipeline from calendarEvents/storedEconomicEvents.
+  const [treasuryAuctions, setTreasuryAuctions] = useState<TreasuryAuction[]>([]);
   const [livePrice, setLivePrice]     = useState<number | null>(null);
   const [priceError, setPriceError]   = useState<string | null>(null);
 
@@ -11331,6 +13585,17 @@ export function AnalyticsV3() {
       .then(content => setCalendarEvents(JSON.parse(content)))
       .catch(() => {});
 
+    // Persisted history (see get_economic_calendar's save-on-poll and the
+    // economic_events table it writes to) — loaded once here and refreshed
+    // after each successful live poll below, since that's the only thing
+    // that ever adds new rows to it.
+    const loadStored = () => {
+      invoke<EconomicEvent[]>("get_stored_economic_events")
+        .then(setStoredEconomicEvents)
+        .catch(() => {});
+    };
+    loadStored();
+
     let retryId: ReturnType<typeof setTimeout> | null = null;
     let retryDelay = 15_000;
     const load = () => {
@@ -11341,6 +13606,7 @@ export function AnalyticsV3() {
           setCalendarEvents(items);
           invoke("write_text_file", { path: ECONOMIC_CALENDAR_CACHE_PATH, content: JSON.stringify(items) })
             .catch(console.error);
+          loadStored();
         })
         // Back off on repeated failure (e.g. the feed's own rate limit)
         // instead of hammering it every 15s indefinitely, which is exactly
@@ -11355,6 +13621,43 @@ export function AnalyticsV3() {
     load();
     const id = setInterval(load, 5 * 60_000);
     return () => { clearInterval(id); if (retryId) clearTimeout(retryId); };
+  }, []);
+
+  // Treasury auctions — sync on mount then every 30 min (auctions happen at
+  // most a handful of times a month, unlike the 5-min calendar poll's
+  // current-week churn). sync_treasury_auctions fetches+persists only a
+  // recent window; get_stored_treasury_auctions reloads the full persisted
+  // history so old auctions (and the trailing bid-to-cover average
+  // interpretAuction computes from them) stay available for charting.
+  //
+  // One-time deep backfill: sync_treasury_auctions alone can only ever
+  // reach back ~120 days (TreasuryDirect's "auctioned" endpoint caps at
+  // ~250 total records across every note/bond term, confirmed directly —
+  // no query param extends it). backfill_treasury_auctions instead hits the
+  // "search" endpoint filtered to the exact 10Y/30Y terms, which returns
+  // real history back to 1979 — comfortably past this app's deepest loaded
+  // price data (1000 weekly bars ≈ 19 years). Gated on a one-time flag so
+  // it doesn't refetch that full archive on every app launch.
+  useEffect(() => {
+    const loadStored = () => {
+      invoke<TreasuryAuction[]>("get_stored_treasury_auctions")
+        .then(setTreasuryAuctions)
+        .catch(() => {});
+    };
+    loadStored();
+    if (!getTreasuryAuctionsBackfilled()) {
+      invoke("backfill_treasury_auctions")
+        .then(() => { setTreasuryAuctionsBackfilled(); loadStored(); })
+        .catch(() => {});
+    }
+    const sync = () => {
+      invoke("sync_treasury_auctions")
+        .then(loadStored)
+        .catch(() => {});
+    };
+    sync();
+    const id = setInterval(sync, 30 * 60_000);
+    return () => clearInterval(id);
   }, []);
 
   // Initial load — seed seenStatuses so we don't fire on startup
@@ -11620,6 +13923,85 @@ export function AnalyticsV3() {
   const [expanded, setExpanded] = useState<PanelMeta | null>(null);
   const [chartTf, setChartTf] = useState<"1W" | "1D" | "4H" | "1H" | "15M" | "5M" | "1M">("1D");
   const [indicatorTf, setIndicatorTf] = useState<"1W" | "1D" | "4H" | "1H" | "15M" | "5M" | "1M">("1D");
+
+  // Quad View — 2x2 grid of 4 fully independent PriceHistoryChart instances
+  // (each with its own instrument, timeframe, and full toolbar) instead of
+  // the single chart. Slot 0 seeds from the currently charted pair the first
+  // time Quad View is opened; every slot (including 0) is then freely
+  // reassignable per-tile via that tile's own InstrumentPicker. Instrument
+  // choice is remembered across restarts; the on/off toggle itself is not.
+  // (quadView itself is declared earlier, alongside the panel-collapse state
+  // it interacts with — see effectiveAisRowCollapsed etc.)
+  const [quadPairs, setQuadPairsState] = useState<[string, string, string, string]>(() => getQuadPairs());
+  // The whole 2x2 grid — Snapshot lives only on the top-right tile (slot 1)
+  // but captures this entire element, not just that tile's own chart.
+  const quadGridRef = useRef<HTMLDivElement>(null);
+  // Quad View lock — the primary tile's toolbar drives all 4 while locked
+  // (see quadSyncEvents inside PriceHistoryChart). On by default; not
+  // persisted, same as quadView itself.
+  const [quadLocked, setQuadLocked] = useState(true);
+  const toggleQuadLocked = useCallback(() => setQuadLocked(v => !v), []);
+  const toggleQuadView = useCallback(() => {
+    setQuadView(v => {
+      const next = !v;
+      if (next) {
+        // Entering Quad View collapses the panels around the chart (the AI
+        // Synthesis/Alerts row above, the category panels below, and the
+        // price/news panel to the side) plus the app sidebar, so the 2x2
+        // grid gets full space.
+        setAisRowCollapsed(true);
+        setBelowChartCollapsed(true);
+        setRightOfChartCollapsed(true);
+        sidebarEvents.setCollapsed(true);
+        // The top-right tile (slot 1) always picks up whatever instrument
+        // was already being viewed, so switching into Quad View doesn't
+        // change what's on screen — it just adds 3 more charts around it.
+        // If that instrument has a defined confirmation set (see
+        // QUAD_CONFIRMATION_SET), the other 3 slots default to it too.
+        setQuadPairsState(prev => {
+          const confirmation = QUAD_CONFIRMATION_SET[selectedPair];
+          const nextPairs: [string, string, string, string] = confirmation
+            ? [confirmation[0], selectedPair, confirmation[1], confirmation[2]]
+            : [prev[0], selectedPair, prev[2], prev[3]];
+          if (nextPairs.every((p, i) => p === prev[i])) return prev;
+          setQuadPairs(nextPairs);
+          return nextPairs;
+        });
+      }
+      return next;
+    });
+  }, [selectedPair]);
+  const setQuadPairSlot = useCallback((idx: 0 | 1 | 2 | 3, value: string) => {
+    setQuadPairsState(prev => {
+      const next: [string, string, string, string] = [...prev];
+      next[idx] = value;
+      setQuadPairs(next);
+      return next;
+    });
+  }, []);
+  // Selecting an instrument from the top ticker/selector while in Quad View
+  // re-targets the whole grid at it — the primary tile (slot 1) switches to
+  // the new instrument and, same as freshly entering Quad View, the other 3
+  // slots reset to its QUAD_CONFIRMATION_SET (falling back to whatever was
+  // already in those slots if the instrument has none defined).
+  const selectPair = useCallback((pair: string) => {
+    setSelectedPair(pair);
+    if (quadView) {
+      setQuadPairsState(prev => {
+        const confirmation = QUAD_CONFIRMATION_SET[pair];
+        const next: [string, string, string, string] = confirmation
+          ? [confirmation[0], pair, confirmation[1], confirmation[2]]
+          : [prev[0], pair, prev[2], prev[3]];
+        setQuadPairs(next);
+        return next;
+      });
+    }
+  }, [quadView]);
+  // Favorites clicked from the Sidebar (or any other page) route through the
+  // same pub/sub that Pair Selector/Ticker clicks use — subscribed here
+  // (after selectPair is defined, so it's the quad-aware handler, not the
+  // raw setter) so a favorite pick also re-targets Quad View when it's on.
+  useEffect(() => pairSelectionEvents.subscribe((pair) => selectPair(pair)), [selectPair]);
   const close = useCallback(() => setExpanded(null), []);
 
   // ── Panel drag-and-drop (mouse-event based — avoids HTML5 DnD cursor issues) ─
@@ -11976,7 +14358,7 @@ export function AnalyticsV3() {
   const ichiBadge         = makeIchiBadge();
   const ichiBadgeExpanded = makeIchiBadge(true);
 
-  const sessionHeadline = sheetRows.length > 0 ? buildSessionAnalysis(sheetRows).headline : "";
+  const sessionHeadline = useMemo(() => sheetRows.length > 0 ? buildSessionAnalysis(sheetRows).headline : "", [sheetRows]);
   const sessionBias = !latestRow || sheetRows.length < 2 ? "neutral"
     : (() => {
         const prev = sheetRows[sheetRows.length - 2];
@@ -12008,7 +14390,7 @@ export function AnalyticsV3() {
   const sessionBadge         = makeSessionBadge();
   const sessionBadgeExpanded = makeSessionBadge(true);
 
-  const volHeadline = sheetRows.length > 0 ? buildVolumeAnalysis(sheetRows).headline : "";
+  const volHeadline = useMemo(() => sheetRows.length > 0 ? buildVolumeAnalysis(sheetRows).headline : "", [sheetRows]);
   const volBias = !latestRow ? "neutral"
     : (() => {
         const ratio = latestRow.volumeSma20 > 0 ? latestRow.volume / latestRow.volumeSma20 : 1;
@@ -12201,13 +14583,9 @@ export function AnalyticsV3() {
   const msBadgeExpanded = makeMsBadge(true);
 
   const [regimeShowCandles, setRegimeShowCandles] = useState(false);
-  const regimeRows   = iRows;
   const curRegimeState = useMemo<RegimeState>(() => {
     const seq = computeRegimeSequence(iRows);
     return seq[seq.length - 1] ?? "Ranging";
-  }, [iRows]);
-  const curVolState = useMemo<VolatilityState>(() => {
-    return iRows.length ? computeRegimeVolatility(iRows, iRows.length - 1) : "Neutral";
   }, [iRows]);
   const regimeAdx = iRows.length ? (iRows[iRows.length - 1]?.adx ?? 0) : 0;
   const isTrending = curRegimeState === "Trending" || curRegimeState === "StrongTrending";
@@ -12342,7 +14720,7 @@ export function AnalyticsV3() {
     : "neutral";
   const volaScore = useMemo(() => {
     if (!latestRow) return 0;
-    const { close, bbUpper, bbMiddle, bbLower } = latestRow;
+    const { close, bbUpper, bbMiddle } = latestRow;
     const halfBand = bbUpper - bbMiddle;
     if (halfBand <= 0) return 0;
     return Math.min(100, Math.round(Math.abs(close - bbMiddle) / halfBand * 100));
@@ -12570,8 +14948,8 @@ export function AnalyticsV3() {
         <div className="flex-1 min-w-0 h-full">
           <PairSelector
             value={selectedPair}
-            onPairChange={(pair) => setSelectedPair(pair)}
-            collapsedContent={<InstrumentTicker onSelect={(pair) => setSelectedPair(pair)} />}
+            onPairChange={selectPair}
+            collapsedContent={<InstrumentTicker onSelect={selectPair} />}
           />
         </div>
         {/* marginRight clears the app-level fixed fullscreen toggle (top:8/right:8, 26px) */}
@@ -12590,7 +14968,7 @@ export function AnalyticsV3() {
         }}
       >
         {/* ── Pinned top row (AI Synthesis + Price) ── */}
-        {!aisRowCollapsed && (
+        {!aisRowCollapsed && !quadView && (
         <div style={{
           display:             "grid",
           gridTemplateColumns: "repeat(4, 1fr)",
@@ -12644,7 +15022,9 @@ export function AnalyticsV3() {
         )}
 
         {/* ── Divider — doubles as the collapse/expand handle for the AI
-            Synthesis + Alerts row above ── */}
+            Synthesis + Alerts row above (hidden in Quad View, which never
+            shows this row) ── */}
+        {!quadView && (
         <div style={{ position: "relative", height: 1, background: "var(--border-medium)", flexShrink: 0 }}>
           <button
             onClick={() => setAisRowCollapsed(v => !v)}
@@ -12665,6 +15045,7 @@ export function AnalyticsV3() {
             }} />
           </button>
         </div>
+        )}
 
         {/* ── Scrollable bottom rows — category container panels ──
             paddingTop intentionally 0 so the sticky Indicator Timeframe row
@@ -12676,14 +15057,14 @@ export function AnalyticsV3() {
           // scrollbar itself sits 8px further right, closer to the window
           // edge; paddingRight bumped by the same 8px so content still ends
           // up at its original spot — only the scrollbar's position moves.
-          overflowY: belowChartCollapsed ? "hidden" : "auto", paddingTop: "0", paddingRight: "18px", marginRight: "-8px",
+          overflowY: effectiveBelowChartCollapsed ? "hidden" : "auto", paddingTop: "0", paddingRight: "18px", marginRight: "-8px",
         }}>
           {sheetRows.length === 0 && (
             // Same footprint as the real chart+toolbar below (toolbar strip +
             // 480px-tall panel) so the page doesn't visibly collapse down to
             // just the bottom rows while the initial candle fetch is still
             // in flight, then jump back open once sheetRows arrives.
-            <div style={{ marginTop: 10, flexShrink: 0, width: rightOfChartCollapsed ? "100%" : "76%" }}>
+            <div style={{ marginTop: 10, flexShrink: 0, width: effectiveRightOfChartCollapsed ? "100%" : "76%" }}>
               <div style={{ height: 34, marginBottom: 4 }} />
               <div style={{
                 height: 480 + chartHeightBoost, borderRadius: 14,
@@ -12697,12 +15078,39 @@ export function AnalyticsV3() {
           )}
           {sheetRows.length > 0 && (
             <div style={{
-              display: "flex", alignItems: belowChartCollapsed ? "stretch" : "flex-start", marginTop: 10,
-              ...(belowChartCollapsed ? { flex: 1, minHeight: 0 } : { flexShrink: 0 }),
+              display: "flex", alignItems: effectiveBelowChartCollapsed ? "stretch" : "flex-start", marginTop: 10,
+              ...(effectiveBelowChartCollapsed ? { flex: 1, minHeight: 0 } : { flexShrink: 0 }),
             }}>
-              <PriceHistoryChart rows={sheetRows} pair={selectedPair} chartTf={chartTf} setChartTf={setChartTf} livePrice={livePrice} expandWidth={rightOfChartCollapsed} expandHeight={belowChartCollapsed} heightBoost={chartHeightBoost} allPanelsCollapsed={allPanelsCollapsed} onToggleAllPanels={toggleAllPanels} rightOfChartCollapsed={rightOfChartCollapsed} onHeightChange={setChartColHeight} calendarEvents={calendarEvents} />
+              {quadView ? (
+                <div ref={quadGridRef} style={{
+                  width: effectiveRightOfChartCollapsed ? "100%" : "76%", marginBottom: 10, flexShrink: effectiveRightOfChartCollapsed ? 1 : 0,
+                  display: "grid", gridTemplateColumns: "1fr 1fr", gridTemplateRows: "1fr 1fr", gap: 1,
+                  background: "var(--border-medium)", borderRadius: 14, overflow: "hidden",
+                  height: effectiveBelowChartCollapsed ? "100%" : 480 + chartHeightBoost,
+                  ...(effectiveBelowChartCollapsed ? { flex: 1, minHeight: 0 } : {}),
+                }}>
+                  {quadPairs.map((qp, idx) => (
+                    <div key={idx} style={{ minWidth: 0, minHeight: 0, background: "#0f1117" }}>
+                      <PriceHistoryChart
+                        rows={sheetRows} pair={qp} onPairChange={(p) => setQuadPairSlot(idx as 0 | 1 | 2 | 3, p)}
+                        livePrice={null} expandWidth expandHeight heightBoost={0}
+                        allPanelsCollapsed={allPanelsCollapsed} onToggleAllPanels={toggleAllPanels}
+                        rightOfChartCollapsed={false} onHeightChange={() => {}}
+                        calendarEvents={calendarEvents} storedEconomicEvents={storedEconomicEvents} treasuryAuctions={treasuryAuctions}
+                        compact quadView={quadView} onToggleQuadView={toggleQuadView}
+                        showSnapshotAndExpand={idx === 1} snapshotTargetRef={quadGridRef}
+                        quadLocked={quadLocked} onToggleQuadLocked={toggleQuadLocked}
+                      />
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <PriceHistoryChart rows={sheetRows} pair={selectedPair} chartTf={chartTf} setChartTf={setChartTf} livePrice={livePrice} expandWidth={effectiveRightOfChartCollapsed} expandHeight={effectiveBelowChartCollapsed} heightBoost={chartHeightBoost} allPanelsCollapsed={allPanelsCollapsed} onToggleAllPanels={toggleAllPanels} rightOfChartCollapsed={effectiveRightOfChartCollapsed} onHeightChange={setChartColHeight} calendarEvents={calendarEvents} storedEconomicEvents={storedEconomicEvents} treasuryAuctions={treasuryAuctions} quadView={quadView} onToggleQuadView={toggleQuadView} />
+              )}
               {/* ── Vertical divider — doubles as the collapse/expand handle
-                  for the price/news panel right of the chart ── */}
+                  for the price/news panel right of the chart (hidden in
+                  Quad View, which never shows this panel) ── */}
+              {!quadView && (
               <div style={{ position: "relative", width: 1, alignSelf: "stretch", background: "var(--border-medium)", flexShrink: 0, marginLeft: 12 }}>
                 <button
                   onClick={() => setRightOfChartCollapsed(v => !v)}
@@ -12723,7 +15131,8 @@ export function AnalyticsV3() {
                   }} />
                 </button>
               </div>
-              {!rightOfChartCollapsed && (
+              )}
+              {!rightOfChartCollapsed && !quadView && (
               <div style={{ flex: 1, minWidth: 0, paddingLeft: 16, paddingRight: 0, marginTop: 4, position: "relative" }}>
                 <div ref={rightPanelHeaderRef}>
                 {/* Outer: fixed to the panel's actual available width, clips
@@ -12802,7 +15211,9 @@ export function AnalyticsV3() {
             </div>
           )}
           {/* ── Divider — doubles as the collapse/expand handle for
-              everything below the chart (Strategies + category panels) ── */}
+              everything below the chart (Strategies + category panels),
+              hidden in Quad View, which never shows these panels ── */}
+          {!quadView && (
           <div style={{ position: "relative", height: 2, background: "rgba(255,255,255,0.12)", margin: "10px 0 10px", flexShrink: 0 }}>
             <button
               onClick={() => setBelowChartCollapsed(v => !v)}
@@ -12823,7 +15234,8 @@ export function AnalyticsV3() {
               }} />
             </button>
           </div>
-          {!belowChartCollapsed && (
+          )}
+          {!belowChartCollapsed && !quadView && (
           <div style={{ display: "flex", flexDirection: "row", flexWrap: "wrap", columnGap: 10, rowGap: 0, alignItems: "flex-start", paddingTop: 10 }}>
             {(() => {
               let offset = 0;

@@ -1,17 +1,15 @@
 import { useEffect, useState } from "react";
 import {
-  LayoutDashboard, ScrollText, CalendarDays, BarChart2,
-  Calculator, Settings, Star, X,
+  LayoutDashboard, ScrollText, BarChart2,
+  Settings, Star, X, GripVertical,
   PanelLeftClose, PanelLeftOpen, ExternalLink, Music,
 } from "lucide-react";
 import { PieChart, Pie, Cell, ResponsiveContainer } from "recharts";
 import { clsx } from "clsx";
-import { useDatabase } from "../../db/DatabaseProvider";
-import { tradeEvents } from "../../lib/tradeEvents";
 import { pairSelectionEvents } from "../../lib/pairSelection";
-import { getSettings, getAccount, getPortfolio, type Account } from "../../db/queries";
+import { useAccountAndPortfolio, type PortfolioItem } from "../../hooks/useAccountAndPortfolio";
 import { logoSrc } from "../../config/branding";
-import { getMusicUrl, getAccountBrokerUrl, getFavoritePairs, removeFavoritePair } from "../../lib/preferences";
+import { getMusicUrl, getAccountBrokerUrl, getFavoritePairs, removeFavoritePair, reorderFavoritePairs } from "../../lib/preferences";
 import { useTheme } from "../../theme/ThemeContext";
 import { openUrl as openExternal } from "@tauri-apps/plugin-opener";
 
@@ -31,8 +29,6 @@ interface SidebarProps {
   collapsed:        boolean;
   onToggleCollapse: () => void;
 }
-
-type PortfolioItem = { name: string; value: number; color: string };
 
 function formatBalance(n: number) {
   return new Intl.NumberFormat("en-US", {
@@ -237,10 +233,17 @@ function PortfolioWidget({ portfolio, activeAccountName }: { portfolio: Portfoli
 // ─── Favorites panel — quick-select instruments, shown when expanded ─────────
 
 function FavoritesPanel({
-  favorites, onSelect, onRemove,
+  favorites, onSelect, onRemove, onReorder,
 }: {
   favorites: string[]; onSelect: (pair: string) => void; onRemove: (pair: string) => void;
+  onReorder: (pair: string, toIndex: number) => void;
 }) {
+  // Native HTML5 drag-and-drop — no new dependency needed for a plain
+  // reorder-within-one-list interaction. dragOverIndex just drives the
+  // insertion-line indicator; the actual reorder happens once on drop.
+  const [dragPair, setDragPair] = useState<string | null>(null);
+  const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
+
   if (favorites.length === 0) return null;
   return (
     <div className="px-2 pb-2">
@@ -255,12 +258,25 @@ function FavoritesPanel({
           </span>
         </div>
         <div className="flex flex-col gap-0.5 px-2 pb-2">
-          {favorites.map((pair) => (
+          {favorites.map((pair, i) => (
             <div
               key={pair}
+              draggable
+              onDragStart={(e) => { setDragPair(pair); e.dataTransfer.effectAllowed = "move"; }}
+              onDragOver={(e) => { e.preventDefault(); if (dragPair && dragPair !== pair) setDragOverIndex(i); }}
+              onDrop={(e) => {
+                e.preventDefault();
+                if (dragPair) onReorder(dragPair, i);
+                setDragPair(null); setDragOverIndex(null);
+              }}
+              onDragEnd={() => { setDragPair(null); setDragOverIndex(null); }}
               onClick={() => onSelect(pair)}
               className="group flex items-center justify-between rounded-lg px-2 py-1.5 cursor-pointer transition-colors min-w-0"
-              style={{ color: "var(--text-secondary)" }}
+              style={{
+                color: "var(--text-secondary)",
+                opacity: dragPair === pair ? 0.4 : 1,
+                boxShadow: dragOverIndex === i && dragPair !== pair ? "inset 0 2px 0 0 var(--accent-border)" : "none",
+              }}
               onMouseEnter={(e) => {
                 (e.currentTarget as HTMLElement).style.background = "var(--bg-hover)";
                 (e.currentTarget as HTMLElement).style.color = "var(--text-primary)";
@@ -270,7 +286,14 @@ function FavoritesPanel({
                 (e.currentTarget as HTMLElement).style.color = "var(--text-secondary)";
               }}
             >
-              <span className="text-[12px] font-medium truncate">{pair}</span>
+              <div className="flex items-center gap-1.5 min-w-0">
+                <GripVertical
+                  size={12}
+                  className="opacity-0 group-hover:opacity-100 transition-opacity shrink-0"
+                  style={{ color: "var(--text-muted)", cursor: "grab" }}
+                />
+                <span className="text-[12px] font-medium truncate">{pair}</span>
+              </div>
               <button
                 onClick={(e) => { e.stopPropagation(); onRemove(pair); }}
                 title="Remove from favorites"
@@ -290,29 +313,9 @@ function FavoritesPanel({
 // ─── Sidebar ──────────────────────────────────────────────────────────────────
 
 export function Sidebar({ activePage, onNavigate, collapsed, onToggleCollapse }: SidebarProps) {
-  const { ready } = useDatabase();
-  const [account,      setAccount]      = useState<Account | null>(null);
-  const [portfolio,    setPortfolio]    = useState<PortfolioItem[]>([]);
+  const { account, portfolio } = useAccountAndPortfolio();
   const [musicUrl,     setMusicUrl]     = useState(getMusicUrl);
   const [favorites,    setFavorites]    = useState<string[]>(getFavoritePairs);
-
-  const loadData = async () => {
-    if (!ready) return;
-    try {
-      const settings = await getSettings();
-      const [acc, port] = await Promise.all([
-        getAccount(settings?.selectedAccountId ?? "acc-1"),
-        getPortfolio(),
-      ]);
-      setAccount(acc);
-      setPortfolio(port);
-    } catch (err) {
-      console.error("[Sidebar] failed to load:", err);
-    }
-  };
-
-  useEffect(() => { loadData(); }, [ready]);
-  useEffect(() => { if (!ready) return; return tradeEvents.subscribe(loadData); }, [ready]);
 
   useEffect(() => {
     const handler = () => { setMusicUrl(getMusicUrl()); setFavorites(getFavoritePairs()); };
@@ -427,6 +430,7 @@ export function Sidebar({ activePage, onNavigate, collapsed, onToggleCollapse }:
               favorites={favorites}
               onSelect={(pair) => { onNavigate("analytics-v3"); pairSelectionEvents.select(pair); }}
               onRemove={removeFavoritePair}
+              onReorder={reorderFavoritePairs}
             />
           </div>
         )}

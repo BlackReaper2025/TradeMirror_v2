@@ -2,7 +2,6 @@ import React, { useState, useRef, useEffect, useCallback } from "react";
 import { createPortal } from "react-dom";
 import { Trash2, Settings } from "lucide-react";
 import { playAlertSound, ALERT_SOUNDS } from "../../lib/alertSound";
-import type { AlertSound } from "../../lib/alertSound";
 
 export interface Alert {
   id: string;

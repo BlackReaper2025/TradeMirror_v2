@@ -4,21 +4,13 @@ import { ArrowUpRight, ArrowDownRight, BookOpen, Pencil, Trash2 } from "lucide-r
 import { Badge } from "../ui/Badge";
 import type { TradeWithJournal } from "../../db/queries";
 import { getTimeFormat } from "../../lib/preferences";
+import { formatTradeTime, formatSignedDollar } from "../../lib/tradeFormat";
 
 interface Props {
   trades: TradeWithJournal[];
   onNewTrade: () => void;
   onEditTrade: (trade: TradeWithJournal) => void;
   onDeleteTrade: (tradeId: string) => void;
-}
-
-function fmt(n: number | null | undefined) {
-  if (n == null) return "—";
-  const abs = Math.abs(n).toLocaleString("en-US", {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  });
-  return n >= 0 ? `+$${abs}` : `-$${abs}`;
 }
 
 function fmtPrice(n: number | null | undefined) {
@@ -34,20 +26,6 @@ function fmtSize(n: number | null | undefined) {
 function fmtDate(iso: string) {
   const d = new Date(iso);
   return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
-}
-
-function fmtTime(iso: string, hour12: boolean) {
-  return new Date(iso).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12 });
-}
-
-function calcRR(t: TradeWithJournal): string {
-  const { entryPrice: e, stopPrice: s, targetPrice: tp, side } = t;
-  if (e == null || s == null || tp == null) return "—";
-  const risk   = side === "long" ? e - s : s - e;
-  const reward = side === "long" ? tp - e : e - tp;
-  if (risk <= 0) return "—";
-  const rr = reward / risk;
-  return `${rr >= 0 ? "+" : ""}${rr.toFixed(1)}R`;
 }
 
 const COL_HEADERS = [
@@ -118,7 +96,7 @@ const TradeRow = memo(function TradeRow({
       {/* Entry Time */}
       <td className="px-3 py-3 text-center tabular-nums" style={{ boxShadow: "inset -1px 0 0 var(--border-subtle)" }}>
         <span className="text-[11px]" style={{ color: "var(--text-muted)" }}>
-          {fmtTime(trade.openedAt, hour12)}
+          {formatTradeTime(trade.openedAt, hour12)}
         </span>
       </td>
 
@@ -185,7 +163,7 @@ const TradeRow = memo(function TradeRow({
       {/* Exit Time */}
       <td className="px-3 py-3 text-center tabular-nums">
         <span className="text-[11px]" style={{ color: "var(--text-muted)" }}>
-          {trade.closedAt ? fmtTime(trade.closedAt, hour12) : "—"}
+          {trade.closedAt ? formatTradeTime(trade.closedAt, hour12) : "—"}
         </span>
       </td>
 
@@ -199,7 +177,7 @@ const TradeRow = memo(function TradeRow({
       {/* P&L */}
       <td className="px-3 py-3 text-center tabular-nums" style={{ boxShadow: "inset -1px 0 0 var(--border-subtle)" }}>
         <span className="text-[13px] font-bold" style={{ color: pnlColor }}>
-          {fmt(pnl)}
+          {formatSignedDollar(pnl)}
         </span>
       </td>
 

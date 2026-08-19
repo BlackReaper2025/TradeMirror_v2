@@ -78,19 +78,6 @@ function ChipBtn({
   );
 }
 
-function StatRow({
-  label, value, color,
-}: { label: string; value: string; color?: string }) {
-  return (
-    <div className="flex items-center justify-between">
-      <span className="text-[11px]" style={{ color: "var(--text-muted)" }}>{label}</span>
-      <span className="text-[12px] font-semibold tabular-nums" style={{ color: color ?? "var(--text-primary)" }}>
-        {value}
-      </span>
-    </div>
-  );
-}
-
 // ─── constants ────────────────────────────────────────────────────────────────
 
 const RR_PRESETS   = ["1:1", "2:1", "3:1", "4:1", "Custom"] as const;

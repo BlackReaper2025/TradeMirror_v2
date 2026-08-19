@@ -7,30 +7,13 @@ import {
   getAllTradesWithJournal,
   getSettings,
   getAccount,
-  createTrade,
-  createJournalEntry,
-  updateTrade,
-  upsertJournalEntry,
-  syncTradeImages,
   deleteTradeById,
-  recalculateDailyStats,
-  updateAccountBalance,
   type TradeWithJournal,
   type Account,
 } from "../db/queries";
 import { TradeForm, type TradeFormValues } from "../components/tradelog/TradeForm";
-import { tradeEvents } from "../lib/tradeEvents";
-
-function fmt$(n: number) {
-  const abs = Math.abs(n).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  return n >= 0 ? `+$${abs}` : `-$${abs}`;
-}
-
-// Normalise a datetime-local string to a full "YYYY-MM-DDTHH:MM:SS" (no Z).
-function normaliseDateTime(v: string): string {
-  if (!v) return v;
-  return v.length === 16 ? v + ":00" : v.replace(/Z$/, "");
-}
+import { finishTradeSave, saveNewTrade, saveEditedTrade } from "../lib/tradeSave";
+import { formatSignedDollar } from "../lib/tradeFormat";
 
 export function TradeLog() {
   const { ready } = useDatabase();
@@ -61,133 +44,40 @@ export function TradeLog() {
 
   useEffect(() => { load(); }, [load]);
 
-  // ── Shared: finish a create/edit by recalculating stats + notifying ──────────
-  async function finishSave(accountId: string, days: string[]) {
-    const uniqueDays = [...new Set(days)];
-    for (const d of uniqueDays) await recalculateDailyStats(accountId, d);
-    await updateAccountBalance(accountId);
-    tradeEvents.notify();
+  // ── Shared: finish a create/edit/delete by closing the form + refetching ─────
+  const finishAndRefetch = useCallback(async (accountId: string, days: string[]) => {
+    await finishTradeSave(accountId, days);
     setShowForm(false);
     setEditTrade(null);
     await load();
-  }
+  }, [load]);
 
   // ── Create a new trade ────────────────────────────────────────────────────
   const handleSave = useCallback(async (values: TradeFormValues) => {
     if (!account) return;
     setSaveError(null);
     try {
-      const tradeId   = `t-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-      const journalId = `j-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-      const openedAt  = normaliseDateTime(values.openedAt);
-      const closedAt  = values.closedAt ? normaliseDateTime(values.closedAt) : undefined;
-      const day       = (closedAt ?? openedAt).split("T")[0];
-
-      await createTrade({
-        id: tradeId, accountId: account.id, openedAt,
-        closedAt,
-        instrument:     values.instrument.trim(),
-        side:           values.side,
-        setupName:      values.setupName.trim()      || undefined,
-        entryPrice:     values.entryPrice   ? parseFloat(values.entryPrice)  : undefined,
-        stopPrice:      values.stopPrice    ? parseFloat(values.stopPrice)   : undefined,
-        targetPrice:    values.targetPrice  ? parseFloat(values.targetPrice) : undefined,
-        size:           values.size         ? parseFloat(values.size)        : undefined,
-        fees:           values.fees         ? parseFloat(values.fees)        : 0,
-        pnl:            values.pnl          ? parseFloat(values.pnl)         : 0,
-        technicalNotes: values.technicalNotes.trim()  || undefined,
-        tags:           values.tags.trim()            || undefined,
-        tradeRef:       values.tradeRef.trim()        || undefined,
-        exitPrice:      values.exitPrice  ? parseFloat(values.exitPrice)  : undefined,
-        slPips:         values.slPips  ? parseFloat(values.slPips)  : undefined,
-        tpPips:         values.tpPips  ? parseFloat(values.tpPips)  : undefined,
-        maePips:        values.maePips ? parseFloat(values.maePips) : undefined,
-        mae:            values.mae     ? parseFloat(values.mae)     : undefined,
-        maeTime:        values.maeTime ? normaliseDateTime(values.maeTime) : undefined,
-        mfePips:        values.mfePips ? parseFloat(values.mfePips) : undefined,
-        mfe:            values.mfe     ? parseFloat(values.mfe)     : undefined,
-        mfeTime:        values.mfeTime ? normaliseDateTime(values.mfeTime) : undefined,
-      });
-
-      await createJournalEntry({
-        id: journalId, tradeId,
-        emotionBefore:   values.emotionBefore                      || undefined,
-        emotionAfter:    values.emotionAfter                       || undefined,
-        mistakes:        values.mistakes.trim()                    || undefined,
-        lessons:         values.lessons.trim()                     || undefined,
-        confidenceScore: values.confidenceScore ? parseInt(values.confidenceScore) : undefined,
-        disciplineScore: values.disciplineScore ? parseInt(values.disciplineScore) : undefined,
-        freeformNotes:   values.freeformNotes.trim()               || undefined,
-      });
-
-      await syncTradeImages(tradeId, values.images);
-
-      await finishSave(account.id, [day]);
+      const { day } = await saveNewTrade(account, values);
+      await finishAndRefetch(account.id, [day]);
     } catch (err) {
       console.error("[TradeLog] create error:", err);
       setSaveError(String(err));
     }
-  }, [account, load]);   // eslint-disable-line react-hooks/exhaustive-deps
+  }, [account, finishAndRefetch]);
 
   // ── Edit an existing trade ────────────────────────────────────────────────
   const handleEditSave = useCallback(async (values: TradeFormValues) => {
     if (!account || !editTrade) return;
     setSaveError(null);
     try {
-      const oldDay   = (editTrade.closedAt ?? editTrade.openedAt).slice(0, 10);
-      const openedAt = normaliseDateTime(values.openedAt);
-      const closedAt = values.closedAt ? normaliseDateTime(values.closedAt) : undefined;
-      const newDay   = (closedAt ?? openedAt).split("T")[0];
-
-      await updateTrade(editTrade.id, {
-        openedAt,
-        closedAt,
-        instrument:     values.instrument.trim(),
-        side:           values.side,
-        setupName:      values.setupName.trim()      || undefined,
-        entryPrice:     values.entryPrice   ? parseFloat(values.entryPrice)  : undefined,
-        stopPrice:      values.stopPrice    ? parseFloat(values.stopPrice)   : undefined,
-        targetPrice:    values.targetPrice  ? parseFloat(values.targetPrice) : undefined,
-        size:           values.size         ? parseFloat(values.size)        : undefined,
-        fees:           values.fees         ? parseFloat(values.fees)        : 0,
-        pnl:            values.pnl          ? parseFloat(values.pnl)         : 0,
-        technicalNotes: values.technicalNotes.trim()  || undefined,
-        tags:           values.tags.trim()            || undefined,
-        tradeRef:       values.tradeRef.trim()        || undefined,
-        exitPrice:      values.exitPrice  ? parseFloat(values.exitPrice)  : undefined,
-        slPips:         values.slPips  ? parseFloat(values.slPips)  : undefined,
-        tpPips:         values.tpPips  ? parseFloat(values.tpPips)  : undefined,
-        maePips:        values.maePips ? parseFloat(values.maePips) : undefined,
-        mae:            values.mae     ? parseFloat(values.mae)     : undefined,
-        maeTime:        values.maeTime ? normaliseDateTime(values.maeTime) : undefined,
-        mfePips:        values.mfePips ? parseFloat(values.mfePips) : undefined,
-        mfe:            values.mfe     ? parseFloat(values.mfe)     : undefined,
-        mfeTime:        values.mfeTime ? normaliseDateTime(values.mfeTime) : undefined,
-      });
-
-      await upsertJournalEntry(
-        editTrade.id,
-        editTrade.journal?.id ?? null,
-        {
-          emotionBefore:   values.emotionBefore                      || undefined,
-          emotionAfter:    values.emotionAfter                       || undefined,
-          mistakes:        values.mistakes.trim()                    || undefined,
-          lessons:         values.lessons.trim()                     || undefined,
-          confidenceScore: values.confidenceScore ? parseInt(values.confidenceScore) : undefined,
-          disciplineScore: values.disciplineScore ? parseInt(values.disciplineScore) : undefined,
-          freeformNotes:   values.freeformNotes.trim()               || undefined,
-        }
-      );
-
-      await syncTradeImages(editTrade.id, values.images);
-
       // Recalculate both days in case openedAt moved to a different date
-      await finishSave(account.id, [oldDay, newDay]);
+      const { oldDay, newDay } = await saveEditedTrade(editTrade, values);
+      await finishAndRefetch(account.id, [oldDay, newDay]);
     } catch (err) {
       console.error("[TradeLog] edit error:", err);
       setSaveError(String(err));
     }
-  }, [account, editTrade, load]);   // eslint-disable-line react-hooks/exhaustive-deps
+  }, [account, editTrade, finishAndRefetch]);
 
   // ── Delete a trade ────────────────────────────────────────────────────────
   const handleDelete = useCallback(async (tradeId: string) => {
@@ -195,12 +85,19 @@ export function TradeLog() {
     setSaveError(null);
     try {
       const result = await deleteTradeById(tradeId);
-      if (result) await finishSave(result.accountId, [result.day]);
+      if (result) await finishAndRefetch(result.accountId, [result.day]);
     } catch (err) {
       console.error("[TradeLog] delete error:", err);
       setSaveError(String(err));
     }
-  }, [account, load]);   // eslint-disable-line react-hooks/exhaustive-deps
+  }, [account, finishAndRefetch]);
+
+  // ── Open the form for a new/existing trade ────────────────────────────────
+  // Stable identities (no deps that change per-row) so TradeTable's per-row
+  // memoization isn't invalidated on every TradeLog render — previously these
+  // were inline arrows recreated each render, silently defeating TradeRow's memo.
+  const handleNewTrade = useCallback(() => { setEditTrade(null); setShowForm(true); }, []);
+  const handleEditTrade = useCallback((t: TradeWithJournal) => { setEditTrade(t); setShowForm(true); }, []);
 
   // ── Summary stats from loaded trades ──────────────────────────────────────
   // Memoized so unrelated re-renders (form open/close, save errors) don't redo
@@ -229,10 +126,10 @@ export function TradeLog() {
           <div className="grid" style={{ gridTemplateColumns: "repeat(7, 1fr)" }}>
             <StatStrip label="Total Trades" value={String(trades.length)} />
             <StatStrip label="Win Rate" value={`${winRate}%`} sub={`${wins.length}W · ${losses.length}L`} accent />
-            <StatStrip label="Total P&L" value={trades.length ? fmt$(totalPnl) : "—"} positive={totalPnl > 0} negative={totalPnl < 0} />
+            <StatStrip label="Total P&L" value={trades.length ? formatSignedDollar(totalPnl) : "—"} positive={totalPnl > 0} negative={totalPnl < 0} />
             <StatStrip label="Avg Win" value={avgWin > 0 ? `+$${avgWin.toFixed(2)}` : "—"} positive={avgWin > 0} />
             <StatStrip label="Avg Loss" value={avgLoss > 0 ? `-$${avgLoss.toFixed(2)}` : "—"} negative={avgLoss > 0} />
-            <StatStrip label="Largest Win" value={largestWin > 0 ? fmt$(largestWin) : "—"} positive={largestWin > 0} />
+            <StatStrip label="Largest Win" value={largestWin > 0 ? formatSignedDollar(largestWin) : "—"} positive={largestWin > 0} />
             <StatStrip label="Largest Loss" value={largestLoss > 0 ? `-$${largestLoss.toFixed(2)}` : "—"} negative={largestLoss > 0} />
           </div>
         </Panel>
@@ -249,8 +146,8 @@ export function TradeLog() {
         ) : (
           <TradeTable
             trades={trades}
-            onNewTrade={() => { setEditTrade(null); setShowForm(true); }}
-            onEditTrade={(t) => { setEditTrade(t); setShowForm(true); }}
+            onNewTrade={handleNewTrade}
+            onEditTrade={handleEditTrade}
             onDeleteTrade={handleDelete}
           />
         )}
@@ -289,13 +186,12 @@ interface StatStripProps {
   label: string;
   value: string;
   sub?: string;
-  icon?: React.ReactNode;
   accent?: boolean;
   positive?: boolean;
   negative?: boolean;
 }
 
-function StatStrip({ label, value, sub, icon, accent, positive, negative }: StatStripProps) {
+function StatStrip({ label, value, sub, accent, positive, negative }: StatStripProps) {
   const color = accent
     ? "var(--accent-text)"
     : positive

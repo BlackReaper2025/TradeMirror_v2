@@ -2,9 +2,8 @@
 import { useEffect, useState, useCallback } from "react";
 import { useDatabase } from "../db/DatabaseProvider";
 import { tradeEvents } from "../lib/tradeEvents";
+import { useAccountAndPortfolio } from "./useAccountAndPortfolio";
 import {
-  getSettings,
-  getAccount,
   getTodayLiveStats,
   getTodayTrades,
   getAllTimeStats,
@@ -13,7 +12,6 @@ import {
   getTodayFullStats,
   getEquityCurve,
   getCalendarDays,
-  getPortfolio,
   getActiveQuotes,
   type Account,
   type Trade,
@@ -62,6 +60,10 @@ const EMPTY: DashboardData = {
 
 export function useDashboardData() {
   const { ready, error } = useDatabase();
+  // account + portfolio come from the shared hook (also used by Sidebar) so
+  // a trade event doesn't trigger two independent getAccount/getPortfolio
+  // round trips for the same rows.
+  const { account, portfolio } = useAccountAndPortfolio();
   const [data, setData]     = useState<DashboardData>(EMPTY);
   const [loading, setLoading] = useState(true);
 
@@ -71,26 +73,38 @@ export function useDashboardData() {
       setLoading(false);
       return;
     }
-    if (!ready) return;
+    if (!ready || !account) return;
 
     try {
-      const settings  = await getSettings();
-      const accountId = settings?.selectedAccountId ?? "acc-1";
-
+      const accountId = account.id;
       const [
-        account, todayStats, allTimeStats, monthlyStats, weeklyStats, todayFullStats,
-        recentTrades, equityCurve, calendarDays, portfolio, quotes,
+        todayStats, allTimeStats, monthlyStats, weeklyStats, todayFullStats,
+        recentTrades, equityCurve, calendarDays, quotes,
       ] = await Promise.all([
-        getAccount(accountId),
         getTodayLiveStats(accountId),
         getAllTimeStats(accountId),
         getMonthlyStats(accountId),
         getWeeklyStats(accountId),
         getTodayFullStats(accountId),
         getTodayTrades(accountId),
+        // Always the full ~10y range, not just what the active EquityChart
+        // timeframe needs — getEquityCurve's running balance is computed by
+        // walking forward from account.startingBalance through every daily
+        // row since `since`, so a shorter window would start the walk from
+        // the true starting balance but skip the P&L accumulated before that
+        // window, silently understating/overstating every balance in the
+        // result. EquityChart already does its own client-side windowing
+        // (filterCurve) over this same full array per selected timeframe, so
+        // this fetch only needs to happen once per trade event rather than
+        // once per timeframe click either way.
         getEquityCurve(accountId, 3650),
+        // Also deliberately wider than the visible month: CalendarPanel lets
+        // the user page to prior months/years client-side (prevMonth/
+        // nextMonth), and re-fetching on every one of those clicks would
+        // trade a bigger upfront payload for a network round-trip per
+        // navigation. 365 days covers the common case of browsing back
+        // within the current year without either cost.
         getCalendarDays(accountId, 365),
-        getPortfolio(),
         getActiveQuotes(),
       ]);
 
@@ -100,7 +114,7 @@ export function useDashboardData() {
       console.error("[useDashboardData] Query failed:", err);
       setLoading(false);
     }
-  }, [ready, error]);
+  }, [ready, error, account, portfolio]);
 
   useEffect(() => { load(); }, [load]);
 

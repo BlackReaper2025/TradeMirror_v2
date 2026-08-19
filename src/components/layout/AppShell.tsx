@@ -1,8 +1,9 @@
-import { useState, ReactNode } from "react";
+import { useEffect, useState, ReactNode } from "react";
 import { Maximize2, Minimize2 } from "lucide-react";
 import { Sidebar, Page } from "./Sidebar";
 import { useFullscreen } from "../../hooks/useFullscreen";
 import { RadialGlowBackground } from "../backgrounds/RadialGlowBackground";
+import { sidebarEvents } from "../../lib/sidebarEvents";
 
 interface AppShellProps {
   children: (page: Page) => ReactNode;
@@ -12,6 +13,10 @@ export function AppShell({ children }: AppShellProps) {
   const [activePage, setActivePage] = useState<Page>("dashboard");
   const [collapsed,  setCollapsed]  = useState(false);
   const { isFullscreen, toggle: toggleFullscreen } = useFullscreen();
+
+  // Analytics V3's "collapse panels around chart" button mirrors its state
+  // onto the sidebar too — see src/lib/sidebarEvents.ts.
+  useEffect(() => sidebarEvents.subscribe((c) => setCollapsed(c)), []);
 
   return (
     <div

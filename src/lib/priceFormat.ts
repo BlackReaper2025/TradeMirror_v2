@@ -11,11 +11,16 @@
 // cross the 100 threshold (AUD/JPY, NZD/JPY) depending on market conditions.
 export function decimalsForPair(pair: string, price?: number): number {
   if (pair === "US100") return 1; // always 1 decimal, regardless of price
+  if (pair === "US500") return 2; // always 2 decimals, regardless of price
+  // Global indices all quote at 1 decimal on OANDA regardless of price level
+  // (confirmed live: DE30/UK100/JP225/FR40/EU50/HK33/AU200), same as US100.
+  if (["DE30", "UK100", "JP225", "FR40", "EU50", "HK33", "AU200"].includes(pair)) return 1;
 
   const base = (() => {
     switch (pair) {
-      case "US500": case "US30": case "USOIL": case "XAU/USD": return 2;
+      case "US30": case "USOIL": case "XAU/USD": return 2;
       case "XAG/USD": return 3;
+      case "NATGAS": return 3;
       case "BTC/USD": case "ETH/USD": return 0;
       default: return 5;
     }

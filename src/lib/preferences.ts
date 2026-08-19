@@ -6,10 +6,10 @@ export type TimeFormat = "12h" | "24h";
 
 const KEYS = {
   timeFormat:        "tm_time_format",
-  brokerageUrl:      "tm_brokerage_url",
   musicUrl:          "tm_music_url",
   slideshowFolder:   "tm_slideshow_folder",
   slideshowInterval: "tm_slideshow_interval",
+  treasuryAuctionsBackfilled: "tm_treasury_auctions_backfilled",
 } as const;
 
 export function getTimeFormat(): TimeFormat {
@@ -17,14 +17,6 @@ export function getTimeFormat(): TimeFormat {
 }
 export function setTimeFormat(fmt: TimeFormat): void {
   localStorage.setItem(KEYS.timeFormat, fmt);
-  window.dispatchEvent(new CustomEvent("tm:prefs-changed"));
-}
-
-export function getBrokerageUrl(): string {
-  return localStorage.getItem(KEYS.brokerageUrl) ?? "";
-}
-export function setBrokerageUrl(url: string): void {
-  localStorage.setItem(KEYS.brokerageUrl, url);
   window.dispatchEvent(new CustomEvent("tm:prefs-changed"));
 }
 
@@ -125,6 +117,27 @@ export function removeFavoritePair(pair: string): void {
 export function toggleFavoritePair(pair: string): void {
   if (isFavoritePair(pair)) removeFavoritePair(pair); else addFavoritePair(pair);
 }
+// Drag-and-drop reorder — moves `pair` to sit at `toIndex` in the list.
+export function reorderFavoritePairs(pair: string, toIndex: number): void {
+  const cur = getFavoritePairs();
+  const from = cur.indexOf(pair);
+  if (from === -1) return;
+  cur.splice(from, 1);
+  cur.splice(Math.max(0, Math.min(toIndex, cur.length)), 0, pair);
+  localStorage.setItem(FAVORITE_PAIRS_KEY, JSON.stringify(cur));
+  window.dispatchEvent(new CustomEvent("tm:prefs-changed"));
+}
+
+// One-time flag so the News indicator's deep Treasury-auction history
+// backfill (backfill_treasury_auctions — TreasuryDirect's full 1979-2026
+// archive for 10Y/30Y) only ever runs once per install rather than on
+// every app launch.
+export function getTreasuryAuctionsBackfilled(): boolean {
+  return localStorage.getItem(KEYS.treasuryAuctionsBackfilled) === "1";
+}
+export function setTreasuryAuctionsBackfilled(): void {
+  localStorage.setItem(KEYS.treasuryAuctionsBackfilled, "1");
+}
 
 // Reversal Candles chart indicator — location filters + which candle-shape
 // groups are enabled, remembered across app restarts.
@@ -162,6 +175,31 @@ export function getReversalSettings(defaultPatternGroups: string[]): ReversalSet
 }
 export function setReversalSettings(settings: ReversalSettings): void {
   localStorage.setItem(REVERSAL_SETTINGS_KEY, JSON.stringify(settings));
+}
+
+// Quad Chart — the 4 independent instruments shown in Analytics V3's Quad
+// View (slot 0 defaults to whatever pair was charted when Quad View was
+// first opened; every slot is freely reassignable from then on). Remembered
+// across restarts.
+const QUAD_PAIRS_KEY = "tm_quad_pairs";
+const DEFAULT_QUAD_PAIRS: [string, string, string, string] = ["EUR/USD", "GBP/USD", "USD/JPY", "XAU/USD"];
+
+export function getQuadPairs(): [string, string, string, string] {
+  try {
+    const raw = localStorage.getItem(QUAD_PAIRS_KEY);
+    if (!raw) return [...DEFAULT_QUAD_PAIRS];
+    const parsed: unknown = JSON.parse(raw);
+    if (Array.isArray(parsed) && parsed.length === 4 && parsed.every((p) => typeof p === "string")) {
+      return parsed as [string, string, string, string];
+    }
+    return [...DEFAULT_QUAD_PAIRS];
+  } catch {
+    return [...DEFAULT_QUAD_PAIRS];
+  }
+}
+export function setQuadPairs(pairs: [string, string, string, string]): void {
+  localStorage.setItem(QUAD_PAIRS_KEY, JSON.stringify(pairs));
+  window.dispatchEvent(new CustomEvent("tm:prefs-changed"));
 }
 
 export function getAnalyticsPanelOrder(defaultOrder: string[]): string[] {

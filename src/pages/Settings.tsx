@@ -3,7 +3,7 @@ import { Plus, Check, Trash2, FolderOpen, Pencil, Archive, ArchiveRestore } from
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { Panel, PanelHeader } from "../components/ui/Panel";
 import { getTimeFormat, setTimeFormat, type TimeFormat } from "../lib/preferences";
-import { getBrokerageUrl, setBrokerageUrl, getMusicUrl, setMusicUrl, getSlideshowFolder, setSlideshowFolder, getSlideshowInterval, setSlideshowInterval, getAccountBrokerUrl, setAccountBrokerUrl } from "../lib/preferences";
+import { getMusicUrl, setMusicUrl, getSlideshowFolder, setSlideshowFolder, getSlideshowInterval, setSlideshowInterval, getAccountBrokerUrl, setAccountBrokerUrl } from "../lib/preferences";
 import {
   getSettings,
   getActiveAccounts,
@@ -184,14 +184,10 @@ export function Settings() {
   }
 
   // ── External URLs ──
-  const [brokerUrl,       setBrokerLocal]       = useState(getBrokerageUrl);
   const [musicUrl,        setMusicLocal]        = useState(getMusicUrl);
   const [slideshowFolder,   setSlideshowLocal]   = useState(getSlideshowFolder);
   const [slideshowInterval, setSlideshowInterval_] = useState(() => String(getSlideshowInterval()));
 
-  function saveBrokerUrl() {
-    setBrokerageUrl(brokerUrl.trim());
-  }
   function saveMusicUrl() {
     setMusicUrl(musicUrl.trim());
   }

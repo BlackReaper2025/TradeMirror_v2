@@ -23,19 +23,6 @@ export function localDateStr(date: Date = new Date()): string {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
 }
 
-// Trading day resets at 6pm. Before 6pm the session started yesterday at 18:00.
-function tradingDayBounds(): { start: string; end: string } {
-  const pad  = (n: number) => String(n).padStart(2, "0");
-  const fmtDT = (d: Date, h: number, m: number, s: number) =>
-    `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(h)}:${pad(m)}:${pad(s)}`;
-  const now   = new Date();
-  const start = new Date(now);
-  if (now.getHours() < 18) start.setDate(start.getDate() - 1);
-  const end   = new Date(start);
-  end.setDate(end.getDate() + 1);
-  return { start: fmtDT(start, 18, 0, 0), end: fmtDT(end, 17, 59, 59) };
-}
-
 // ─── Inferred types ───────────────────────────────────────────────────────────
 
 export type Account      = typeof accounts.$inferSelect;
@@ -1071,8 +1058,6 @@ export async function updateAccountBalance(accountId: string): Promise<void> {
 
   const newBalance     = account.startingBalance + totalPnl;
 
-  console.log("[updateAccountBalance] accountId:", accountId, "totalPnl:", totalPnl, "newBalance:", newBalance);
-
   await db
     .update(accounts)
     .set({ currentBalance: newBalance })
@@ -1140,8 +1125,6 @@ export async function recalculateDailyStats(
 ): Promise<void> {
   const db = getDb();
 
-  console.log("[recalculateDailyStats] accountId:", accountId, "day:", day);
-
   // Bounds without Z — trades stored as local datetime strings
   // Use closedAt so trades appear on the calendar date they were closed
   const dayTrades = await db
@@ -1154,8 +1137,6 @@ export async function recalculateDailyStats(
         lte(trades.closedAt, day + "T23:59:59")
       )
     );
-
-  console.log("[recalculateDailyStats] found", dayTrades.length, "trades for", day);
 
   if (dayTrades.length === 0) {
     // Remove the stats row if no trades remain

@@ -165,6 +165,18 @@ fn to_oanda_instrument(pair: &str) -> String {
         "US100" => "NAS100_USD".to_string(),
         "US30"  => "US30_USD".to_string(),
         "USOIL" => "WTICO_USD".to_string(),
+        "NATGAS" => "NATGAS_USD".to_string(),
+        "US02Y" => "USB02Y_USD".to_string(),
+        "US05Y" => "USB05Y_USD".to_string(),
+        "US10Y" => "USB10Y_USD".to_string(),
+        "US30Y" => "USB30Y_USD".to_string(),
+        "DE30"  => "DE30_EUR".to_string(),
+        "UK100" => "UK100_GBP".to_string(),
+        "JP225" => "JP225_USD".to_string(),
+        "FR40"  => "FR40_EUR".to_string(),
+        "EU50"  => "EU50_EUR".to_string(),
+        "HK33"  => "HK33_HKD".to_string(),
+        "AU200" => "AU200_AUD".to_string(),
         _ => format!("{}_{}", &pair[..3], &pair[3..]),
     }
 }
@@ -173,12 +185,7 @@ fn to_oanda_instrument(pair: &str) -> String {
 /// `pair` is a display pair like "EURUSD"; it is normalized to the OANDA instrument
 /// form for the fetch and back to a bare symbol (no separators) for storage.
 fn background_sync(db_path: &str, pair: &str) -> Result<usize, String> {
-    let contents = std::fs::read_to_string(OANDA_KEY_PATH)
-        .map_err(|e| format!("Could not read OANDA key file: {}", e))?;
-    let api_key = contents.lines().next().unwrap_or("").trim().to_string();
-    if api_key.is_empty() {
-        return Err("OANDA API key is empty".into());
-    }
+    let api_key = read_oanda_key()?;
     let instrument = to_oanda_instrument(pair);
     let symbol = instrument.replace('_', "");
     let raw = oanda_client::fetch_raw_candles(&api_key, &instrument, 500)?;
@@ -215,18 +222,30 @@ fn sync_oanda_candles_v3(app: tauri::AppHandle, pair: String) -> Result<usize, S
 // ─── Analytics V3 ─────────────────────────────────────────────────────────────
 mod analytics_v3_demo;
 mod candle_store;
+mod economic_events_store;
 mod oanda_client;
+mod treasury_auctions_store;
 mod indicators;
 mod scoring;
 mod backtest;
 use analytics_v3_demo::CandleV3;
 
-/// Read the OANDA API key from disk (first non-empty line).
+/// Read the OANDA API key from disk (first non-empty line), cached for the
+/// process lifetime — this used to be re-read from disk on every single
+/// command call (get_live_price polls every 5s, others every 10-60s), which
+/// added a filesystem round-trip to each one for a value that's effectively
+/// constant during a session. Same OnceLock pattern as oanda_client::client().
+/// A key file edit while the app is running needs a restart to pick up —
+/// acceptable given how rarely the key itself changes.
 fn read_oanda_key() -> Result<String, String> {
-    let contents = std::fs::read_to_string(OANDA_KEY_PATH)
-        .map_err(|e| format!("Could not read OANDA key file: {}", e))?;
-    let key = contents.lines().next().unwrap_or("").trim().to_string();
-    if key.is_empty() { Err("OANDA API key is empty".into()) } else { Ok(key) }
+    use std::sync::OnceLock;
+    static KEY: OnceLock<Result<String, String>> = OnceLock::new();
+    KEY.get_or_init(|| {
+        let contents = std::fs::read_to_string(OANDA_KEY_PATH)
+            .map_err(|e| format!("Could not read OANDA key file: {}", e))?;
+        let key = contents.lines().next().unwrap_or("").trim().to_string();
+        if key.is_empty() { Err("OANDA API key is empty".into()) } else { Ok(key) }
+    }).clone()
 }
 
 #[tauri::command]
@@ -393,7 +412,7 @@ struct EconomicEvent {
 }
 
 #[tauri::command]
-fn get_economic_calendar() -> Result<Vec<EconomicEvent>, String> {
+fn get_economic_calendar(app: tauri::AppHandle) -> Result<Vec<EconomicEvent>, String> {
     let client = reqwest::blocking::Client::builder()
         .timeout(std::time::Duration::from_secs(8))
         .user_agent("Mozilla/5.0 (compatible; TradeMirror/1.0)")
@@ -415,7 +434,171 @@ fn get_economic_calendar() -> Result<Vec<EconomicEvent>, String> {
         .json::<Vec<EconomicEvent>>()
         .map_err(|e| format!("parse: {}", e))?;
 
+    // Best-effort persistence: this feed drops every event once it scrolls out
+    // of its own current-week window, which is what makes a past release's
+    // actual/forecast/previous unrecoverable for the News indicator's
+    // surprise tooltip. Saving each poll (keyed on title+date, so the same
+    // event just gets its `actual` filled in once released) is what lets that
+    // data survive. A save failure shouldn't break the calendar feature the
+    // rest of the app already relies on, so it's logged, not propagated.
+    if let Ok(db_path) = app.path().app_data_dir().map(|d| d.join("trademirror.db")) {
+        if let Err(e) = economic_events_store::upsert_events(db_path.to_str().unwrap_or(""), &events) {
+            eprintln!("[economic_events] persist failed: {}", e);
+        }
+    }
+
     Ok(events)
+}
+
+/// All economic events ever persisted by `get_economic_calendar`'s polling —
+/// the News indicator's only source for actual/forecast/previous on releases
+/// that have scrolled out of the live feed's current-week window.
+#[tauri::command]
+fn get_stored_economic_events(app: tauri::AppHandle) -> Result<Vec<EconomicEvent>, String> {
+    let db_path = app.path().app_data_dir().map_err(|e: tauri::Error| e.to_string())?
+        .join("trademirror.db");
+    economic_events_store::read_events(db_path.to_str().unwrap_or(""))
+}
+
+// ─── Treasury auctions — TreasuryDirect's official auction-results API ───────
+// The ForexFactory calendar feed only carries 2 of the 7 fields the News
+// indicator's auction marker wants (high yield, bid-to-cover) and doesn't
+// reliably include USD auctions at all. TreasuryDirect's own public API
+// (treasurydirect.gov, no key required) has the real published results —
+// confirmed field names by fetching it directly, not guessed. It has no
+// "tail"/"when-issued yield" field either (Treasury's results simply don't
+// publish that; it's a market-quoted figure, not an auction-result one), so
+// those two stay genuinely unavailable rather than invented.
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct TreasuryAuction {
+    cusip: String,
+    security_term: String,
+    auction_date: String,
+    issue_date: String,
+    #[serde(default)]
+    high_yield: String,
+    #[serde(default)]
+    bid_to_cover_ratio: String,
+    #[serde(default)]
+    indirect_bidder_accepted: String,
+    #[serde(default)]
+    direct_bidder_accepted: String,
+    #[serde(default)]
+    primary_dealer_accepted: String,
+    #[serde(default)]
+    total_accepted: String,
+    #[serde(default)]
+    offering_amount: String,
+    // auctionDate is date-only (midnight, no timezone) — not the real
+    // auction time, and parsing it naively is what put markers on the
+    // wrong hour depending on the app's local system timezone. Real
+    // auctions close for competitive bidding, and results become official,
+    // at this field instead — confirmed "01:00 PM" (always US Eastern) on
+    // every recent 10Y/30Y auction checked against the live API.
+    #[serde(default)]
+    closing_time_competitive: String,
+}
+
+/// Fetches recent 10-Year note and 30-Year bond auctions (including their
+/// later reopenings — TreasuryDirect terms a reopening by its remaining
+/// maturity, "9-Year Xx-Month" for the 10-Year and "29-Year Xx-Month" for
+/// the 30-Year) from TreasuryDirect, persists them, and returns the
+/// freshly-fetched set.
+/// `days` bounds the query window — a modest recent window is enough since
+/// this polls periodically and every past auction is already in the DB from
+/// a prior poll; it just needs to not miss whatever's newest.
+#[tauri::command]
+fn sync_treasury_auctions(app: tauri::AppHandle) -> Result<Vec<TreasuryAuction>, String> {
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .user_agent("Mozilla/5.0 (compatible; TradeMirror/1.0)")
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let fetch_type = |security_type: &str| -> Result<Vec<TreasuryAuction>, String> {
+        client
+            .get(format!(
+                "https://www.treasurydirect.gov/TA_WS/securities/auctioned?type={}&days=120&format=json",
+                security_type
+            ))
+            .send().map_err(|e| format!("request: {}", e))?
+            .json::<Vec<TreasuryAuction>>()
+            .map_err(|e| format!("parse: {}", e))
+    };
+
+    let mut auctions: Vec<TreasuryAuction> = fetch_type("Note")?
+        .into_iter()
+        .filter(|a| a.security_term == "10-Year" || a.security_term.starts_with("9-Year"))
+        .collect();
+    auctions.extend(
+        fetch_type("Bond")?
+            .into_iter()
+            .filter(|a| a.security_term == "30-Year" || a.security_term.starts_with("29-Year")),
+    );
+
+    if let Ok(db_path) = app.path().app_data_dir().map(|d| d.join("trademirror.db")) {
+        if let Err(e) = treasury_auctions_store::upsert_auctions(db_path.to_str().unwrap_or(""), &auctions) {
+            eprintln!("[treasury_auctions] persist failed: {}", e);
+        }
+    }
+
+    Ok(auctions)
+}
+
+/// All 10Y/30Y auctions ever persisted by `sync_treasury_auctions`.
+#[tauri::command]
+fn get_stored_treasury_auctions(app: tauri::AppHandle) -> Result<Vec<TreasuryAuction>, String> {
+    let db_path = app.path().app_data_dir().map_err(|e: tauri::Error| e.to_string())?
+        .join("trademirror.db");
+    treasury_auctions_store::read_auctions(db_path.to_str().unwrap_or(""))
+}
+
+/// One-time deep backfill of 10Y/30Y auction history — `sync_treasury_auctions`
+/// only reaches back ~120 days because it hits `securities/auctioned`, which
+/// caps out around 250 total records across every note/bond term regardless
+/// of the `days` value requested (confirmed directly against the live API —
+/// larger `days` values returned the identical record count). The
+/// `securities/search` endpoint instead accepts an exact `securityTerm`
+/// filter and returns TreasuryDirect's true full history for that term
+/// alone — genuinely back to 1979 for both 10-Year notes and 30-Year bonds.
+/// Six term variants cover both buckets' original issuances and their later
+/// reopenings (TreasuryDirect labels a reopening by its remaining maturity
+/// at issuance, not by its original term — e.g. a 30-Year bond's second-year
+/// reopening is termed "29-Year 10-Month", confirmed against the live API).
+#[tauri::command]
+fn backfill_treasury_auctions(app: tauri::AppHandle) -> Result<usize, String> {
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(20))
+        .user_agent("Mozilla/5.0 (compatible; TradeMirror/1.0)")
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let terms: [(&str, &str); 6] = [
+        ("Note", "10-Year"), ("Note", "9-Year 10-Month"), ("Note", "9-Year 11-Month"),
+        ("Bond", "30-Year"), ("Bond", "29-Year 10-Month"), ("Bond", "29-Year 11-Month"),
+    ];
+
+    let mut auctions: Vec<TreasuryAuction> = Vec::new();
+    for (security_type, term) in terms {
+        let url = format!(
+            "https://www.treasurydirect.gov/TA_WS/securities/search?type={}&securityTerm={}&format=json",
+            security_type,
+            term.replace(' ', "%20"),
+        );
+        let batch: Vec<TreasuryAuction> = client
+            .get(&url)
+            .send().map_err(|e| format!("request ({}): {}", term, e))?
+            .json::<Vec<TreasuryAuction>>()
+            .map_err(|e| format!("parse ({}): {}", term, e))?;
+        auctions.extend(batch);
+    }
+
+    let count = auctions.len();
+    let db_path = app.path().app_data_dir().map_err(|e: tauri::Error| e.to_string())?
+        .join("trademirror.db");
+    treasury_auctions_store::upsert_auctions(db_path.to_str().unwrap_or(""), &auctions)?;
+    Ok(count)
 }
 
 // ─── OANDA live price streaming ───────────────────────────────────────────────
@@ -425,10 +608,7 @@ fn get_economic_calendar() -> Result<Vec<EconomicEvent>, String> {
 /// Reads the API key exactly as background_sync does (proven to work).
 #[tauri::command]
 async fn get_live_price(pair: Option<String>) -> Result<f64, String> {
-    let contents = std::fs::read_to_string(OANDA_KEY_PATH)
-        .map_err(|e| format!("key file: {}", e))?;
-    let api_key = contents.lines().next().unwrap_or("").trim().to_string();
-    if api_key.is_empty() { return Err("OANDA key file is empty".into()); }
+    let api_key = read_oanda_key()?;
 
     let pair = pair.unwrap_or_else(|| "EUR/USD".to_string());
     let instrument = to_oanda_instrument(&pair);
@@ -449,28 +629,11 @@ async fn get_live_price(pair: Option<String>) -> Result<f64, String> {
         .ok_or_else(|| format!("unexpected response: {}", resp))
 }
 
-// ─── Analytics V3 — Ichimoku history (100 rows for cloud + Chikou) ───────────
-
-#[tauri::command]
-fn get_ichi_rows_v3(app: tauri::AppHandle) -> Result<Vec<CandleV3>, String> {
-    let db_path = app.path().app_data_dir()
-        .map_err(|e: tauri::Error| e.to_string())?
-        .join("trademirror.db");
-
-    Ok(candle_store::read_candles(
-        db_path.to_str().unwrap_or(""),
-        "EURUSD", "D", 100,
-    ).unwrap_or_default())
-}
-
 // ─── Live candles for any timeframe (price chart) ────────────────────────────
 
 #[tauri::command]
 fn get_live_candles(pair: String, tf: String) -> Result<Vec<oanda_client::RawCandle>, String> {
-    let contents = std::fs::read_to_string(OANDA_KEY_PATH)
-        .map_err(|e| format!("key file: {}", e))?;
-    let api_key = contents.lines().next().unwrap_or("").trim().to_string();
-    if api_key.is_empty() { return Err("OANDA key file is empty".into()); }
+    let api_key = read_oanda_key()?;
 
     let instrument = to_oanda_instrument(&pair);
 
@@ -492,10 +655,7 @@ fn get_live_candles(pair: String, tf: String) -> Result<Vec<oanda_client::RawCan
 
 #[tauri::command]
 fn get_live_candles_computed(pair: String, tf: String) -> Result<Vec<CandleV3>, String> {
-    let contents = std::fs::read_to_string(OANDA_KEY_PATH)
-        .map_err(|e| format!("key file: {}", e))?;
-    let api_key = contents.lines().next().unwrap_or("").trim().to_string();
-    if api_key.is_empty() { return Err("OANDA key file is empty".into()); }
+    let api_key = read_oanda_key()?;
 
     let instrument = to_oanda_instrument(&pair);
     let symbol = instrument.replace('_', "");
@@ -519,10 +679,7 @@ fn get_live_candles_computed(pair: String, tf: String) -> Result<Vec<CandleV3>, 
 
 #[tauri::command]
 fn get_synthesis(pair: String, tf: String) -> Result<scoring::Synthesis, String> {
-    let contents = std::fs::read_to_string(OANDA_KEY_PATH)
-        .map_err(|e| format!("key file: {}", e))?;
-    let api_key = contents.lines().next().unwrap_or("").trim().to_string();
-    if api_key.is_empty() { return Err("OANDA key file is empty".into()); }
+    let api_key = read_oanda_key()?;
 
     let instrument = to_oanda_instrument(&pair);
     let symbol = instrument.replace('_', "");
@@ -702,6 +859,24 @@ pub fn run() {
             sql: include_str!("../migrations/0006_drop_positioning.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 7,
+            description: "economic_events",
+            sql: include_str!("../migrations/0007_economic_events.sql"),
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 8,
+            description: "treasury_auctions",
+            sql: include_str!("../migrations/0008_treasury_auctions.sql"),
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: 9,
+            description: "treasury_auctions_closing_time",
+            sql: include_str!("../migrations/0009_treasury_auctions_closing_time.sql"),
+            kind: MigrationKind::Up,
+        },
     ];
 
     tauri::Builder::default()
@@ -739,7 +914,7 @@ pub fn run() {
 
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![list_images, read_credentials_file, write_text_file, save_trade_screenshot, save_chart_screenshot, get_candles_v3, get_ichi_rows_v3, sync_oanda_candles_v3, send_test_notification, send_telegram_message, get_forex_news, get_economic_calendar, get_live_price, get_live_candles, get_live_candles_computed, get_synthesis])
+        .invoke_handler(tauri::generate_handler![list_images, read_credentials_file, write_text_file, save_trade_screenshot, save_chart_screenshot, get_candles_v3, sync_oanda_candles_v3, send_test_notification, send_telegram_message, get_forex_news, get_economic_calendar, get_stored_economic_events, sync_treasury_auctions, get_stored_treasury_auctions, backfill_treasury_auctions, get_live_price, get_live_candles, get_live_candles_computed, get_synthesis])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

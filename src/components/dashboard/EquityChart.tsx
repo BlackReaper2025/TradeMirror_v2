@@ -9,7 +9,7 @@ import {
 import { Images, ChevronLeft, ChevronRight, Play, Pause } from "lucide-react";
 import { Panel } from "../ui/Panel";
 import type { Account, Candle } from "../../db/queries";
-import { getHourlyCandles, getDailyCandles, get15MinCandles, getIntradayCurve } from "../../db/queries";
+import { getHourlyCandles, getIntradayCurve } from "../../db/queries";
 import { useDatabase } from "../../db/DatabaseProvider";
 
 function fmtBalance(n: number) {
@@ -142,7 +142,7 @@ function CandlesLayer({ candles, xAxisMap, yAxisMap }: {
 
 // ─── Candle chart wrapper ─────────────────────────────────────────────────────
 
-function CandleChart({ candles, startingBalance }: { candles: Candle[]; startingBalance: number }) {
+function CandleChart({ candles }: { candles: Candle[] }) {
   if (candles.length === 0) {
     return (
       <div className="h-full flex items-center justify-center">
@@ -438,7 +438,7 @@ export function EquityChart({ equityCurve, account, selectedDate }: Props) {
           ))}
         </div>
         {isCandle ? (
-          <CandleChart candles={candles} startingBalance={startingBalance} />
+          <CandleChart candles={candles} />
         ) : displayData.length < 2 ? (
           <div className="h-full flex items-center justify-center">
             <span className="text-[13px]" style={{ color: "var(--text-muted)" }}>

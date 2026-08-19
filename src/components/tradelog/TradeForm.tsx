@@ -630,7 +630,7 @@ interface Props {
 
 type Tab = "trade" | "journal" | "screenshots";
 
-export function TradeForm({ account, existingTrade, defaultDate, onClose, onSaved, onDuplicate }: Props) {
+export function TradeForm({ existingTrade, defaultDate, onClose, onSaved, onDuplicate }: Props) {
   const isEdit = existingTrade != null;
   const [values, setValues]   = useState<TradeFormValues>(() =>
     isEdit ? tradeToFormValues(existingTrade!) : makeEmpty(defaultDate)

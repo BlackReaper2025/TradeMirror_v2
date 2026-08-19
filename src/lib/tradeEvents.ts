@@ -16,7 +16,6 @@ export const tradeEvents = {
 
   /** Notify all subscribers that trade data has changed. */
   notify(): void {
-    console.log(`[tradeEvents] notify — ${listeners.size} subscriber(s)`);
     listeners.forEach((fn) => fn());
   },
 };

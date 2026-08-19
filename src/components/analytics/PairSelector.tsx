@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { ChevronDown, Search, Star, X } from "lucide-react";
 import { getFavoritePairs, toggleFavoritePair } from "../../lib/preferences";
 
-type Category = "Forex" | "Indices" | "Commodities" | "Stocks" | "ETFs" | "Crypto";
+type Category = "Forex" | "Indices" | "Rates" | "Commodities" | "Crypto";
 
 const CATEGORIES: Record<Category, string[]> = {
   Forex:  [
@@ -13,10 +13,14 @@ const CATEGORIES: Record<Category, string[]> = {
     "NZD/CAD", "NZD/CHF", "NZD/JPY", "NZD/USD",
     "USD/CAD", "USD/CHF", "USD/JPY", "USD/MXN", "USD/SEK", "USD/ZAR",
   ],
-  Indices:     ["US30", "US100", "US500"],
-  Commodities: ["XAU/USD", "XAG/USD", "USOIL"],
-  Stocks: ["AAPL", "TSLA", "NVDA", "AMZN", "MSFT", "META", "GOOGL"],
-  ETFs:   ["SPY", "QQQ", "GLD", "TLT", "VXX", "IWM", "XLF"],
+  // Stocks/ETFs categories removed — OANDA doesn't offer single-stock or ETF
+  // CFDs on this account (neither linked account lists any non-currency
+  // instrument, and direct instrument codes like AAPL_USD/SPY_USD 404).
+  // Selecting any of those pairs errored on load with no way to fix the
+  // mapping, since there's no valid OANDA instrument for them to point at.
+  Indices:     ["US30", "US100", "US500", "DE30", "UK100", "JP225", "FR40", "EU50", "HK33", "AU200"],
+  Rates:       ["US02Y", "US05Y", "US10Y", "US30Y"],
+  Commodities: ["XAU/USD", "XAG/USD", "USOIL", "XCU/USD", "XPT/USD", "XPD/USD", "NATGAS"],
   Crypto: ["BTC/USD", "ETH/USD", "SOL/USD", "XRP/USD", "BNB/USD", "DOGE/USD"],
 };
 
