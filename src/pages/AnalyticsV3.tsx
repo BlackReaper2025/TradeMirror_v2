@@ -11,7 +11,8 @@ import {
   ComposedChart, Bar, Line, Area, XAxis, YAxis, ReferenceLine, ReferenceArea,
   ResponsiveContainer, Cell, Tooltip,
 } from "recharts";
-import { Maximize2, Minimize2, X, GripVertical, Settings, Camera, Info, LayoutGrid, ChevronDown, Lock, Unlock } from "lucide-react";
+import { Maximize2, Minimize2, X, GripVertical, Settings, Camera, Info, LayoutGrid, ChevronDown, Lock, Unlock,
+  MousePointer2, Minus, ArrowUpRight, ArrowRight, Square, Type, Trash2, Eraser, Magnet, Layers, Eye, EyeOff } from "lucide-react";
 import { toPng } from "html-to-image";
 import { getSettings, getAllTradesWithJournal, addTradeImage, localDateStr, type TradeWithJournal } from "../db/queries";
 import { PairSelector, ALL_ASSETS } from "../components/analytics/PairSelector";
@@ -25,7 +26,7 @@ import type { AnalysisResult } from "../data/analyticsDataV3";
 import type { SheetRow }         from "../lib/googleSheets";
 import { fetchSynthesis, synthesisToAnalysisResult } from "../lib/brain/synthesis";
 import type { Synthesis }        from "../lib/brain/synthesis";
-import { getAnalyticsPanelOrder, setAnalyticsPanelOrder, getReversalSettings, setReversalSettings, getTreasuryAuctionsBackfilled, setTreasuryAuctionsBackfilled, getQuadPairs, setQuadPairs } from "../lib/preferences";
+import { getAnalyticsPanelOrder, setAnalyticsPanelOrder, getReversalSettings, setReversalSettings, getTreasuryAuctionsBackfilled, setTreasuryAuctionsBackfilled, getQuadPairs, setQuadPairs, getChartDrawings, setChartDrawings, getLastChartSelection, setLastChartSelection, getChartViewSettings, setChartViewSettings, type StoredDrawing, type StoredDrawPoint } from "../lib/preferences";
 import { pairSelectionEvents } from "../lib/pairSelection";
 import { sidebarEvents } from "../lib/sidebarEvents";
 import { playAlertSound } from "../lib/alertSound";
@@ -532,7 +533,7 @@ function buildPriceAnalysis(rows: SheetRow[]): { headline: string; bullets: stri
 
 // ─── Indicator helpers ─────────────────────────────────────────────────────────
 
-type IndKey = "bb" | "ichi" | "ema9" | "ema20" | "ema50" | "ema200" | "volume" | "reversal" | "session8am" | "pivots";
+type IndKey = "bb" | "ichi" | "ema9" | "ema20" | "ema50" | "ema200" | "sma200" | "sma400" | "volume" | "reversal" | "session8am" | "pivots";
 
 // ─── Quad View lock — broadcast the primary tile's toolbar settings to the
 // other 3 tiles ────────────────────────────────────────────────────────────
@@ -568,6 +569,8 @@ const IND_DEFS: { key: IndKey; label: string; color: string }[] = [
   { key: "ema20", label: "EMA 20",  color: "#30d158" },
   { key: "ema50", label: "EMA 50",  color: "#ff6b6b" },
   { key: "ema200",label: "EMA 200", color: "#bf5af2" },
+  { key: "sma200",label: "SMA 200", color: "#38bdf8" },
+  { key: "sma400",label: "SMA 400", color: "#f472b6" },
   { key: "volume",label: "Volume",  color: "#94a3b8" },
 ];
 
@@ -586,6 +589,17 @@ function computeEMA(closes: number[], period: number): (number | null)[] {
   result[period - 1] = closes.slice(0, period).reduce((a, b) => a + b, 0) / period;
   for (let i = period; i < closes.length; i++)
     result[i] = closes[i] * k + result[i - 1]! * (1 - k);
+  return result;
+}
+
+function computeSMA(closes: number[], period: number): (number | null)[] {
+  const result: (number | null)[] = closes.map(() => null);
+  let sum = 0;
+  for (let i = 0; i < closes.length; i++) {
+    sum += closes[i];
+    if (i >= period) sum -= closes[i - period];
+    if (i >= period - 1) result[i] = sum / period;
+  }
   return result;
 }
 
@@ -643,6 +657,11 @@ class IchiCloudRenderer {
     const A = this._p._spanA;
     const B = this._p._spanB;
     if (!chart || !series || A.length === 0 || A.length !== B.length) return;
+    // See the comment on ReversalMarkerRenderer.draw() below — an uncaught
+    // throw from any custom primitive's draw() kills lightweight-charts'
+    // whole render loop (it doesn't wrap these calls itself), so every
+    // primitive in this file guards its paint the same way.
+    try {
     target.useBitmapCoordinateSpace((scope: any) => {
       const ctx = scope.context;
       const ts  = chart.timeScale();
@@ -718,6 +737,7 @@ class IchiCloudRenderer {
       paint(bullSegs, "rgba(96,165,250,0.22)");
       paint(bearSegs, "rgba(167,139,250,0.22)");
     });
+    } catch (_) { /* never let a stale reference or bad data blank the chart */ }
   }
 }
 
@@ -765,6 +785,7 @@ class BBFillRenderer {
     const upper  = this._p._upper;
     const lower  = this._p._lower;
     if (!chart || !series || upper.length === 0 || lower.length === 0) return;
+    try {
     target.useBitmapCoordinateSpace((scope: any) => {
       const ctx = scope.context;
       const ts  = chart.timeScale();
@@ -793,6 +814,7 @@ class BBFillRenderer {
       ctx.fillStyle = "rgba(100,181,246,0.15)";
       ctx.fill();
     });
+    } catch (_) { /* see IchiCloudRenderer above — never let this blank the chart */ }
   }
 }
 
@@ -872,6 +894,7 @@ class ZoneBoxRenderer {
     const series = this._p._series;
     const zones  = this._p._zones;
     if (!chart || !series || zones.length === 0) return;
+    try {
     target.useBitmapCoordinateSpace((scope: any) => {
       const ctx = scope.context;
       const hr = scope.horizontalPixelRatio;
@@ -921,6 +944,7 @@ class ZoneBoxRenderer {
         ctx.fillText(z.label, x1 + 6 * hr, yTop + 4 * vr);
       }
     });
+    } catch (_) { /* see IchiCloudRenderer above — never let this blank the chart */ }
   }
 }
 class ZoneBoxPaneView {
@@ -954,6 +978,10 @@ interface TimeRangeBox {
   fill:      string;
   stroke:    string;
   label?:    string;
+  // "left" (default) suits a box with real width/height — top-left reads
+  // naturally as its title. Pivot lines are a zero-height box, and reads
+  // better labeled off their right (forward) edge, like a horizontal ray.
+  labelAlign?: "left" | "right";
   midLine?:  boolean;
 }
 
@@ -965,6 +993,7 @@ class TimeRangeBoxRenderer {
     const series = this._p._series;
     const boxes  = this._p._boxes;
     if (!chart || !series || boxes.length === 0) return;
+    try {
     target.useBitmapCoordinateSpace((scope: any) => {
       const ctx = scope.context;
       const hr = scope.horizontalPixelRatio;
@@ -1015,11 +1044,19 @@ class TimeRangeBoxRenderer {
         if (b.label) {
           ctx.fillStyle = b.stroke;
           ctx.font = `${Math.round(10 * vr)}px sans-serif`;
-          ctx.textBaseline = "top";
-          ctx.fillText(b.label, x1 + 4 * hr, yTop + 3 * vr);
+          if (b.labelAlign === "right") {
+            ctx.textAlign = "right";
+            ctx.textBaseline = "middle";
+            ctx.fillText(b.label, x2 - 4 * hr, yTop - 8 * vr);
+          } else {
+            ctx.textAlign = "left";
+            ctx.textBaseline = "top";
+            ctx.fillText(b.label, x1 + 4 * hr, yTop + 3 * vr);
+          }
         }
       }
     });
+    } catch (_) { /* see IchiCloudRenderer above — never let this blank the chart */ }
   }
 }
 class TimeRangeBoxPaneView {
@@ -1059,6 +1096,14 @@ class ReversalMarkerRenderer {
     const series  = this._p._series;
     const markers = this._p._markers;
     if (!chart || !series || markers.length === 0) return;
+    // A stale chart/series reference (e.g. a paint scheduled just before a
+    // viewMode toggle tears down and recreates the candle series) can make
+    // timeToIndex/priceToCoordinate throw. lightweight-charts does not wrap
+    // primitive draw() calls itself, and an uncaught throw here aborts its
+    // internal render loop for good — the chart goes blank and stops
+    // repainting entirely until the component remounts. Swallow it instead:
+    // worst case this frame's markers are skipped, not the whole chart.
+    try {
     target.useBitmapCoordinateSpace((scope: any) => {
       const ctx = scope.context;
       const hr = scope.horizontalPixelRatio;
@@ -1113,6 +1158,7 @@ class ReversalMarkerRenderer {
         }
       }
     });
+    } catch (_) { /* see comment above draw() — never let this take the chart down */ }
   }
 }
 class ReversalMarkerPaneView {
@@ -1130,6 +1176,469 @@ class ReversalMarkerPrimitive {
   _views: ReversalMarkerPaneView[] = [];
   constructor(markers: ReversalMarkerData[]) { this._markers = markers; }
   attached({ chart, series }: any) { this._chart = chart; this._series = series; this._views = [new ReversalMarkerPaneView(this)]; }
+  detached() { this._chart = null; this._series = null; this._views = []; }
+  updateAllViews() { this._views.forEach(v => v.update()); }
+  paneViews() { return this._views; }
+}
+
+// ─── Manual drawing tools (trend line / ray / horizontal / rectangle / fib /
+// gann fan / text) — the user-placed counterpart to the auto-computed
+// TrendlinePrimitive above. One primitive holds every completed drawing plus
+// at most one in-progress "pending" shape (the rubber-band preview between a
+// tool's first click and the current cursor position). Point coordinates use
+// the same timeToIndex/logicalToCoordinate + priceToCoordinate conversion
+// every other primitive in this file uses, so behavior (including RTL/zoom)
+// stays consistent with them.
+type DrawPoint = StoredDrawPoint;
+type Drawing = StoredDrawing;
+type DrawTool = "cursor" | Drawing["kind"];
+// p2 is only ever populated mid-placement of "fibext" (the one 3-point
+// tool) — its 2nd click confirms the B anchor while still waiting on the
+// 3rd (C); every other (2-point) tool goes straight from p1 to a completed
+// drawing on its 2nd click and never touches p2 here.
+interface PendingDrawing { kind: Exclude<DrawTool, "cursor">; p1: DrawPoint; p2?: DrawPoint; cursor: DrawPoint | null; }
+
+const FIB_LEVELS = [0, 0.236, 0.382, 0.5, 0.618, 0.786, 1];
+// Fibonacci Extension — projects the A→B move's ratio from anchor C, the
+// standard 3-point extension (as opposed to the 2-point retracement above).
+const FIBEXT_LEVELS = [0, 0.382, 0.618, 1, 1.272, 1.618, 2, 2.618];
+// Display name for a drawing's kind — used by the Layers panel.
+const DRAWING_KIND_LABELS: Record<Drawing["kind"], string> = {
+  trendline: "Trend Line", ray: "Ray", horizontal: "Horizontal Line", horizontalray: "Horizontal Ray",
+  rectangle: "Rectangle", fib: "Fib Retracement", fibext: "Fib Extension", gann: "Gann Fan", text: "Text",
+};
+// Steepest (1/8) to shallowest (8/1) — order matters, the first/last entries
+// bound the shaded wedge drawn behind the fan. Colors/labels match
+// TradingView's default Gann Fan palette.
+const GANN_RATIOS: { dxMul: number; dyMul: number; label: string; color: string }[] = [
+  { dxMul: 1, dyMul: 8, label: "1/8", color: "#ffa726" },
+  { dxMul: 1, dyMul: 4, label: "1/4", color: "#66bb6a" },
+  { dxMul: 1, dyMul: 3, label: "1/3", color: "#26a69a" },
+  { dxMul: 1, dyMul: 2, label: "1/2", color: "#26c6da" },
+  { dxMul: 1, dyMul: 1, label: "1/1", color: "#42a5f5" },
+  { dxMul: 2, dyMul: 1, label: "2/1", color: "#ab47bc" },
+  { dxMul: 3, dyMul: 1, label: "3/1", color: "#d946a5" },
+  { dxMul: 4, dyMul: 1, label: "4/1", color: "#ec4899" },
+  { dxMul: 8, dyMul: 1, label: "8/1", color: "#ef5350" },
+];
+
+// Resolves a drawing's stored (time, price) point to a CSS-pixel coordinate.
+// timeToIndex(time, true) CLAMPS a time outside the currently-loaded window
+// onto the nearest edge bar rather than returning it — meaning a drawing
+// made on one timeframe (e.g. a Gann fan's two points, an hour or so apart
+// on 1H) can have every one of its points collapse onto that SAME single
+// edge coordinate the moment you switch to a much finer timeframe whose
+// loaded window (each timeframe loads a fixed candle count, so finer
+// timeframes cover much less wall-clock time) doesn't reach back that far —
+// the whole drawing then renders squashed to zero width at one edge,
+// invisible in practice. Extrapolating past the clamp using the loaded
+// data's own bar spacing keeps the point at its correct relative time
+// position instead (even if that's off-screen, matching TradingView: an
+// old drawing on a much finer timeframe may need scrolling back to see, but
+// isn't geometrically broken). This is a no-op for an in-range point, since
+// its resolved bar's own time already equals pt.time exactly.
+function resolvePointCssXY(chart: any, series: any, pt: DrawPoint): { x: number; y: number } | null {
+  const ts = chart.timeScale();
+  const idx = ts.timeToIndex(pt.time as UTCTimestamp, true) as number | null;
+  if (idx === null) return null;
+  let xRaw = ts.logicalToCoordinate(idx as any);
+  if (xRaw === null) return null;
+  const idxTime = ts.coordinateToTime(xRaw) as number | null;
+  if (idxTime !== null && idxTime !== pt.time) {
+    const neighborIdx = idx === 0 ? idx + 1 : idx - 1;
+    const neighborX = ts.logicalToCoordinate(neighborIdx as any);
+    const neighborTime = neighborX !== null ? (ts.coordinateToTime(neighborX) as number | null) : null;
+    if (neighborX !== null && neighborTime !== null && neighborTime !== idxTime) {
+      const barSeconds = idx === 0 ? neighborTime - idxTime : idxTime - neighborTime;
+      const pxPerBar   = idx === 0 ? neighborX - xRaw   : xRaw - neighborX;
+      xRaw += ((pt.time - idxTime) / barSeconds) * pxPerBar;
+    }
+  }
+  const yRaw = series.priceToCoordinate(pt.price);
+  if (yRaw === null) return null;
+  return { x: xRaw, y: yRaw };
+}
+function drawPointToXY(chart: any, series: any, hr: number, vr: number, pt: DrawPoint): { x: number; y: number } | null {
+  const p = resolvePointCssXY(chart, series, pt);
+  return p ? { x: p.x * hr, y: p.y * vr } : null;
+}
+
+// Extends a ray from (x1,y1) through (x2,y2) far enough to reach the pane's
+// bitmap edge in whichever x-direction it's heading — canvas clips anything
+// drawn past the edge automatically, so this only needs to overshoot, not
+// clip precisely.
+function rayEndpoint(x1: number, y1: number, x2: number, y2: number, w: number): { x: number; y: number } {
+  const dx = x2 - x1, dy = y2 - y1;
+  let t: number;
+  if (dx > 0) t = (w + 50 - x1) / dx;
+  else if (dx < 0) t = (-50 - x1) / dx;
+  else t = 1e4;
+  t = Math.max(1, t);
+  return { x: x1 + dx * t, y: y1 + dy * t };
+}
+
+// CSS-pixel (not bitmap) coordinate conversion, for hit-testing against raw
+// MouseEventParams.point values — logicalToCoordinate/priceToCoordinate
+// already return media/CSS coordinates, so no pixel-ratio scaling here
+// (contrast with drawPointToXY above, used inside the bitmap-space renderer).
+function drawPointToCssXY(chart: any, series: any, pt: DrawPoint): { x: number; y: number } | null {
+  return resolvePointCssXY(chart, series, pt);
+}
+function distToSegment(px: number, py: number, x1: number, y1: number, x2: number, y2: number): number {
+  const dx = x2 - x1, dy = y2 - y1;
+  const lenSq = dx * dx + dy * dy;
+  const t = lenSq === 0 ? 0 : Math.max(0, Math.min(1, ((px - x1) * dx + (py - y1) * dy) / lenSq));
+  return Math.hypot(px - (x1 + t * dx), py - (y1 + t * dy));
+}
+// Rectangle/fib are hit-tested as "click anywhere in the bounding box" (matches
+// how a filled rectangle reads to a user); trendline/ray/gann as distance to
+// the p1->p2 baseline only — a ray or gann fan's extension past p2, and a
+// gann fan's non-1x1 lines, aren't individually hit-tested, which is an
+// acceptable v1 approximation since deleting removes the whole drawing anyway.
+// Magnet mode — like TradingView's, pulls a placed point onto the nearest
+// candle's O/H/L/C when the cursor is close to it. "Close" is judged in
+// actual screen pixels against that O/H/L/C's real (time, price) position —
+// not just "closest of the 4 values of whatever bar is under the cursor's
+// x" — so it also searches the couple of neighboring bars and can pull both
+// the time and the price onto the snapped point, the way a magnet actually
+// grabs the nearest point rather than only the nearest value on one axis.
+// Returns null (no snap) when nothing is within range, so the caller falls
+// back to the raw cursor position.
+const MAGNET_SNAP_PX = 18;
+function findMagnetSnap(chart: any, series: any, mouseX: number, mouseY: number, rows: RawCandleTf[]): DrawPoint | null {
+  const ts = chart.timeScale();
+  const centerLogical = ts.coordinateToLogical(mouseX);
+  if (centerLogical === null) return null;
+  const centerIdx = Math.round(centerLogical as number);
+  let best: DrawPoint | null = null;
+  let bestDist = MAGNET_SNAP_PX;
+  for (let idx = centerIdx - 3; idx <= centerIdx + 3; idx++) {
+    const r = rows[idx];
+    if (!r) continue;
+    const x = ts.logicalToCoordinate(idx as any);
+    if (x === null) continue;
+    for (const price of [r.open, r.high, r.low, r.close]) {
+      const y = series.priceToCoordinate(price);
+      if (y === null) continue;
+      const dist = Math.hypot(mouseX - x, mouseY - y);
+      if (dist < bestDist) {
+        bestDist = dist;
+        best = { time: Math.floor(new Date(r.timestamp).getTime() / 1000), price };
+      }
+    }
+  }
+  return best;
+}
+
+function hitTestDrawing(chart: any, series: any, d: Drawing, px: number, py: number): boolean {
+  const a = drawPointToCssXY(chart, series, d.p1);
+  if (!a) return false;
+  const THRESH = 6;
+  if (d.kind === "horizontal") return Math.abs(py - a.y) <= THRESH;
+  if (d.kind === "horizontalray") return Math.abs(py - a.y) <= THRESH && px >= a.x - THRESH;
+  if (d.kind === "text") return Math.hypot(px - a.x, py - a.y) <= 14;
+  const b = d.p2 ? drawPointToCssXY(chart, series, d.p2) : null;
+  if (!b) return false;
+  if (d.kind === "fibext") {
+    const c = d.p3 ? drawPointToCssXY(chart, series, d.p3) : null;
+    if (!c) return distToSegment(px, py, a.x, a.y, b.x, b.y) <= THRESH;
+    // No upper x bound — like fib below, every level extends right to the
+    // pane edge. y-bounds cover the full projected range across
+    // FIBEXT_LEVELS (up to 2.618x), not just the three anchors' own
+    // y-range — the deep extension levels render well outside that range,
+    // and clicking on them (the whole point of this drawing) was missing
+    // the hitbox entirely.
+    const priceAt0   = d.p3!.price;
+    const priceAtMax = d.p3!.price + (d.p2!.price - d.p1.price) * FIBEXT_LEVELS[FIBEXT_LEVELS.length - 1];
+    const y0 = series.priceToCoordinate(priceAt0);
+    const yMax = series.priceToCoordinate(priceAtMax);
+    if (y0 === null || yMax === null) return false;
+    return px >= Math.min(a.x, b.x, c.x) - THRESH
+        && py >= Math.min(y0, yMax) - THRESH && py <= Math.max(y0, yMax) + THRESH;
+  }
+  if (d.kind === "rectangle") {
+    return px >= Math.min(a.x, b.x) - THRESH && px <= Math.max(a.x, b.x) + THRESH
+        && py >= Math.min(a.y, b.y) - THRESH && py <= Math.max(a.y, b.y) + THRESH;
+  }
+  if (d.kind === "fib") {
+    // No upper x bound — the levels extend right to the pane edge (like a
+    // horizontal ray), not just to the later of the two anchor points.
+    return px >= Math.min(a.x, b.x) - THRESH && py >= Math.min(a.y, b.y) - THRESH && py <= Math.max(a.y, b.y) + THRESH;
+  }
+  return distToSegment(px, py, a.x, a.y, b.x, b.y) <= THRESH;
+}
+
+// Any drawing's actual stored anchor point(s) — p1 always, p2/p3 when
+// present — as opposed to hitTestRectHandle's derived midpoint handles.
+// Used both to let the user drag a point to re-anchor a drawing after the
+// fact, and (implicitly, via the same coordinates) for the always/selected
+// anchor dots already drawn in DrawingRenderer.
+type AnchorKey = "p1" | "p2" | "p3";
+function hitTestAnchorPoint(chart: any, series: any, d: Drawing, px: number, py: number): AnchorKey | null {
+  const THRESH = 8;
+  for (const key of ["p1", "p2", "p3"] as const) {
+    const pt = d[key];
+    if (!pt) continue;
+    const xy = drawPointToCssXY(chart, series, pt);
+    if (!xy) continue;
+    if (Math.hypot(px - xy.x, py - xy.y) <= THRESH) return key;
+  }
+  return null;
+}
+
+// Rectangle resize — 4 edge-midpoint handles (top/bottom move only the price
+// of whichever corner is currently higher/lower, left/right move only the
+// time of whichever corner is currently earlier/later), shown only while the
+// rectangle is selected. CSS-pixel space throughout, same as hitTestDrawing.
+type RectHandle = "top" | "bottom" | "left" | "right";
+// Keeps opposite handles at least MIN_HALF px apart from center even when
+// the box has near-zero width/height — e.g. drawing a rectangle by snapping
+// to a candle's high then its low naturally puts both points at the same
+// time, collapsing width to 0. Without this, "left" and "right" (or
+// "top"/"bottom") would render and hit-test at the exact same pixel, making
+// one of them permanently ungrabbable. Grabbing the handle still starts the
+// drag from wherever the mouse actually is, so this only affects where the
+// handle sits when idle, not how far you can drag it.
+const RECT_HANDLE_MIN_HALF = 6;
+function rectHandlePositions(a: { x: number; y: number }, b: { x: number; y: number }): Record<RectHandle, { x: number; y: number }> {
+  const midX = (a.x + b.x) / 2, midY = (a.y + b.y) / 2;
+  const halfW = Math.max(Math.abs(a.x - b.x) / 2, RECT_HANDLE_MIN_HALF);
+  const halfH = Math.max(Math.abs(a.y - b.y) / 2, RECT_HANDLE_MIN_HALF);
+  return {
+    top:    { x: midX, y: midY - halfH },
+    bottom: { x: midX, y: midY + halfH },
+    left:   { x: midX - halfW, y: midY },
+    right:  { x: midX + halfW, y: midY },
+  };
+}
+function hitTestRectHandle(chart: any, series: any, d: Drawing, px: number, py: number): RectHandle | null {
+  if (d.kind !== "rectangle" || !d.p2) return null;
+  const a = drawPointToCssXY(chart, series, d.p1);
+  const b = drawPointToCssXY(chart, series, d.p2);
+  if (!a || !b) return null;
+  const handles = rectHandlePositions(a, b);
+  for (const key of ["top", "bottom", "left", "right"] as const) {
+    if (Math.hypot(px - handles[key].x, py - handles[key].y) <= 8) return key;
+  }
+  return null;
+}
+
+class DrawingRenderer {
+  _p: DrawingPrimitive;
+  constructor(p: DrawingPrimitive) { this._p = p; }
+  draw(target: any) {
+    const chart  = this._p._chart;
+    const series = this._p._series;
+    if (!chart || !series) return;
+    // Same reasoning as ReversalMarkerRenderer above — a stale reference
+    // mid-teardown must never be able to throw its way into blanking the
+    // whole chart's render loop.
+    try {
+      target.useBitmapCoordinateSpace((scope: any) => {
+        const ctx = scope.context;
+        const hr = scope.horizontalPixelRatio;
+        const vr = scope.verticalPixelRatio;
+        const w  = scope.bitmapSize.width;
+        ctx.font = `${Math.round(10 * vr)}px sans-serif`;
+        ctx.textBaseline = "middle";
+        ctx.lineWidth = 1.5 * vr;
+
+        const shapes: { d: Drawing; selected: boolean }[] =
+          this._p._drawings.filter(d => !d.hidden).map(d => ({ d, selected: d.id === this._p._selectedId }));
+        if (this._p._pending && this._p._pending.cursor) {
+          const pend = this._p._pending;
+          // fibext is the only 3-click tool: pend.p2 set means B is already
+          // confirmed and cursor is previewing C; otherwise cursor is still
+          // previewing B itself, same shape every other 2-point tool takes.
+          const previewShape: Drawing = pend.p2
+            ? { id: "__pending__", kind: pend.kind, p1: pend.p1, p2: pend.p2, p3: pend.cursor!, color: "#eab308" }
+            : { id: "__pending__", kind: pend.kind, p1: pend.p1, p2: pend.cursor!, color: "#eab308" };
+          shapes.push({ d: previewShape, selected: false });
+        }
+
+        for (const { d, selected } of shapes) {
+          const a = drawPointToXY(chart, series, hr, vr, d.p1);
+          if (!a) continue;
+          const b = d.p2 ? drawPointToXY(chart, series, hr, vr, d.p2) : null;
+          ctx.strokeStyle = d.color;
+          ctx.fillStyle = d.color;
+
+          if (d.kind === "horizontal") {
+            ctx.beginPath(); ctx.moveTo(0, a.y); ctx.lineTo(w, a.y); ctx.stroke();
+            ctx.textAlign = "right";
+            ctx.fillText(formatPrice(d.p1.price, decimalsForPair(this._p._pair, d.p1.price)), w - 6 * hr, a.y - 8 * vr);
+          } else if (d.kind === "horizontalray") {
+            ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(w, a.y); ctx.stroke();
+            ctx.textAlign = "right";
+            ctx.fillText(formatPrice(d.p1.price, decimalsForPair(this._p._pair, d.p1.price)), w - 6 * hr, a.y - 8 * vr);
+          } else if (d.kind === "text") {
+            ctx.textAlign = "left";
+            ctx.fillText(d.text ?? "", a.x + 4 * hr, a.y);
+          } else if (b) {
+            if (d.kind === "trendline") {
+              ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+            } else if (d.kind === "ray") {
+              const end = rayEndpoint(a.x, a.y, b.x, b.y, w);
+              ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(end.x, end.y); ctx.stroke();
+            } else if (d.kind === "rectangle") {
+              const x = Math.min(a.x, b.x), y = Math.min(a.y, b.y);
+              const rw = Math.abs(b.x - a.x), rh = Math.abs(b.y - a.y);
+              ctx.globalAlpha = 0.12; ctx.fillRect(x, y, rw, rh); ctx.globalAlpha = 1;
+              ctx.strokeRect(x, y, rw, rh);
+              // Dashed midpoint line — same convention as the auto zone
+              // boxes' midLine (see TimeRangeBoxRenderer above).
+              const yMid = y + rh / 2;
+              ctx.save();
+              ctx.setLineDash([4 * hr, 3 * hr]);
+              ctx.beginPath();
+              ctx.moveTo(x, yMid);
+              ctx.lineTo(x + rw, yMid);
+              ctx.stroke();
+              ctx.restore();
+            } else if (d.kind === "fib") {
+              // Extends right to the pane edge (like a horizontal ray),
+              // rather than stopping at the later of the two anchor points.
+              const x0 = Math.min(a.x, b.x);
+              ctx.textAlign = "right";
+              for (let i = 0; i < FIB_LEVELS.length; i++) {
+                const ratio = FIB_LEVELS[i];
+                const price = d.p1.price + (d.p2!.price - d.p1.price) * ratio;
+                const y = (series.priceToCoordinate(price) ?? 0) * vr;
+                ctx.beginPath(); ctx.moveTo(x0, y); ctx.lineTo(w, y); ctx.stroke();
+                ctx.fillText(`Fib ${ratio.toFixed(3)}  ${formatPrice(price, decimalsForPair(this._p._pair, price))}`, w - 6 * hr, y - 8 * vr);
+              }
+            } else if (d.kind === "gann") {
+              const rays = GANN_RATIOS.map(g => {
+                const dx = (b.x - a.x) * g.dxMul;
+                const dy = (b.y - a.y) * g.dyMul;
+                return { ...g, end: rayEndpoint(a.x, a.y, a.x + dx, a.y + dy, w) };
+              });
+              for (const g of rays) {
+                ctx.strokeStyle = g.color;
+                ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(g.end.x, g.end.y); ctx.stroke();
+
+                // Label pinned to the pane's right edge — same idea as the
+                // auto trend line labels, so it's always visible regardless
+                // of how far you've scrolled from the anchor — found by
+                // walking the ray from the anchor to wherever it crosses
+                // x = (right edge inset), not g.end itself (rayEndpoint
+                // overshoots ~50px past the edge so canvas clipping doesn't
+                // cut off the line, which would clip the label too).
+                // Only applies to a rightward-heading ray (the common case,
+                // and the only one "the right edge" means anything for) —
+                // a ray dragged toward the left falls back to sitting a
+                // fixed distance out from the anchor instead.
+                const rdx = g.end.x - a.x, rdy = g.end.y - a.y;
+                let lx: number, ly: number;
+                if (rdx > 0) {
+                  const tEdge = (w - 6 * hr - a.x) / rdx;
+                  lx = a.x + rdx * tEdge;
+                  ly = a.y + rdy * tEdge;
+                  ctx.textAlign = "right";
+                } else {
+                  const segLen = Math.hypot(rdx, rdy) || 1;
+                  const t = Math.min(1, (90 * hr) / segLen);
+                  lx = a.x + rdx * t;
+                  ly = a.y + rdy * t;
+                  ctx.textAlign = "center";
+                }
+                let angle = Math.atan2(g.end.y - a.y, g.end.x - a.x);
+                if (angle > Math.PI / 2) angle -= Math.PI;
+                else if (angle < -Math.PI / 2) angle += Math.PI;
+                ctx.save();
+                ctx.translate(lx, ly - 6 * vr);
+                ctx.rotate(angle);
+                ctx.fillStyle = g.color;
+                ctx.fillText(g.label, 0, 0);
+                ctx.restore();
+              }
+            } else if (d.kind === "fibext") {
+              const c = d.p3 ? drawPointToXY(chart, series, hr, vr, d.p3) : null;
+              if (!c) {
+                // Still choosing B (C not placed yet) — just preview the A→B leg.
+                ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+              } else {
+                // Construction zigzag A→B→C, then the projected levels.
+                ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.lineTo(c.x, c.y); ctx.stroke();
+                const x0 = Math.min(a.x, b.x, c.x);
+                ctx.textAlign = "right";
+                for (const ratio of FIBEXT_LEVELS) {
+                  const price = d.p3!.price + (d.p2!.price - d.p1.price) * ratio;
+                  const y = (series.priceToCoordinate(price) ?? 0) * vr;
+                  ctx.beginPath(); ctx.moveTo(x0, y); ctx.lineTo(w, y); ctx.stroke();
+                  ctx.fillText(`Fib Ext ${(ratio * 100).toFixed(1)}%  ${formatPrice(price, decimalsForPair(this._p._pair, price))}`, w - 6 * hr, y - 8 * vr);
+                }
+              }
+            }
+          }
+
+          // Trend line / ray / horizontal ray anchor points stay visible all
+          // the time (not just while selected) so you can see exactly where
+          // they're pinned — in the drawing's own color, small; selection
+          // still gets its own bigger yellow dot on top so it's clear which
+          // one is picked.
+          const alwaysAnchored = d.kind === "trendline" || d.kind === "ray" || d.kind === "horizontalray";
+          if (alwaysAnchored && !selected) {
+            ctx.fillStyle = d.color;
+            for (const pt of [a, b].filter((v): v is { x: number; y: number } => !!v)) {
+              ctx.beginPath(); ctx.arc(pt.x, pt.y, 2.5 * vr, 0, Math.PI * 2); ctx.fill();
+            }
+          }
+          if (selected) {
+            // A rectangle is stored as two OPPOSITE corners (p1, p2) — dot
+            // just those and the other two corners look unmarked, like the
+            // selection is missing a corner. Dot all 4 actual corners of
+            // the bounding box instead; fibext gets all 3 of its real
+            // anchors (A/B/C); every other kind just gets its real point(s).
+            const c = d.kind === "fibext" && d.p3 ? drawPointToXY(chart, series, hr, vr, d.p3) : null;
+            const corners = d.kind === "rectangle" && b
+              ? [{ x: a.x, y: a.y }, { x: b.x, y: a.y }, { x: a.x, y: b.y }, { x: b.x, y: b.y }]
+              : [a, b, c].filter((v): v is { x: number; y: number } => !!v);
+            ctx.fillStyle = "#eab308";
+            for (const pt of corners) {
+              ctx.beginPath(); ctx.arc(pt.x, pt.y, 3.5 * vr, 0, Math.PI * 2); ctx.fill();
+            }
+          }
+          // Rectangle resize handles — square (vs. the round anchor/corner
+          // dots) so they read as "drag to resize" rather than "vertex".
+          if (selected && d.kind === "rectangle" && b) {
+            const handles = rectHandlePositions(a, b);
+            ctx.fillStyle = "#eab308";
+            ctx.strokeStyle = "#0f1117";
+            ctx.lineWidth = 1 * vr;
+            const s = 3 * vr;
+            for (const key of ["top", "bottom", "left", "right"] as const) {
+              const p = handles[key];
+              ctx.fillRect(p.x - s, p.y - s, s * 2, s * 2);
+              ctx.strokeRect(p.x - s, p.y - s, s * 2, s * 2);
+            }
+          }
+        }
+      });
+    } catch (_) { /* see comment above — never let a stale reference blank the chart */ }
+  }
+}
+class DrawingPaneView {
+  _p: DrawingPrimitive;
+  constructor(p: DrawingPrimitive) { this._p = p; }
+  update() {}
+  zOrder() { return "top" as const; }
+  renderer() { return new DrawingRenderer(this._p); }
+}
+class DrawingPrimitive {
+  _chart: any = null;
+  _series: any = null;
+  _drawings: Drawing[];
+  _selectedId: string | null = null;
+  _pending: PendingDrawing | null = null;
+  // Which instrument this chart is currently showing — DrawingRenderer
+  // lives at module scope (no access to the component's pairRef), so this
+  // is how it knows the right decimal precision (decimalsForPair) for
+  // price labels instead of a hardcoded guess.
+  _pair: string;
+  _views: DrawingPaneView[] = [];
+  constructor(drawings: Drawing[], pair: string) { this._drawings = drawings; this._pair = pair; }
+  attached({ chart, series }: any) { this._chart = chart; this._series = series; this._views = [new DrawingPaneView(this)]; }
   detached() { this._chart = null; this._series = null; this._views = []; }
   updateAllViews() { this._views.forEach(v => v.update()); }
   paneViews() { return this._views; }
@@ -2415,6 +2924,7 @@ class NewsLineRenderer {
     // last time it did, so a hover over where a line used to be kept
     // showing its tooltip even with the indicator switched off.
     if (!chart || !series || lines.length === 0) { this._p._hitTest = []; return; }
+    try {
     target.useBitmapCoordinateSpace((scope: any) => {
       const ctx = scope.context;
       const hr = scope.horizontalPixelRatio;
@@ -2507,6 +3017,7 @@ class NewsLineRenderer {
         ctx.fillText(l.label, left, 4 * vr + row * rowGap);
       }
     });
+    } catch (_) { /* see IchiCloudRenderer above — never let this blank the chart */ }
   }
 }
 class NewsLinePaneView {
@@ -2723,7 +3234,7 @@ function computePivotLevels(high: number, low: number, close: number) {
 // level rather than stopping dead at the latest candle.
 const PIVOT_FORWARD_PERIODS = 20;
 
-function computeCurrentPivotBoxes(candles: RawCandleTf[]): TimeRangeBox[] {
+function computeCurrentPivotBoxes(candles: RawCandleTf[], tfLabel: string): TimeRangeBox[] {
   if (candles.length < 2) return [];
   const prev = candles[candles.length - 2];
   const cur  = candles[candles.length - 1];
@@ -2735,7 +3246,7 @@ function computeCurrentPivotBoxes(candles: RawCandleTf[]): TimeRangeBox[] {
   const levels = computePivotLevels(prev.high, prev.low, prev.close);
   return PIVOT_LEVEL_KEYS.map(key => ({
     low: levels[key], high: levels[key], startTime, endTime,
-    fill: "transparent", stroke: PIVOT_COLOR, label: key.toUpperCase(),
+    fill: "transparent", stroke: PIVOT_COLOR, label: `${key.toUpperCase()} (${tfLabel})`, labelAlign: "right" as const,
   }));
 }
 
@@ -2755,6 +3266,7 @@ class TrendlineRenderer {
     const series = this._p._series;
     const lines = this._p._lines;
     if (!chart || !series || lines.length === 0) return;
+    try {
     target.useBitmapCoordinateSpace((scope: any) => {
       const ctx = scope.context;
       const hr = scope.horizontalPixelRatio;
@@ -2871,6 +3383,26 @@ class TrendlineRenderer {
         ctx.lineWidth = hr;
         ctx.stroke();
 
+        // Right-edge label — which timeframe this ray was computed on, and
+        // that it's an auto-detected trend line (as opposed to one of the
+        // user's own manually-drawn trend lines/rays). Rotated to run
+        // parallel to the ray itself: xEnd is always > x1 (the ray only
+        // ever extends rightward, toward the pane edge), so the x1→xEnd
+        // angle is always within ±90° of horizontal and reads upright with
+        // no separate upside-down correction needed.
+        if (l.tfLabel) {
+          const angle = Math.atan2(yEnd - y1, xEnd - x1);
+          ctx.save();
+          ctx.translate(w - 6 * hr, yEnd - 8 * vr);
+          ctx.rotate(angle);
+          ctx.font = `${Math.round(10 * vr)}px sans-serif`;
+          ctx.textAlign = "right";
+          ctx.textBaseline = "middle";
+          ctx.fillStyle = lineColor;
+          ctx.fillText(`Auto Trendline (${l.tfLabel})`, 0, 0);
+          ctx.restore();
+        }
+
         for (const [cxRaw, cyRaw] of [[circle1X, y1Raw], [circle2X, y2Raw]] as [number | null, number | null][]) {
           if (cxRaw === null || cyRaw === null) continue;
           ctx.beginPath();
@@ -2880,6 +3412,7 @@ class TrendlineRenderer {
         }
       }
     });
+    } catch (_) { /* see IchiCloudRenderer above — never let this blank the chart */ }
   }
 }
 class TrendlinePaneView {
@@ -2913,6 +3446,7 @@ class WatermarkRenderer {
   draw(target: any) {
     const text = this._p._text;
     if (!text) return;
+    try {
     target.useBitmapCoordinateSpace((scope: any) => {
       const ctx = scope.context;
       const w = scope.bitmapSize.width;
@@ -2927,6 +3461,7 @@ class WatermarkRenderer {
       ctx.fillText(text, w / 2, h / 2);
       ctx.restore();
     });
+    } catch (_) { /* see IchiCloudRenderer above — never let this blank the chart */ }
   }
 }
 class WatermarkPaneView {
@@ -3143,6 +3678,47 @@ function InstrumentPicker({ pair, onChange }: { pair: string; onChange: (p: stri
   );
 }
 
+// A single icon button for the drawing-tool rail, with a custom hover label
+// instead of relying on the native `title` tooltip — the rail's icons are
+// small and some look alike (a rotated vs. plain "Minus" for trend line vs.
+// horizontal line), and native tooltips are inconsistent inside the Tauri
+// webview (slow to appear, easy to miss), so this shows immediately and uses
+// the same floating-panel styling as the chart's other popovers.
+function ToolbarIconButton({ label, active, disabled, onClick, children, rootRef, style }: {
+  label: string; active?: boolean; disabled?: boolean; onClick: () => void; children: React.ReactNode;
+  rootRef?: React.Ref<HTMLDivElement>; style?: React.CSSProperties;
+}) {
+  const [hover, setHover] = useState(false);
+  return (
+    <div ref={rootRef} style={{ position: "relative", ...style }} onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}>
+      <button
+        onClick={onClick}
+        disabled={disabled}
+        style={{
+          width: 26, height: 26, display: "flex", alignItems: "center", justifyContent: "center",
+          background: active ? "var(--accent-dim)" : "transparent",
+          border: active ? "1px solid var(--accent-border)" : "1px solid transparent",
+          borderRadius: 6, color: disabled ? "var(--text-muted)" : (active ? "var(--accent-text)" : "var(--text-secondary)"),
+          cursor: disabled ? "not-allowed" : "pointer", opacity: disabled ? 0.4 : 1,
+          fontSize: 9, fontWeight: 700, padding: 0,
+        }}
+      >
+        {children}
+      </button>
+      {hover && (
+        <div style={{
+          position: "absolute", left: "calc(100% + 8px)", top: "50%", transform: "translateY(-50%)",
+          background: "var(--bg-panel)", border: "1px solid var(--border-medium)", borderRadius: 6,
+          padding: "4px 8px", fontSize: 10, fontWeight: 600, color: "var(--text-primary)",
+          whiteSpace: "nowrap", boxShadow: "0 8px 24px rgba(0,0,0,0.45)", zIndex: 20, pointerEvents: "none",
+        }}>
+          {label}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Price history chart ────────────────────────────────────────────────────────
 
 function PriceHistoryChart({
@@ -3176,10 +3752,19 @@ function PriceHistoryChart({
   const chartTf    = compact ? compactChartTf    : chartTfProp!;
   const setChartTf = compact ? setCompactChartTf : setChartTfProp!;
 
-  const [viewMode,   setViewMode]   = useState<"candles" | "line">("candles");
+  // Which indicators/overlays are on and how the chart is styled — a
+  // standing display preference (see getChartViewSettings), not tied to any
+  // one instrument, so it's read once here rather than per-pair like
+  // drawings are. Quad View tiles (compact) don't participate — 4 of them
+  // sharing one stored toggle set would clobber each other constantly.
+  const [initialChartView] = useState(() => compact ? null : getChartViewSettings());
+
+  const [viewMode,   setViewMode]   = useState<"candles" | "line">(initialChartView?.viewMode ?? "candles");
   const [tfRows,     setTfRows]     = useState<RawCandleTf[]>([]);
   const [tfLoading,  setTfLoading]  = useState(false);
-  const [activeInds, setActiveInds] = useState<Set<IndKey>>(() => new Set(["volume"]));
+  const [activeInds, setActiveInds] = useState<Set<IndKey>>(
+    () => new Set((initialChartView?.activeInds ?? ["volume"]) as IndKey[])
+  );
 
   // Open positions on the currently viewed instrument, from the Trade Log —
   // an "open" trade is one with no closedAt yet. Plotted as full-width
@@ -3191,7 +3776,7 @@ function PriceHistoryChart({
   // ships with out of the box. Read via a ref inside createSeries (which
   // can otherwise hold a stale closure across renders) so switching the
   // view mode back to "candles" later still honors the current choice.
-  const [candleColorScheme, setCandleColorScheme] = useState<"default" | "tradingview">("tradingview");
+  const [candleColorScheme, setCandleColorScheme] = useState<"default" | "tradingview">(initialChartView?.candleColorScheme ?? "tradingview");
   const candleColorSchemeRef = useRef(candleColorScheme);
   useEffect(() => { candleColorSchemeRef.current = candleColorScheme; }, [candleColorScheme]);
   // Read via ref inside createSeries/addIndSeries (stable-identity callbacks
@@ -3214,32 +3799,36 @@ function PriceHistoryChart({
   const candleSettingsPopoverRef = useRef<HTMLDivElement>(null);
 
   // Supply/demand zone toggles — all opt-in, none on by default
-  const [showDailyZones, setShowDailyZones] = useState(false);
-  const [show4HZones,    setShow4HZones]    = useState(false);
-  const [show1HZones,    setShow1HZones]    = useState(false);
-  const [show15MZones,   setShow15MZones]   = useState(false);
-  const [show5MZones,    setShow5MZones]    = useState(false);
-  const [dailyZoneCandles, setDailyZoneCandles] = useState<RawCandleTf[]>([]);
-  const [h4ZoneCandles,    setH4ZoneCandles]    = useState<RawCandleTf[]>([]);
-  const [h1ZoneCandles,    setH1ZoneCandles]    = useState<RawCandleTf[]>([]);
-  const [m15ZoneCandles,   setM15ZoneCandles]   = useState<RawCandleTf[]>([]);
-  const [m5ZoneCandles,    setM5ZoneCandles]    = useState<RawCandleTf[]>([]);
+  const [showDailyZones, setShowDailyZones] = useState(initialChartView?.showDailyZones ?? false);
+  const [show4HZones,    setShow4HZones]    = useState(initialChartView?.show4HZones ?? false);
+  const [show1HZones,    setShow1HZones]    = useState(initialChartView?.show1HZones ?? false);
+  const [show15MZones,   setShow15MZones]   = useState(initialChartView?.show15MZones ?? false);
+  const [show5MZones,    setShow5MZones]    = useState(initialChartView?.show5MZones ?? false);
+  // Polled every 10s so each zone timeframe's still-forming candle keeps
+  // tracking live price (see useLiveCandles).
+  const dailyZoneCandles = useLiveCandles(pair, "1D",  showDailyZones,  10_000);
+  const h4ZoneCandles    = useLiveCandles(pair, "4H",  show4HZones,     10_000);
+  const h1ZoneCandles    = useLiveCandles(pair, "1H",  show1HZones,     10_000);
+  const m15ZoneCandles   = useLiveCandles(pair, "15M", show15MZones,    10_000);
+  const m5ZoneCandles    = useLiveCandles(pair, "5M",  show5MZones,     10_000);
 
   // Auto trendline toggles — Weekly on by default, Daily/4H/1H/15M/5M/1M off
-  const [showWeeklyTrend, setShowWeeklyTrend] = useState(true);
-  const [showDailyTrend,  setShowDailyTrend]  = useState(false);
-  const [show4HTrend,     setShow4HTrend]     = useState(false);
-  const [show1HTrend,     setShow1HTrend]     = useState(false);
-  const [show15MTrend,    setShow15MTrend]    = useState(false);
-  const [show5MTrend,     setShow5MTrend]     = useState(false);
-  const [show1MTrend,     setShow1MTrend]     = useState(false);
-  const [weeklyTrendCandles, setWeeklyTrendCandles] = useState<RawCandleTf[]>([]);
-  const [dailyTrendCandles,  setDailyTrendCandles]  = useState<RawCandleTf[]>([]);
-  const [h4TrendCandles,     setH4TrendCandles]     = useState<RawCandleTf[]>([]);
-  const [h1TrendCandles,     setH1TrendCandles]     = useState<RawCandleTf[]>([]);
-  const [m15TrendCandles,    setM15TrendCandles]    = useState<RawCandleTf[]>([]);
-  const [m5TrendCandles,     setM5TrendCandles]     = useState<RawCandleTf[]>([]);
-  const [m1TrendCandles,     setM1TrendCandles]     = useState<RawCandleTf[]>([]);
+  const [showWeeklyTrend, setShowWeeklyTrend] = useState(initialChartView?.showWeeklyTrend ?? true);
+  const [showDailyTrend,  setShowDailyTrend]  = useState(initialChartView?.showDailyTrend ?? false);
+  const [show4HTrend,     setShow4HTrend]     = useState(initialChartView?.show4HTrend ?? false);
+  const [show1HTrend,     setShow1HTrend]     = useState(initialChartView?.show1HTrend ?? false);
+  const [show15MTrend,    setShow15MTrend]    = useState(initialChartView?.show15MTrend ?? false);
+  const [show5MTrend,     setShow5MTrend]     = useState(initialChartView?.show5MTrend ?? false);
+  const [show1MTrend,     setShow1MTrend]     = useState(initialChartView?.show1MTrend ?? false);
+  // Fetched once per toggle/pair change — no polling (see useLiveCandles;
+  // this predates it and is intentional, unlike the zone candles above).
+  const weeklyTrendCandles = useLiveCandles(pair, "1W",  showWeeklyTrend);
+  const dailyTrendCandles  = useLiveCandles(pair, "1D",  showDailyTrend);
+  const h4TrendCandles     = useLiveCandles(pair, "4H",  show4HTrend);
+  const h1TrendCandles     = useLiveCandles(pair, "1H",  show1HTrend);
+  const m15TrendCandles    = useLiveCandles(pair, "15M", show15MTrend);
+  const m5TrendCandles     = useLiveCandles(pair, "5M",  show5MTrend);
+  const m1TrendCandles     = useLiveCandles(pair, "1M",  show1MTrend);
 
   // Pivot Points toggles — master on/off lives on activeInds ("pivots"),
   // same as Reversal/8AM Box; these four control which timeframe(s) render
@@ -3248,10 +3837,11 @@ function PriceHistoryChart({
   const [showPivotDaily,  setShowPivotDaily]  = useState(true);
   const [showPivot4H,     setShowPivot4H]     = useState(false);
   const [showPivot1H,     setShowPivot1H]     = useState(false);
-  const [pivotWeeklyCandles, setPivotWeeklyCandles] = useState<RawCandleTf[]>([]);
-  const [pivotDailyCandles,  setPivotDailyCandles]  = useState<RawCandleTf[]>([]);
-  const [pivot4HCandles,     setPivot4HCandles]     = useState<RawCandleTf[]>([]);
-  const [pivot1HCandles,     setPivot1HCandles]     = useState<RawCandleTf[]>([]);
+  // One-shot per toggle/pair change, same as the trendline candles above.
+  const pivotWeeklyCandles = useLiveCandles(pair, "1W", showPivotWeekly);
+  const pivotDailyCandles  = useLiveCandles(pair, "1D", showPivotDaily);
+  const pivot4HCandles     = useLiveCandles(pair, "4H", showPivot4H);
+  const pivot1HCandles     = useLiveCandles(pair, "1H", showPivot1H);
   const [showPivotSettings, setShowPivotSettings] = useState(false);
   const [pivotSettingsPos, setPivotSettingsPos] = useState<{ top: number; left: number } | null>(null);
   const pivotBtnRef = useRef<HTMLButtonElement>(null);
@@ -3260,7 +3850,7 @@ function PriceHistoryChart({
   // Economic news event lines — its own toolbar button + settings popout,
   // driven by the calendarEvents already fetched for the Economic Calendar
   // panel (no separate fetch).
-  const [showNews, setShowNews] = useState(false);
+  const [showNews, setShowNews] = useState(initialChartView?.showNews ?? false);
   const [newsCategoryVisibility, setNewsCategoryVisibility] = useState<Record<NewsCategoryKey, boolean>>({
     fomc: true, sep: true, fomc_presser: true, fomc_minutes: true,
     cpi: true, pce: true, jobs: true, gdp: true, ism: true, jolts: true, retail_sales: true, ppi: true, jobless_claims: true,
@@ -3286,6 +3876,107 @@ function PriceHistoryChart({
   // against NewsLinePrimitive._hitTest (set by the renderer on every draw).
   const [newsHover, setNewsHover] = useState<{ x: number; y: number; label: string; color: string; detail?: EventDetail } | null>(null);
 
+  // OHLC readout for whichever candle the crosshair is over (TradingView-style
+  // legend), set from the same crosshair-move subscription below via
+  // param.seriesData — that gives the exact bar the chart itself is hovering,
+  // so it stays correct across candle vs. area viewMode without a manual
+  // time-to-row lookup. null (mouse left the chart) falls back to the latest
+  // loaded bar at render time so the legend never goes blank.
+  const [hoverBar, setHoverBar] = useState<{ open: number; high: number; low: number; close: number } | null>(null);
+
+  // Manual drawing-tool rail (trend line / ray / horizontal / rectangle /
+  // fib / gann / text) — see DrawingPrimitive above. Persisted per
+  // pair+timeframe via getChartDrawings/setChartDrawings, same pattern as
+  // getReversalSettings. activeDrawToolRef mirrors activeDrawTool for the
+  // chart's native click/crosshair subscriptions (set up once on mount,
+  // so they close over refs rather than stale state).
+  const [activeDrawTool, setActiveDrawTool] = useState<DrawTool>("cursor");
+  const [drawings, setDrawingsState] = useState<Drawing[]>([]);
+  const [selectedDrawingId, setSelectedDrawingId] = useState<string | null>(null);
+  const [textPrompt, setTextPrompt] = useState<{ x: number; y: number; point: DrawPoint } | null>(null);
+  useEffect(() => { activeDrawToolRef.current = activeDrawTool; }, [activeDrawTool]);
+  // Magnet mode — like TradingView's, snaps a placed point's price to the
+  // nearest of that bar's O/H/L/C instead of the raw cursor position. Applied
+  // in onChartClick (final placement) and the crosshair-move handler (the
+  // rubber-band preview) below, both via snapPriceToOHLC.
+  const [magnetMode, setMagnetMode] = useState(false);
+  useEffect(() => { magnetModeRef.current = magnetMode; }, [magnetMode]);
+  // Layers panel — lists every drawing on the current chart with a per-item
+  // show/hide toggle (see toggleDrawingHidden). Same popover pattern as the
+  // rest of the toolbar (button ref + pos + outside-click close below).
+  const [showLayersPanel, setShowLayersPanel] = useState(false);
+  const [layersPanelPos, setLayersPanelPos] = useState<{ bottom: number; left: number } | null>(null);
+  const layersBtnRef = useRef<HTMLDivElement>(null);
+  const layersPopoverRef = useRef<HTMLDivElement>(null);
+  useEffect(() => { drawingsRef.current = drawings; if (drawingPrimRef.current) drawingPrimRef.current._drawings = drawings; }, [drawings]);
+  useEffect(() => {
+    selectedDrawingIdRef.current = selectedDrawingId;
+    if (drawingPrimRef.current) drawingPrimRef.current._selectedId = selectedDrawingId;
+  }, [selectedDrawingId]);
+  // Persist on every change, and reload whenever the chart switches
+  // pair/timeframe (drawings are scoped per-chart, like TradingView's).
+  const persistDrawings = useCallback((next: Drawing[]) => {
+    // Sync the ref synchronously (not just via the state-mirror effect below)
+    // so two clicks in quick succession — e.g. placing two horizontal lines
+    // back to back — each see the other's just-added drawing rather than
+    // racing the effect's next-render timing and clobbering one another.
+    drawingsRef.current = next;
+    if (drawingPrimRef.current) drawingPrimRef.current._drawings = next;
+    setDrawingsState(next);
+    setChartDrawings(pairRef.current, next);
+    // Mutating the primitive's data directly (above) doesn't itself make
+    // lightweight-charts repaint — it only picks the change up on whatever
+    // next repaint happens to occur for some unrelated reason (a crosshair
+    // move, a live price tick's setData). Toggling/deleting/clearing a
+    // drawing from the Layers panel or toolbar has nothing else forcing a
+    // repaint, so without this the change sits invisible until the mouse
+    // happens to move over the chart. applyOptions({}) is the same
+    // no-op-options nudge marketSessionPrim's update effect already uses to
+    // force one immediately.
+    chartRef.current?.applyOptions({});
+  }, []);
+  const cancelPendingDrawing = useCallback(() => {
+    pendingPointRef.current = null;
+    pendingSecondPointRef.current = null;
+    if (drawingPrimRef.current) drawingPrimRef.current._pending = null;
+    setActiveDrawTool("cursor");
+    setTextPrompt(null);
+  }, []);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") cancelPendingDrawing(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [cancelPendingDrawing]);
+  const deleteSelectedDrawing = useCallback(() => {
+    if (!selectedDrawingId) return;
+    persistDrawings(drawingsRef.current.filter(d => d.id !== selectedDrawingId));
+    setSelectedDrawingId(null);
+  }, [selectedDrawingId, persistDrawings]);
+  // Delete/Backspace removes the selected drawing — skipped while an input
+  // (e.g. the text-drawing prompt, or any other text field in the app) has
+  // focus, so Backspace still edits text normally there.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Delete" && e.key !== "Backspace") return;
+      if (!selectedDrawingId) return;
+      const tag = (document.activeElement as HTMLElement | null)?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA") return;
+      e.preventDefault();
+      deleteSelectedDrawing();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [selectedDrawingId, deleteSelectedDrawing]);
+  const clearAllDrawings = useCallback(() => {
+    if (drawingsRef.current.length === 0) return;
+    if (!window.confirm("Clear all drawings on this chart?")) return;
+    persistDrawings([]);
+    setSelectedDrawingId(null);
+  }, [persistDrawings]);
+  const toggleDrawingHidden = useCallback((id: string) => {
+    persistDrawings(drawingsRef.current.map(d => d.id === id ? { ...d, hidden: !d.hidden } : d));
+  }, [persistDrawings]);
+
   // Trendline count per timeframe — how many support + resistance rays to
   // draw for each, configurable from the Lines settings panel.
   const [trendCounts, setTrendCounts] = useState<{ W: number; D: number; H4: number; H1: number; M15: number; M5: number; M1: number }>({
@@ -3310,7 +4001,7 @@ function PriceHistoryChart({
   const [zoneSettingsPos, setZoneSettingsPos] = useState<{ top: number; left: number } | null>(null);
   const zoneSettingsGroupRef = useRef<HTMLDivElement>(null);
   const zoneSettingsPopoverRef = useRef<HTMLDivElement>(null);
-  const [showTappedZone, setShowTappedZone] = useState(true);
+  const [showTappedZone, setShowTappedZone] = useState(initialChartView?.showTappedZone ?? true);
   const [tapFadeCandles, setTapFadeCandles] = useState(DEFAULT_TAP_FADE_CANDLES);
 
   // Quad View toggle button — quadView/onToggleQuadView are owned by the
@@ -3352,6 +4043,11 @@ function PriceHistoryChart({
   const [reversalZoneFilter, setReversalZoneFilter] = useState(() => getReversalSettings(DEFAULT_REVERSAL_GROUPS).zoneFilter);
   const [reversalEightAmBoxFilter, setReversalEightAmBoxFilter] = useState(() => getReversalSettings(DEFAULT_REVERSAL_GROUPS).eightAmBoxFilter);
   const [reversalTrendlineFilter, setReversalTrendlineFilter] = useState(() => getReversalSettings(DEFAULT_REVERSAL_GROUPS).trendlineFilter);
+  const [reversalGannFilter, setReversalGannFilter] = useState(() => getReversalSettings(DEFAULT_REVERSAL_GROUPS).gannFilter);
+  const [reversalFibFilter, setReversalFibFilter] = useState(() => getReversalSettings(DEFAULT_REVERSAL_GROUPS).fibFilter);
+  // How many of the most recent qualifying reversal candles to actually
+  // show, counting back from the latest — null shows every one.
+  const [reversalMaxCount, setReversalMaxCount] = useState<number | null>(() => getReversalSettings(DEFAULT_REVERSAL_GROUPS).maxCount);
   // Stores selected GROUP labels (one toggle per candle shape, covering both
   // its bullish and bearish variant) — expanded to raw pattern names for
   // computeReversalFlags via the mirroring effect below.
@@ -3362,25 +4058,37 @@ function PriceHistoryChart({
   const reversalZoneFilterRef = useRef(false);
   const reversalEightAmBoxFilterRef = useRef(false);
   const reversalTrendlineFilterRef = useRef(false);
+  const reversalGannFilterRef = useRef(false);
+  const reversalFibFilterRef = useRef(false);
+  const reversalMaxCountRef = useRef<number | null>(null);
   const reversalPatternTypesRef = useRef<Set<string>>(expandReversalGroups(reversalPatternGroups));
   useEffect(() => { reversalZoneFilterRef.current = reversalZoneFilter; }, [reversalZoneFilter]);
   useEffect(() => { reversalEightAmBoxFilterRef.current = reversalEightAmBoxFilter; }, [reversalEightAmBoxFilter]);
   useEffect(() => { reversalTrendlineFilterRef.current = reversalTrendlineFilter; }, [reversalTrendlineFilter]);
+  useEffect(() => { reversalGannFilterRef.current = reversalGannFilter; }, [reversalGannFilter]);
+  useEffect(() => { reversalFibFilterRef.current = reversalFibFilter; }, [reversalFibFilter]);
+  useEffect(() => { reversalMaxCountRef.current = reversalMaxCount; }, [reversalMaxCount]);
   useEffect(() => { reversalPatternTypesRef.current = expandReversalGroups(reversalPatternGroups); }, [reversalPatternGroups]);
   useEffect(() => {
     setReversalSettings({
       zoneFilter: reversalZoneFilter,
       eightAmBoxFilter: reversalEightAmBoxFilter,
       trendlineFilter: reversalTrendlineFilter,
+      gannFilter: reversalGannFilter,
+      fibFilter: reversalFibFilter,
       patternGroups: [...reversalPatternGroups],
       showLabels: showReversalLabels,
+      maxCount: reversalMaxCount,
     });
-  }, [reversalZoneFilter, reversalEightAmBoxFilter, reversalTrendlineFilter, reversalPatternGroups, showReversalLabels]);
+  }, [reversalZoneFilter, reversalEightAmBoxFilter, reversalTrendlineFilter, reversalGannFilter, reversalFibFilter,
+      reversalPatternGroups, showReversalLabels, reversalMaxCount]);
   // Label visibility doesn't change which candles are flagged as reversals
   // (unlike the filters above, which do and go through the heavier
   // applyData/setData path) — just push the flag onto the already-attached
   // primitive and force a repaint.
+  const showReversalLabelsRef = useRef(showReversalLabels);
   useEffect(() => {
+    showReversalLabelsRef.current = showReversalLabels;
     if (reversalMarkerPrimRef.current) reversalMarkerPrimRef.current._showLabels = showReversalLabels;
     chartRef.current?.applyOptions({});
   }, [showReversalLabels]);
@@ -3408,6 +4116,46 @@ function PriceHistoryChart({
   const reversalMarkerPrimRef = useRef<ReversalMarkerPrimitive | null>(null);
   const pivotPrimRef = useRef<TimeRangeBoxPrimitive | null>(null);
   const newsLinePrimRef = useRef<NewsLinePrimitive | null>(null);
+  const drawingPrimRef = useRef<DrawingPrimitive | null>(null);
+  const drawingsRef = useRef<Drawing[]>([]);
+  const selectedDrawingIdRef = useRef<string | null>(null);
+  const activeDrawToolRef = useRef<DrawTool>("cursor");
+  const pendingPointRef = useRef<DrawPoint | null>(null);
+  // Only "fibext" (the one 3-click tool) ever populates this — it holds the
+  // already-confirmed B point while the 3rd click (C) is still pending.
+  const pendingSecondPointRef = useRef<DrawPoint | null>(null);
+  const magnetModeRef = useRef(false);
+  // Which handle (if any) is currently being dragged — "anchor" re-anchors
+  // one of a drawing's real stored points (any kind), "rectResize" is a
+  // rectangle's derived edge-midpoint (moves only one axis of whichever
+  // corner it represents). See the native mousedown listener in the
+  // chart-init effect below. Native DOM events (not lightweight-charts' own
+  // click/crosshair subscriptions) because a drag gesture needs continuous
+  // mousemove/mouseup tracking, and stopPropagation on mousedown is how the
+  // chart's own pan-on-drag gets suppressed only when a handle is actually
+  // grabbed.
+  const draggingHandleRef = useRef<
+    | { mode: "anchor"; id: string; point: AnchorKey }
+    | { mode: "rectResize"; id: string; handle: "top" | "bottom" | "left" | "right" }
+    | null
+  >(null);
+  // The active drag's own window-level mousemove/mouseup handlers, so the
+  // chart-init effect's cleanup (full component unmount, e.g. navigating
+  // away mid-drag) can remove them — they otherwise only get removed by
+  // their own mouseup firing, which never happens if the component is torn
+  // down first, leaking the listeners and letting a subsequent stray
+  // mouseup call persistDrawings (a React state update) after unmount.
+  const activeDragListenersRef = useRef<{ onMove: () => void; onUp: () => void } | null>(null);
+  // Last mouse position lightweight-charts itself reported via
+  // onCrosshairMove (param.point), in the chart's own pane-relative CSS
+  // pixel space. The rectangle-handle drag below reads this instead of
+  // recomputing x/y from a native event's clientX/Y minus
+  // getBoundingClientRect() — that manual math is a separate coordinate
+  // pipeline from the one logicalToCoordinate/priceToCoordinate (and every
+  // existing hit-test) use, and any small discrepancy between the two would
+  // make an 8px handle impossible to hit reliably. mousemove keeps firing
+  // (and this keeps updating) throughout a drag regardless of button state.
+  const lastMouseXYRef = useRef<{ x: number; y: number } | null>(null);
   // Whether the next tfRows-driven applyData call should reset the visible
   // range/autoscale. True only for a genuine new instrument/timeframe load;
   // false for the background live-candle poll below, so the forming bar's
@@ -3418,11 +4166,11 @@ function PriceHistoryChart({
   // mirrors the zone-candle fetch pattern below, only active while the
   // indicator toggle is on. NY defaults on (matches the tool's prior 8AM
   // Box behavior); Tokyo/London/9:30 are opt-in.
-  const [eightAmCandles, setEightAmCandles] = useState<RawCandleTf[]>([]);
   // 4H/1D/1W have no bar sitting exactly on the session-open minute, so the
   // box can't anchor to a real candle at those timeframes — hide it above 1H.
   const eightAmBoxEligibleTf = chartTf === "1H" || chartTf === "15M" || chartTf === "5M" || chartTf === "1M";
   const showEightAmBox = activeInds.has("session8am") && eightAmBoxEligibleTf;
+  const eightAmCandles = useLiveCandles(pair, "15M", showEightAmBox, 10_000);
   const [showOrbNY,     setShowOrbNY]     = useState(true);
   const [showOrbTokyo,  setShowOrbTokyo]  = useState(true);
   const [showOrbLondon, setShowOrbLondon] = useState(true);
@@ -3431,15 +4179,6 @@ function PriceHistoryChart({
   const [orbSettingsPos, setOrbSettingsPos] = useState<{ top: number; left: number } | null>(null);
   const orbBtnRef = useRef<HTMLButtonElement>(null);
   const orbSettingsPopoverRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (!showEightAmBox) { setEightAmCandles([]); return; }
-    const load = () => getLiveCandles(pair, "15M")
-      .then(candles => setEightAmCandles(candles))
-      .catch(() => setEightAmCandles([]));
-    load();
-    const id = setInterval(load, 10_000);
-    return () => clearInterval(id);
-  }, [showEightAmBox, pair]);
   const activeOrbDefs = useMemo(() => ORB_DEFS.filter(d =>
     (d.key === "ny" && showOrbNY) ||
     (d.key === "tokyo" && showOrbTokyo) ||
@@ -3460,25 +4199,32 @@ function PriceHistoryChart({
   // settings popout, not part of the Indicators dropdown. Independent 1H
   // candle fetch (hour boundaries all align to whole UTC hours), only active
   // while the Sessions button is toggled on.
-  const [showSessions, setShowSessions] = useState(false);
-  const [sessionVisibility, setSessionVisibility] = useState<Record<SessionKey, boolean>>({
-    tokyo: true, london: true, newyork: true,
-  });
-  const [sessionBackCount, setSessionBackCount] = useState(5);
-  const [sessionCandles, setSessionCandles] = useState<RawCandleTf[]>([]);
+  const [showSessions, setShowSessions] = useState(initialChartView?.showSessions ?? false);
+  const [sessionVisibility, setSessionVisibility] = useState<Record<SessionKey, boolean>>(
+    initialChartView?.sessionVisibility ?? { tokyo: true, london: true, newyork: true }
+  );
+  const [sessionBackCount, setSessionBackCount] = useState(initialChartView?.sessionBackCount ?? 5);
+  // Persist the toolbar view state (see initialChartView above) whenever any
+  // of it changes, so leaving Sessions (or any other overlay) on carries
+  // over across an instrument switch, a trip to another page, or a full app
+  // restart instead of needing to be turned back on every time.
+  useEffect(() => {
+    if (compact) return;
+    setChartViewSettings({
+      viewMode, activeInds: [...activeInds], candleColorScheme,
+      showDailyZones, show4HZones, show1HZones, show15MZones, show5MZones,
+      showWeeklyTrend, showDailyTrend, show4HTrend, show1HTrend, show15MTrend, show5MTrend, show1MTrend,
+      showNews, showTappedZone, showSessions, sessionVisibility, sessionBackCount,
+    });
+  }, [compact, viewMode, activeInds, candleColorScheme,
+      showDailyZones, show4HZones, show1HZones, show15MZones, show5MZones,
+      showWeeklyTrend, showDailyTrend, show4HTrend, show1HTrend, show15MTrend, show5MTrend, show1MTrend,
+      showNews, showTappedZone, showSessions, sessionVisibility, sessionBackCount]);
   // 4H/1D/1W hour boundaries don't align to the session start/end hours, so
   // session boxes can't anchor to a real candle above 1H — hide them there.
   const sessionBoxEligibleTf = chartTf === "1H" || chartTf === "15M" || chartTf === "5M" || chartTf === "1M";
   const sessionsActive = showSessions && sessionBoxEligibleTf;
-  useEffect(() => {
-    if (!sessionsActive) { setSessionCandles([]); return; }
-    const load = () => getLiveCandles(pair, "1H")
-      .then(candles => setSessionCandles(candles))
-      .catch(() => setSessionCandles([]));
-    load();
-    const id = setInterval(load, 10_000);
-    return () => clearInterval(id);
-  }, [sessionsActive, pair]);
+  const sessionCandles = useLiveCandles(pair, "1H", sessionsActive, 10_000);
   const marketSessionBoxes = useMemo(
     () => sessionsActive ? computeMarketSessionBoxes(sessionCandles, sessionVisibility, sessionBackCount) : [],
     [sessionsActive, sessionCandles, sessionVisibility, sessionBackCount]
@@ -3500,83 +4246,51 @@ function PriceHistoryChart({
     if (chartRef.current)
       activeIndsRef.current.forEach(key => removeIndSeries(key));
     shouldResetViewRef.current = true;
+    // Guards against a switch back to the previous pair/tf before this
+    // fetch resolves — without it, a superseded fetch's late resolution
+    // could overwrite tfRows with the WRONG instrument's candles.
+    let cancelled = false;
     getLiveCandles(pair, chartTf)
-      .then(candles => setTfRows(candles))
+      .then(candles => { if (!cancelled) setTfRows(candles); })
       .catch(() => {})
-      .finally(() => setTfLoading(false));
+      .finally(() => { if (!cancelled) setTfLoading(false); });
+    return () => { cancelled = true; };
   }, [chartTf, pair]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Drawings are scoped per INSTRUMENT only, not timeframe (see
+  // DrawingPrimitive / getChartDrawings) — a fib retracement's (time, price)
+  // point is just as meaningful on the 1H chart as the Daily chart it was
+  // drawn on, and TradingView itself keeps a symbol's drawings visible
+  // across every timeframe rather than hiding them on a resolution switch.
+  // So this reloads (and drops stale tool/selection state) only when the
+  // instrument itself changes, not on every tf switch.
+  useEffect(() => {
+    const loaded = getChartDrawings(pair);
+    drawingsRef.current = loaded;
+    if (drawingPrimRef.current) drawingPrimRef.current._pair = pair;
+    setDrawingsState(loaded);
+    setSelectedDrawingId(null);
+    cancelPendingDrawing();
+  }, [pair]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Poll the main chart's candles every 10s (same cadence as the zone/session
   // candle fetches above) so the forming bar's O/H/L/C tracks live price.
   // resetView stays false here — only the initial tf/pair load above resets
   // the visible range/autoscale.
   useEffect(() => {
+    let cancelled = false;
     const poll = () => {
       shouldResetViewRef.current = false;
       getLiveCandles(pair, chartTf)
-        .then(candles => setTfRows(candles))
+        .then(candles => { if (!cancelled) setTfRows(candles); })
         .catch(() => {});
     };
     const id = setInterval(poll, 10_000);
-    return () => clearInterval(id);
+    return () => { cancelled = true; clearInterval(id); };
   }, [chartTf, pair]);
 
-  // Daily zone candles — fetched independently of chartTf whenever the Daily
-  // zone toggle is on, then polled every 10s so the still-forming candle's
-  // high/low (and therefore zone tap detection) tracks live price.
-  useEffect(() => {
-    if (!showDailyZones) { setDailyZoneCandles([]); return; }
-    const load = () => getLiveCandles(pair, "1D")
-      .then(candles => setDailyZoneCandles(candles))
-      .catch(() => setDailyZoneCandles([]));
-    load();
-    const id = setInterval(load, 10_000);
-    return () => clearInterval(id);
-  }, [showDailyZones, pair]);
-
-  // 4H zone candles — fetched + polled only while the 4H zone toggle is on
-  useEffect(() => {
-    if (!show4HZones) { setH4ZoneCandles([]); return; }
-    const load = () => getLiveCandles(pair, "4H")
-      .then(candles => setH4ZoneCandles(candles))
-      .catch(() => setH4ZoneCandles([]));
-    load();
-    const id = setInterval(load, 10_000);
-    return () => clearInterval(id);
-  }, [show4HZones, pair]);
-
-  // 1H zone candles — fetched + polled only while the 1H zone toggle is on
-  useEffect(() => {
-    if (!show1HZones) { setH1ZoneCandles([]); return; }
-    const load = () => getLiveCandles(pair, "1H")
-      .then(candles => setH1ZoneCandles(candles))
-      .catch(() => setH1ZoneCandles([]));
-    load();
-    const id = setInterval(load, 10_000);
-    return () => clearInterval(id);
-  }, [show1HZones, pair]);
-
-  // 15M zone candles — fetched + polled only while the 15M zone toggle is on
-  useEffect(() => {
-    if (!show15MZones) { setM15ZoneCandles([]); return; }
-    const load = () => getLiveCandles(pair, "15M")
-      .then(candles => setM15ZoneCandles(candles))
-      .catch(() => setM15ZoneCandles([]));
-    load();
-    const id = setInterval(load, 10_000);
-    return () => clearInterval(id);
-  }, [show15MZones, pair]);
-
-  // 5M zone candles — fetched + polled only while the 5M zone toggle is on
-  useEffect(() => {
-    if (!show5MZones) { setM5ZoneCandles([]); return; }
-    const load = () => getLiveCandles(pair, "5M")
-      .then(candles => setM5ZoneCandles(candles))
-      .catch(() => setM5ZoneCandles([]));
-    load();
-    const id = setInterval(load, 10_000);
-    return () => clearInterval(id);
-  }, [show5MZones, pair]);
+  // Zone/session/trend/pivot candle fetching now lives in useLiveCandles
+  // (see its definition, and where dailyZoneCandles etc. are declared above).
 
   // Fair-value-gap zone detection is O(n^2)-ish over the candle series — run
   // it once per timeframe whenever that timeframe's candles actually change,
@@ -3588,72 +4302,17 @@ function PriceHistoryChart({
   const m15ZonesAll   = useMemo(() => computeSupplyDemandZones(m15ZoneCandles),   [m15ZoneCandles]);
   const m5ZonesAll    = useMemo(() => computeSupplyDemandZones(m5ZoneCandles),    [m5ZoneCandles]);
 
-  // Weekly trendline candles — fetched only while the Weekly trendline toggle is on
-  useEffect(() => {
-    if (!showWeeklyTrend) { setWeeklyTrendCandles([]); return; }
-    getLiveCandles(pair, "1W")
-      .then(candles => setWeeklyTrendCandles(candles))
-      .catch(() => setWeeklyTrendCandles([]));
-  }, [showWeeklyTrend, pair]);
-
-  // Daily trendline candles — fetched only while the Daily trendline toggle is on
-  useEffect(() => {
-    if (!showDailyTrend) { setDailyTrendCandles([]); return; }
-    getLiveCandles(pair, "1D")
-      .then(candles => setDailyTrendCandles(candles))
-      .catch(() => setDailyTrendCandles([]));
-  }, [showDailyTrend, pair]);
-
-  // 4H trendline candles — fetched only while the 4H trendline toggle is on
-  useEffect(() => {
-    if (!show4HTrend) { setH4TrendCandles([]); return; }
-    getLiveCandles(pair, "4H")
-      .then(candles => setH4TrendCandles(candles))
-      .catch(() => setH4TrendCandles([]));
-  }, [show4HTrend, pair]);
-
-  // 1H trendline candles — fetched only while the 1H trendline toggle is on
-  useEffect(() => {
-    if (!show1HTrend) { setH1TrendCandles([]); return; }
-    getLiveCandles(pair, "1H")
-      .then(candles => setH1TrendCandles(candles))
-      .catch(() => setH1TrendCandles([]));
-  }, [show1HTrend, pair]);
-
-  // 15M trendline candles — fetched only while the 15M trendline toggle is on
-  useEffect(() => {
-    if (!show15MTrend) { setM15TrendCandles([]); return; }
-    getLiveCandles(pair, "15M")
-      .then(candles => setM15TrendCandles(candles))
-      .catch(() => setM15TrendCandles([]));
-  }, [show15MTrend, pair]);
-
-  // 5M trendline candles — fetched only while the 5M trendline toggle is on
-  useEffect(() => {
-    if (!show5MTrend) { setM5TrendCandles([]); return; }
-    getLiveCandles(pair, "5M")
-      .then(candles => setM5TrendCandles(candles))
-      .catch(() => setM5TrendCandles([]));
-  }, [show5MTrend, pair]);
-
-  // 1M trendline candles — fetched only while the 1M trendline toggle is on
-  useEffect(() => {
-    if (!show1MTrend) { setM1TrendCandles([]); return; }
-    getLiveCandles(pair, "1M")
-      .then(candles => setM1TrendCandles(candles))
-      .catch(() => setM1TrendCandles([]));
-  }, [show1MTrend, pair]);
 
   // Recompute trendline segments + repaint the primitive whenever inputs change
   useEffect(() => {
     let lines: TrendlineSegment[] = [];
-    if (showWeeklyTrend) lines = lines.concat(computeAutoTrendlines(weeklyTrendCandles, 2, trendCounts.W,   trendColors.W));
-    if (showDailyTrend)  lines = lines.concat(computeAutoTrendlines(dailyTrendCandles,  2, trendCounts.D,   trendColors.D));
-    if (show4HTrend)     lines = lines.concat(computeAutoTrendlines(h4TrendCandles,     2, trendCounts.H4,  trendColors.H4));
-    if (show1HTrend)     lines = lines.concat(computeAutoTrendlines(h1TrendCandles,     2, trendCounts.H1,  trendColors.H1));
-    if (show15MTrend)    lines = lines.concat(computeAutoTrendlines(m15TrendCandles,    2, trendCounts.M15, trendColors.M15));
-    if (show5MTrend)     lines = lines.concat(computeAutoTrendlines(m5TrendCandles,     2, trendCounts.M5,  trendColors.M5));
-    if (show1MTrend)     lines = lines.concat(computeAutoTrendlines(m1TrendCandles,     2, trendCounts.M1,  trendColors.M1));
+    if (showWeeklyTrend) lines = lines.concat(computeAutoTrendlines(weeklyTrendCandles, 2, trendCounts.W,   trendColors.W,   "W"));
+    if (showDailyTrend)  lines = lines.concat(computeAutoTrendlines(dailyTrendCandles,  2, trendCounts.D,   trendColors.D,   "D"));
+    if (show4HTrend)     lines = lines.concat(computeAutoTrendlines(h4TrendCandles,     2, trendCounts.H4,  trendColors.H4,  "4H"));
+    if (show1HTrend)     lines = lines.concat(computeAutoTrendlines(h1TrendCandles,     2, trendCounts.H1,  trendColors.H1,  "1H"));
+    if (show15MTrend)    lines = lines.concat(computeAutoTrendlines(m15TrendCandles,    2, trendCounts.M15, trendColors.M15, "15M"));
+    if (show5MTrend)     lines = lines.concat(computeAutoTrendlines(m5TrendCandles,     2, trendCounts.M5,  trendColors.M5,  "5M"));
+    if (show1MTrend)     lines = lines.concat(computeAutoTrendlines(m1TrendCandles,     2, trendCounts.M1,  trendColors.M1,  "1M"));
     trendLinesRef.current = lines;
     if (trendPrimRef.current) trendPrimRef.current._lines = lines;
     chartRef.current?.applyOptions({});
@@ -3661,46 +4320,16 @@ function PriceHistoryChart({
       weeklyTrendCandles, dailyTrendCandles, h4TrendCandles, h1TrendCandles, m15TrendCandles, m5TrendCandles, m1TrendCandles,
       trendCounts, trendColors]);
 
-  // Pivot Points candles — one independent fetch per timeframe toggle,
-  // same pattern as the trendline candles above.
-  useEffect(() => {
-    if (!showPivotWeekly) { setPivotWeeklyCandles([]); return; }
-    getLiveCandles(pair, "1W")
-      .then(candles => setPivotWeeklyCandles(candles))
-      .catch(() => setPivotWeeklyCandles([]));
-  }, [showPivotWeekly, pair]);
-
-  useEffect(() => {
-    if (!showPivotDaily) { setPivotDailyCandles([]); return; }
-    getLiveCandles(pair, "1D")
-      .then(candles => setPivotDailyCandles(candles))
-      .catch(() => setPivotDailyCandles([]));
-  }, [showPivotDaily, pair]);
-
-  useEffect(() => {
-    if (!showPivot4H) { setPivot4HCandles([]); return; }
-    getLiveCandles(pair, "4H")
-      .then(candles => setPivot4HCandles(candles))
-      .catch(() => setPivot4HCandles([]));
-  }, [showPivot4H, pair]);
-
-  useEffect(() => {
-    if (!showPivot1H) { setPivot1HCandles([]); return; }
-    getLiveCandles(pair, "1H")
-      .then(candles => setPivot1HCandles(candles))
-      .catch(() => setPivot1HCandles([]));
-  }, [showPivot1H, pair]);
-
   // Recompute pivot boxes + repaint whenever the master toggle, a
   // per-timeframe toggle, or the underlying candles change.
   useEffect(() => {
     const pivotsActive = activeInds.has("pivots");
     let boxes: TimeRangeBox[] = [];
     if (pivotsActive) {
-      if (showPivotWeekly) boxes = boxes.concat(computeCurrentPivotBoxes(pivotWeeklyCandles));
-      if (showPivotDaily)  boxes = boxes.concat(computeCurrentPivotBoxes(pivotDailyCandles));
-      if (showPivot4H)     boxes = boxes.concat(computeCurrentPivotBoxes(pivot4HCandles));
-      if (showPivot1H)     boxes = boxes.concat(computeCurrentPivotBoxes(pivot1HCandles));
+      if (showPivotWeekly) boxes = boxes.concat(computeCurrentPivotBoxes(pivotWeeklyCandles, "W"));
+      if (showPivotDaily)  boxes = boxes.concat(computeCurrentPivotBoxes(pivotDailyCandles, "D"));
+      if (showPivot4H)     boxes = boxes.concat(computeCurrentPivotBoxes(pivot4HCandles, "4H"));
+      if (showPivot1H)     boxes = boxes.concat(computeCurrentPivotBoxes(pivot1HCandles, "1H"));
     }
     if (pivotPrimRef.current) pivotPrimRef.current._boxes = boxes;
     chartRef.current?.applyOptions({});
@@ -4335,12 +4964,17 @@ function PriceHistoryChart({
       indSeriesRef.current.volume = [s];
 
     } else {
-      const period = ({ ema9: 9, ema20: 20, ema50: 50, ema200: 200 } as Record<string, number>)[key]!;
-      const emaData = toData(computeEMA(closes, period));
+      const MA_PERIODS: Record<string, { period: number; fn: (c: number[], p: number) => (number | null)[] }> = {
+        ema9: { period: 9,   fn: computeEMA }, ema20:  { period: 20,  fn: computeEMA },
+        ema50: { period: 50, fn: computeEMA }, ema200: { period: 200, fn: computeEMA },
+        sma200: { period: 200, fn: computeSMA }, sma400: { period: 400, fn: computeSMA },
+      };
+      const { period, fn } = MA_PERIODS[key]!;
+      const maData = toData(fn(closes, period));
 
       const existing = indSeriesRef.current[key];
       if (existing && existing.length === 1) {
-        existing[0].setData(emaData);
+        existing[0].setData(maData);
         return;
       }
       removeIndSeries(key);
@@ -4348,7 +4982,7 @@ function PriceHistoryChart({
       const color = IND_DEFS.find(d => d.key === key)!.color;
       const s = chart.addSeries(LineSeries, { color, lineWidth: 1 });
       s.applyOptions(indOpts);
-      s.setData(emaData);
+      s.setData(maData);
       indSeriesRef.current[key] = [s];
     }
   }, [removeIndSeries]);
@@ -4377,9 +5011,10 @@ function PriceHistoryChart({
     if (mode === "candles") {
       const showReversals = activeIndsRef.current.has("reversal");
       const reversalFlags = showReversals ? computeReversalFlags(
-        candles, zoneBoxesRef.current, eightAmBoxesRef.current, trendLinesRef.current,
+        candles, zoneBoxesRef.current, eightAmBoxesRef.current, trendLinesRef.current, drawingsRef.current,
         reversalPatternTypesRef.current, reversalZoneFilterRef.current,
         reversalEightAmBoxFilterRef.current, reversalTrendlineFilterRef.current,
+        reversalGannFilterRef.current, reversalFibFilterRef.current, reversalMaxCountRef.current,
       ) : null;
       series.setData(candles.map((r, i) => {
         const point: any = {
@@ -4441,6 +5076,16 @@ function PriceHistoryChart({
   // changes normally only repaint their own primitive, not the candle
   // series. Re-run applyData whenever the qualifying context could have
   // changed so the yellow highlights stay in sync.
+  //
+  // drawings changes on every edit anywhere on the chart (draw, drag,
+  // hide/show, delete) — only the Gann/Fib reversal filters actually care
+  // about it, so this collapses to a stable `null` reference whenever both
+  // are off, instead of forcing a full computeReversalFlags + series.setData
+  // over the whole loaded candle array on every unrelated drawing edit.
+  const reversalRelevantDrawings = useMemo(
+    () => (reversalGannFilter || reversalFibFilter) ? drawings : null,
+    [drawings, reversalGannFilter, reversalFibFilter]
+  );
   useEffect(() => {
     if (activeInds.has("reversal") && tfRows.length > 0) applyData(tfRows, viewModeRef.current, false);
   }, [showDailyZones, show4HZones, show1HZones, show15MZones, show5MZones,
@@ -4450,7 +5095,8 @@ function PriceHistoryChart({
       showEightAmBox, eightAmBoxes,
       showWeeklyTrend, showDailyTrend, show4HTrend, show1HTrend, show15MTrend,
       weeklyTrendCandles, dailyTrendCandles, h4TrendCandles, h1TrendCandles, m15TrendCandles, trendCounts,
-      reversalZoneFilter, reversalEightAmBoxFilter, reversalTrendlineFilter, reversalPatternGroups, showTappedZone]);
+      reversalZoneFilter, reversalEightAmBoxFilter, reversalTrendlineFilter, reversalGannFilter, reversalFibFilter,
+      reversalMaxCount, reversalPatternGroups, showTappedZone, reversalRelevantDrawings]);
 
   const toggleInd = useCallback((key: IndKey) => {
     const next = new Set(activeIndsRef.current);
@@ -4462,7 +5108,7 @@ function PriceHistoryChart({
   }, [addIndSeries, removeIndSeries, applyData]);
 
   const createSeries = useCallback((chart: IChartApi, mode: string) => {
-    if (seriesRef.current) { chart.removeSeries(seriesRef.current); seriesRef.current = null; priceLineRef.current = null; zonePrimRef.current = null; trendPrimRef.current = null; eightAmBoxPrimRef.current = null; marketSessionPrimRef.current = null; reversalMarkerPrimRef.current = null; pivotPrimRef.current = null; newsLinePrimRef.current = null; watermarkPrimRef.current = null; }
+    if (seriesRef.current) { chart.removeSeries(seriesRef.current); seriesRef.current = null; priceLineRef.current = null; zonePrimRef.current = null; trendPrimRef.current = null; eightAmBoxPrimRef.current = null; marketSessionPrimRef.current = null; reversalMarkerPrimRef.current = null; pivotPrimRef.current = null; newsLinePrimRef.current = null; watermarkPrimRef.current = null; drawingPrimRef.current = null; }
     if (mode === "candles") {
       const { up, down } = CANDLE_COLOR_SCHEMES[candleColorSchemeRef.current];
       const s = chart.addSeries(CandlestickSeries, {
@@ -4495,6 +5141,12 @@ function PriceHistoryChart({
     (seriesRef.current as any).attachPrimitive(marketSessionPrim);
     marketSessionPrimRef.current = marketSessionPrim;
     const reversalMarkerPrim = new ReversalMarkerPrimitive([]);
+    // The class default (_showLabels = true) is only a fallback for the
+    // very first primitive ever created — createSeries also reruns on
+    // every viewMode toggle (candles/line) and recreates this primitive
+    // from scratch each time, which was silently resetting the user's
+    // label preference back to "on" regardless of what they'd set it to.
+    reversalMarkerPrim._showLabels = showReversalLabelsRef.current;
     (seriesRef.current as any).attachPrimitive(reversalMarkerPrim);
     reversalMarkerPrimRef.current = reversalMarkerPrim;
     const pivotPrim = new TimeRangeBoxPrimitive([]);
@@ -4503,6 +5155,10 @@ function PriceHistoryChart({
     const newsLinePrim = new NewsLinePrimitive([]);
     (seriesRef.current as any).attachPrimitive(newsLinePrim);
     newsLinePrimRef.current = newsLinePrim;
+    const drawingPrim = new DrawingPrimitive(drawingsRef.current, pairRef.current);
+    drawingPrim._selectedId = selectedDrawingIdRef.current;
+    (seriesRef.current as any).attachPrimitive(drawingPrim);
+    drawingPrimRef.current = drawingPrim;
     // Ghosted instrument watermark — Quad View tiles only.
     if (compact) {
       const watermarkPrim = new WatermarkPrimitive(pairRef.current);
@@ -4593,21 +5249,234 @@ function PriceHistoryChart({
     // rather than closing over one primitive instance, since the viewMode
     // effect below can recreate the series (and its attached primitive).
     const onCrosshairMove = (param: any) => {
+      lastMouseXYRef.current = (param?.point?.x !== undefined && param?.point?.y !== undefined)
+        ? { x: param.point.x, y: param.point.y } : null;
+
       const hitTest = newsLinePrimRef.current?._hitTest ?? [];
       const x = param?.point?.x;
-      if (x === undefined || hitTest.length === 0) { setNewsHover(null); return; }
-      const hit = hitTest.find(h => Math.abs(h.xCss - x) <= 4);
-      if (!hit) { setNewsHover(null); return; }
-      const rect = containerRef.current?.getBoundingClientRect();
-      if (!rect) { setNewsHover(null); return; }
-      setNewsHover({ x: rect.left + x, y: rect.top + (param.point.y ?? 0), label: hit.label, color: hit.color, detail: hit.detail });
+      if (x === undefined || hitTest.length === 0) { setNewsHover(null); }
+      else {
+        const hit = hitTest.find(h => Math.abs(h.xCss - x) <= 4);
+        const rect = containerRef.current?.getBoundingClientRect();
+        if (!hit || !rect) setNewsHover(null);
+        else setNewsHover({ x: rect.left + x, y: rect.top + (param.point.y ?? 0), label: hit.label, color: hit.color, detail: hit.detail });
+      }
+
+      const bar = param?.time !== undefined && seriesRef.current
+        ? param.seriesData?.get(seriesRef.current)
+        : null;
+      // Keep the same object reference when the hovered bar's O/H/L/C
+      // hasn't actually changed — this fires on every mouse-pixel move, and
+      // a fresh object literal each time would fail React's Object.is
+      // bail-out and re-render this (large) component on every pixel even
+      // while still hovering the same candle.
+      setHoverBar(prev => {
+        if (!bar || bar.open === undefined) return prev === null ? prev : null;
+        if (prev && prev.open === bar.open && prev.high === bar.high && prev.low === bar.low && prev.close === bar.close) return prev;
+        return { open: bar.open, high: bar.high, low: bar.low, close: bar.close };
+      });
+
+      // Rubber-band preview for an in-progress 2-point drawing — mutating
+      // the primitive directly (not React state) since this fires on every
+      // mouse pixel and a repaint is already about to happen for the
+      // crosshair itself.
+      if (pendingPointRef.current && drawingPrimRef.current) {
+        const px = param?.point?.x, py = param?.point?.y;
+        if (px !== undefined && py !== undefined && param.time !== undefined && seriesRef.current && chartRef.current) {
+          const snap = magnetModeRef.current ? findMagnetSnap(chartRef.current, seriesRef.current, px, py, tfRowsRef.current) : null;
+          const price = snap ? snap.price : seriesRef.current.coordinateToPrice(py);
+          if (price !== null) {
+            drawingPrimRef.current._pending = {
+              kind: activeDrawToolRef.current as Exclude<DrawTool, "cursor">,
+              p1: pendingPointRef.current,
+              p2: pendingSecondPointRef.current ?? undefined,
+              cursor: snap ?? { time: param.time as number, price },
+            };
+          }
+        }
+      }
     };
     chart.subscribeCrosshairMove(onCrosshairMove);
 
+    // Drawing-tool placement + selection — a tool other than "cursor" places
+    // points (1 click for horizontal/text, 2 for the rest); "cursor" instead
+    // hit-tests the click against existing drawings to select/deselect one
+    // for deletion. Reads activeDrawToolRef/pendingPointRef rather than
+    // closing over state so this subscription (set up once, on mount) always
+    // sees the current tool.
+    const onChartClick = (param: any) => {
+      const series = seriesRef.current;
+      const x = param?.point?.x, y = param?.point?.y;
+      if (!series || x === undefined || y === undefined) return;
+      const tool = activeDrawToolRef.current;
+
+      if (tool === "cursor") {
+        const chart = chartRef.current;
+        if (!chart) return;
+        let hitId: string | null = null;
+        for (let i = drawingsRef.current.length - 1; i >= 0; i--) {
+          const d = drawingsRef.current[i];
+          if (!d.hidden && hitTestDrawing(chart, series, d, x, y)) { hitId = d.id; break; }
+        }
+        setSelectedDrawingId(hitId);
+        return;
+      }
+
+      if (param.time === undefined) return; // clicked past the loaded data — nothing to anchor to
+      const chart = chartRef.current;
+      const snap = (magnetModeRef.current && tool !== "text" && chart)
+        ? findMagnetSnap(chart, series, x, y, tfRowsRef.current) : null;
+      const price = snap ? snap.price : series.coordinateToPrice(y);
+      if (price === null) return;
+      const point: DrawPoint = snap ?? { time: param.time as number, price };
+
+      if (tool === "horizontal" || tool === "horizontalray" || tool === "text") {
+        if (tool === "text") {
+          const rect = containerRef.current?.getBoundingClientRect();
+          if (rect) setTextPrompt({ x: rect.left + x, y: rect.top + y, point });
+        } else {
+          persistDrawings([...drawingsRef.current, { id: crypto.randomUUID(), kind: tool, p1: point, color: "#60a5fa" }]);
+          setActiveDrawTool("cursor");
+        }
+        return;
+      }
+
+      if (!pendingPointRef.current) {
+        pendingPointRef.current = point;
+        if (drawingPrimRef.current) drawingPrimRef.current._pending = { kind: tool, p1: point, cursor: point };
+        return;
+      }
+      // fibext is the only 3-click tool — its 2nd click confirms B and
+      // waits on a 3rd (C) instead of completing here.
+      if (tool === "fibext" && !pendingSecondPointRef.current) {
+        pendingSecondPointRef.current = point;
+        if (drawingPrimRef.current) drawingPrimRef.current._pending = { kind: tool, p1: pendingPointRef.current, p2: point, cursor: point };
+        return;
+      }
+      const newDrawing: Drawing = tool === "fibext"
+        ? { id: crypto.randomUUID(), kind: "fibext", p1: pendingPointRef.current, p2: pendingSecondPointRef.current!, p3: point, color: "#eab308" }
+        : { id: crypto.randomUUID(), kind: tool, p1: pendingPointRef.current, p2: point, color: tool === "fib" ? "#eab308" : "#60a5fa" };
+      persistDrawings([...drawingsRef.current, newDrawing]);
+      pendingPointRef.current = null;
+      pendingSecondPointRef.current = null;
+      if (drawingPrimRef.current) drawingPrimRef.current._pending = null;
+      setActiveDrawTool("cursor");
+    };
+    chart.subscribeClick(onChartClick);
+
+    // Drag-to-readjust for the selected drawing — native DOM events, not a
+    // lightweight-charts subscription, since a drag needs continuous
+    // mousemove/mouseup tracking that subscribeClick/subscribeCrosshairMove
+    // don't provide. Coordinates come from lastMouseXYRef (lightweight-charts'
+    // own onCrosshairMove-reported point), NOT a manual clientX/Y minus
+    // getBoundingClientRect() — that would be a second, independent
+    // coordinate pipeline, and any small discrepancy between it and the
+    // logicalToCoordinate/priceToCoordinate space every hit-test in this file
+    // already relies on would make an 8px handle unhittable. Registered with
+    // `capture: true` on the container (the div lightweight-charts renders
+    // its own canvas into) so this runs BEFORE the chart's own mousedown
+    // handler — only then does stopPropagation actually suppress its
+    // pan-on-drag for this gesture, rather than the chart having already
+    // started panning by the time a bubble-phase listener would fire.
+    //
+    // Two kinds of handle, checked in this order: a drawing's own real
+    // anchor point(s) (p1/p2/p3, any kind — moves both time and price of
+    // that exact point, letting you re-anchor a trend line, ray, gann fan,
+    // fibext leg, etc. after the fact) take priority over a rectangle's
+    // derived edge-midpoint handles (resize — moves only one axis).
+    const onContainerMouseDown = (e: MouseEvent) => {
+      if (activeDrawToolRef.current !== "cursor") return;
+      const id = selectedDrawingIdRef.current;
+      if (!id) return;
+      const drawing = drawingsRef.current.find(d => d.id === id);
+      if (!drawing) return;
+      const chart = chartRef.current, series = seriesRef.current;
+      const xy = lastMouseXYRef.current;
+      if (!chart || !series || !xy) return;
+      const anchorHit = hitTestAnchorPoint(chart, series, drawing, xy.x, xy.y);
+      const rectHandle = !anchorHit ? hitTestRectHandle(chart, series, drawing, xy.x, xy.y) : null;
+      if (!anchorHit && !rectHandle) return;
+      e.preventDefault();
+      e.stopPropagation();
+      draggingHandleRef.current = anchorHit
+        ? { mode: "anchor", id, point: anchorHit }
+        : { mode: "rectResize", id, handle: rectHandle! };
+
+      const onMove = () => {
+        const dh = draggingHandleRef.current;
+        const mxy = lastMouseXYRef.current;
+        if (!dh || !mxy) return;
+        const { x: mx, y: my } = mxy;
+        const cur = drawingsRef.current.find(d => d.id === dh.id);
+        if (!cur) return;
+
+        let next: Drawing;
+        if (dh.mode === "anchor") {
+          let price = series.coordinateToPrice(my);
+          let time = chart.timeScale().coordinateToTime(mx) as number | null;
+          if (price === null || time === null) return;
+          if (magnetModeRef.current) {
+            const snap = findMagnetSnap(chart, series, mx, my, tfRowsRef.current);
+            if (snap) { price = snap.price; time = snap.time; }
+          }
+          next = {
+            ...cur,
+            p1: { ...cur.p1 }, p2: cur.p2 ? { ...cur.p2 } : undefined, p3: cur.p3 ? { ...cur.p3 } : undefined,
+          };
+          (next as any)[dh.point] = { time, price };
+        } else {
+          if (!cur.p2) return;
+          next = { ...cur, p1: { ...cur.p1 }, p2: { ...cur.p2 } };
+          if (dh.handle === "top" || dh.handle === "bottom") {
+            let price = series.coordinateToPrice(my);
+            if (price === null) return;
+            if (magnetModeRef.current) {
+              const snap = findMagnetSnap(chart, series, mx, my, tfRowsRef.current);
+              if (snap) price = snap.price;
+            }
+            const p1IsHigher = cur.p1.price >= cur.p2.price;
+            const movingP1 = (dh.handle === "top") === p1IsHigher;
+            if (movingP1) next.p1!.price = price; else next.p2!.price = price;
+          } else {
+            const time = chart.timeScale().coordinateToTime(mx) as number | null;
+            if (time === null) return;
+            const p1IsEarlier = cur.p1.time <= cur.p2.time;
+            const movingP1 = (dh.handle === "left") === p1IsEarlier;
+            if (movingP1) next.p1!.time = time; else next.p2!.time = time;
+          }
+        }
+        const updated = drawingsRef.current.map(d => d.id === dh.id ? next : d);
+        drawingsRef.current = updated;
+        if (drawingPrimRef.current) drawingPrimRef.current._drawings = updated;
+      };
+      const onUp = () => {
+        draggingHandleRef.current = null;
+        window.removeEventListener("mousemove", onMove);
+        window.removeEventListener("mouseup", onUp);
+        activeDragListenersRef.current = null;
+        persistDrawings(drawingsRef.current);
+      };
+      window.addEventListener("mousemove", onMove);
+      window.addEventListener("mouseup", onUp);
+      activeDragListenersRef.current = { onMove, onUp };
+    };
+    containerRef.current.addEventListener("mousedown", onContainerMouseDown, { capture: true });
+
     return () => {
       chart.unsubscribeCrosshairMove(onCrosshairMove);
+      chart.unsubscribeClick(onChartClick);
+      containerRef.current?.removeEventListener("mousedown", onContainerMouseDown, { capture: true });
+      // Drop an in-flight handle drag rather than leak its window listeners
+      // or let its eventual mouseup call persistDrawings after unmount —
+      // the drag's live preview only ever lived in the primitive, so
+      // there's nothing to persist, just a partial gesture to abandon.
+      if (activeDragListenersRef.current) {
+        window.removeEventListener("mousemove", activeDragListenersRef.current.onMove);
+        window.removeEventListener("mouseup", activeDragListenersRef.current.onUp);
+        activeDragListenersRef.current = null;
+      }
       ro.disconnect(); chart.remove();
-      chartRef.current = null; seriesRef.current = null; indSeriesRef.current = {}; bbFillPrimRef.current = null; ichiCloudPrimRef.current = null; zonePrimRef.current = null; trendPrimRef.current = null; eightAmBoxPrimRef.current = null; marketSessionPrimRef.current = null; newsLinePrimRef.current = null; watermarkPrimRef.current = null; openTradePriceLinesRef.current = [];
+      chartRef.current = null; seriesRef.current = null; indSeriesRef.current = {}; bbFillPrimRef.current = null; ichiCloudPrimRef.current = null; zonePrimRef.current = null; trendPrimRef.current = null; eightAmBoxPrimRef.current = null; marketSessionPrimRef.current = null; newsLinePrimRef.current = null; watermarkPrimRef.current = null; drawingPrimRef.current = null; openTradePriceLinesRef.current = [];
     };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -4715,6 +5584,18 @@ function PriceHistoryChart({
   }, [showReversalSettings]);
 
   useEffect(() => {
+    if (!showLayersPanel) return;
+    const close = (e: MouseEvent) => {
+      const target = e.target as Node;
+      const insideButton  = layersBtnRef.current?.contains(target);
+      const insidePopover = layersPopoverRef.current?.contains(target);
+      if (!insideButton && !insidePopover) setShowLayersPanel(false);
+    };
+    document.addEventListener("mousedown", close);
+    return () => document.removeEventListener("mousedown", close);
+  }, [showLayersPanel]);
+
+  useEffect(() => {
     if (!showPivotSettings) return;
     const close = (e: MouseEvent) => {
       const target = e.target as Node;
@@ -4788,7 +5669,11 @@ function PriceHistoryChart({
 
   const handleSnapshotClick = useCallback(async () => {
     const rect = snapshotBtnRef.current?.getBoundingClientRect();
-    if (rect) setSnapshotPos({ top: rect.bottom + 6, left: rect.left });
+    if (rect) {
+      const popoverWidth = 260;
+      const left = Math.min(rect.left, window.innerWidth - popoverWidth - 12);
+      setSnapshotPos({ top: rect.bottom + 6, left: Math.max(8, left) });
+    }
     setSnapshotSaved(false);
     setSnapshotTradeId(null);
     setSnapshotKind("entry");
@@ -5288,12 +6173,12 @@ function PriceHistoryChart({
                 letterSpacing: "0.08em", color: "var(--text-muted)", marginBottom: 6 }}>
                 Filter By:
               </div>
-              <div style={{ display: "flex", gap: 6, marginBottom: 12 }}>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 12 }}>
                 <button
                   onClick={() => setReversalZoneFilter(v => !v)}
                   title="Bearish reversals inside/on a supply zone, bullish inside/on a demand zone — no cross-bias"
                   style={{
-                    fontSize: 9, fontWeight: 700, padding: "4px 6px", flex: 1,
+                    fontSize: 9, fontWeight: 700, padding: "4px 6px", flex: "1 1 30%",
                     textTransform: "uppercase", letterSpacing: "0.06em",
                     background: reversalZoneFilter ? "var(--accent-dim)" : "var(--bg-panel-alt)",
                     border:     reversalZoneFilter ? "1px solid var(--accent-border)" : "1px solid var(--border-medium)",
@@ -5307,7 +6192,7 @@ function PriceHistoryChart({
                   onClick={() => setReversalEightAmBoxFilter(v => !v)}
                   title="Either bias, inside/on an active ORB box"
                   style={{
-                    fontSize: 9, fontWeight: 700, padding: "4px 6px", flex: 1,
+                    fontSize: 9, fontWeight: 700, padding: "4px 6px", flex: "1 1 30%",
                     textTransform: "uppercase", letterSpacing: "0.06em",
                     background: reversalEightAmBoxFilter ? "var(--accent-dim)" : "var(--bg-panel-alt)",
                     border:     reversalEightAmBoxFilter ? "1px solid var(--accent-border)" : "1px solid var(--border-medium)",
@@ -5320,7 +6205,7 @@ function PriceHistoryChart({
                 <button
                   onClick={() => setReversalTrendlineFilter(v => !v)}
                   style={{
-                    fontSize: 9, fontWeight: 700, padding: "4px 6px", flex: 1,
+                    fontSize: 9, fontWeight: 700, padding: "4px 6px", flex: "1 1 30%",
                     textTransform: "uppercase", letterSpacing: "0.06em",
                     background: reversalTrendlineFilter ? "var(--accent-dim)" : "var(--bg-panel-alt)",
                     border:     reversalTrendlineFilter ? "1px solid var(--accent-border)" : "1px solid var(--border-medium)",
@@ -5330,6 +6215,79 @@ function PriceHistoryChart({
                 >
                   Trend Line
                 </button>
+                <button
+                  onClick={() => setReversalGannFilter(v => !v)}
+                  title="Either bias, on any of a drawn Gann Fan's 9 ratio lines"
+                  style={{
+                    fontSize: 9, fontWeight: 700, padding: "4px 6px", flex: "1 1 30%",
+                    textTransform: "uppercase", letterSpacing: "0.06em",
+                    background: reversalGannFilter ? "var(--accent-dim)" : "var(--bg-panel-alt)",
+                    border:     reversalGannFilter ? "1px solid var(--accent-border)" : "1px solid var(--border-medium)",
+                    color:      reversalGannFilter ? "var(--accent-text)" : "var(--text-secondary)",
+                    borderRadius: 6, cursor: "pointer",
+                  }}
+                >
+                  Gann Fan
+                </button>
+                <button
+                  onClick={() => setReversalFibFilter(v => !v)}
+                  title="Either bias, on any level of a drawn Fibonacci Retracement or Extension"
+                  style={{
+                    fontSize: 9, fontWeight: 700, padding: "4px 6px", flex: "1 1 30%",
+                    textTransform: "uppercase", letterSpacing: "0.06em",
+                    background: reversalFibFilter ? "var(--accent-dim)" : "var(--bg-panel-alt)",
+                    border:     reversalFibFilter ? "1px solid var(--accent-border)" : "1px solid var(--border-medium)",
+                    color:      reversalFibFilter ? "var(--accent-text)" : "var(--text-secondary)",
+                    borderRadius: 6, cursor: "pointer",
+                  }}
+                >
+                  Fibonacci
+                </button>
+              </div>
+              <div style={{
+                display: "flex", alignItems: "center", justifyContent: "space-between",
+                padding: "0 0 10px",
+              }}>
+                <span style={{ fontSize: 11, color: "var(--text-secondary)" }}>Show last</span>
+                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  <button
+                    onClick={() => setReversalMaxCount(n => Math.max(1, (n ?? 10) - 5))}
+                    disabled={reversalMaxCount === null}
+                    style={{
+                      width: 18, height: 18, borderRadius: 4, cursor: reversalMaxCount === null ? "not-allowed" : "pointer",
+                      background: "var(--bg-panel-alt)", border: "1px solid var(--border-medium)",
+                      color: "var(--text-secondary)", fontSize: 11, lineHeight: 1,
+                      opacity: reversalMaxCount === null ? 0.4 : 1,
+                    }}
+                  >−</button>
+                  <span style={{ fontSize: 11, fontWeight: 700, color: "var(--text-primary)", width: 24, textAlign: "center" }}>
+                    {reversalMaxCount ?? "All"}
+                  </span>
+                  <button
+                    onClick={() => setReversalMaxCount(n => (n ?? 10) + 5)}
+                    disabled={reversalMaxCount === null}
+                    style={{
+                      width: 18, height: 18, borderRadius: 4, cursor: reversalMaxCount === null ? "not-allowed" : "pointer",
+                      background: "var(--bg-panel-alt)", border: "1px solid var(--border-medium)",
+                      color: "var(--text-secondary)", fontSize: 11, lineHeight: 1,
+                      opacity: reversalMaxCount === null ? 0.4 : 1,
+                    }}
+                  >+</button>
+                  <button
+                    onClick={() => setReversalMaxCount(v => v === null ? 10 : null)}
+                    title={reversalMaxCount === null ? "Showing every qualifying reversal candle" : `Showing only the last ${reversalMaxCount}`}
+                    style={{
+                      fontSize: 9, fontWeight: 700, padding: "3px 6px", marginLeft: 2,
+                      textTransform: "uppercase", letterSpacing: "0.06em",
+                      background: reversalMaxCount === null ? "var(--accent-dim)" : "var(--bg-panel-alt)",
+                      border:     reversalMaxCount === null ? "1px solid var(--accent-border)" : "1px solid var(--border-medium)",
+                      color:      reversalMaxCount === null ? "var(--accent-text)" : "var(--text-secondary)",
+                      borderRadius: 6, cursor: "pointer",
+                    }}
+                  >
+                    All
+                  </button>
+                </div>
               </div>
               <div style={{ fontSize: 9, fontWeight: 700, textTransform: "uppercase",
                 letterSpacing: "0.08em", color: "var(--text-muted)", marginBottom: 6 }}>
@@ -5997,16 +6955,205 @@ function PriceHistoryChart({
           {!quadView && masterCollapseButton}
         </div>
       </div>
-      <div style={{ borderRadius: compact ? 0 : 14, overflow: "hidden", position: "relative", ...((expandHeight || compact) ? { flex: 1, minHeight: 0 } : {}) }}>
+      <div style={{ borderRadius: compact ? 0 : 14, overflow: "hidden", position: "relative", display: "flex", ...((expandHeight || compact) ? { flex: 1, minHeight: 0 } : {}) }}>
+        {/* Drawing-tool rail — TradingView puts this on the chart's left
+            edge, so it does too. Hidden in Quad View tiles (compact) same as
+            Snapshot/Expand/Quad above — a 2x2 grid of charts has no room for
+            a full tool rail on each one. */}
+        {!compact && (
+          <div style={{
+            width: 34, flexShrink: 0, display: "flex", flexDirection: "column", alignItems: "center",
+            gap: 3, padding: "8px 0", background: "var(--bg-panel)", borderRight: "1px solid var(--border-subtle)",
+          }}>
+            {([
+              ["cursor",     "Cursor (select / deselect a drawing)",  <MousePointer2 size={14} />],
+              ["trendline",  "Trend Line",                            <Minus size={14} style={{ transform: "rotate(-45deg)" }} />],
+              ["ray",        "Ray (extends right)",                   <ArrowUpRight size={14} />],
+              ["horizontal", "Horizontal Line",                       <Minus size={14} />],
+              ["horizontalray", "Horizontal Ray",                     <ArrowRight size={14} />],
+              ["rectangle",  "Rectangle",                             <Square size={14} />],
+              ["fib",        "Fibonacci Retracement",                 "Fib"],
+              ["fibext",     "Fibonacci Extension (3 clicks: A, B, C)", "FibX"],
+              ["gann",       "Gann Fan",                              "Gann"],
+              ["text",       "Text",                                  <Type size={14} />],
+            ] as [DrawTool, string, React.ReactNode][]).map(([tool, label, content]) => (
+              <ToolbarIconButton
+                key={tool}
+                label={label}
+                active={activeDrawTool === tool}
+                onClick={() => { cancelPendingDrawing(); setActiveDrawTool(tool); }}
+              >
+                {content}
+              </ToolbarIconButton>
+            ))}
+            <div style={{ width: 20, height: 1, background: "var(--border-subtle)", margin: "4px 0" }} />
+            <ToolbarIconButton
+              label={magnetMode ? "Magnet: on (snapping to O/H/L/C)" : "Magnet: off (snap points to O/H/L/C)"}
+              active={magnetMode}
+              onClick={() => setMagnetMode(v => !v)}
+            >
+              <Magnet size={14} />
+            </ToolbarIconButton>
+            <div style={{ width: 20, height: 1, background: "var(--border-subtle)", margin: "4px 0" }} />
+            <ToolbarIconButton
+              label="Delete selected drawing (Del)"
+              disabled={!selectedDrawingId}
+              onClick={deleteSelectedDrawing}
+            >
+              <Trash2 size={14} />
+            </ToolbarIconButton>
+            <ToolbarIconButton label="Clear all drawings on this chart" onClick={clearAllDrawings}>
+              <Eraser size={14} />
+            </ToolbarIconButton>
+            {/* Layers sits alone at the bottom of the rail, pinned there via
+                marginTop: auto (the column is a flex container) rather than
+                just being last in source order, so it stays put regardless
+                of how many tool buttons are added above it later. */}
+            <ToolbarIconButton
+              rootRef={layersBtnRef}
+              label="Layers — show/hide drawings"
+              active={showLayersPanel}
+              onClick={() => {
+                const chartRect = containerRef.current?.getBoundingClientRect();
+                if (chartRect) {
+                  // Anchored to the chart's own bottom-left corner via a
+                  // `bottom` offset (not `top` with an estimated height) so
+                  // the panel's bottom edge stays pinned there and it grows
+                  // upward as the drawing list gets longer, instead of
+                  // guessing a height up front and clamping against it.
+                  const MARGIN = 8;
+                  setLayersPanelPos({ bottom: window.innerHeight - chartRect.bottom + MARGIN, left: chartRect.left + MARGIN });
+                }
+                setShowLayersPanel(v => !v);
+              }}
+              style={{ marginTop: "auto" }}
+            >
+              <Layers size={14} />
+            </ToolbarIconButton>
+          </div>
+        )}
+        {textPrompt && createPortal(
+          <div style={{
+            position: "fixed", top: textPrompt.y, left: textPrompt.x, zIndex: 1000,
+            background: "var(--bg-panel)", border: "1px solid var(--accent-border)", borderRadius: 6, padding: 4,
+            boxShadow: "0 8px 24px rgba(0,0,0,0.45)",
+          }}>
+            <input
+              autoFocus
+              placeholder="Text…"
+              onKeyDown={(e) => {
+                if (e.key === "Escape") { cancelPendingDrawing(); return; }
+                if (e.key !== "Enter") return;
+                const text = e.currentTarget.value.trim();
+                if (text) persistDrawings([...drawingsRef.current, { id: crypto.randomUUID(), kind: "text", p1: textPrompt.point, text, color: "#eab308" }]);
+                cancelPendingDrawing();
+              }}
+              onBlur={() => cancelPendingDrawing()}
+              style={{
+                fontSize: 11, padding: "4px 6px", width: 140, boxSizing: "border-box",
+                background: "var(--bg-panel-alt)", border: "1px solid var(--border-medium)",
+                color: "var(--text-primary)", borderRadius: 4, outline: "none",
+              }}
+            />
+          </div>,
+          document.body
+        )}
+        {showLayersPanel && layersPanelPos && createPortal(
+          <div ref={layersPopoverRef} style={{
+            position: "fixed", bottom: layersPanelPos.bottom, left: layersPanelPos.left, zIndex: 1000,
+            background: "var(--bg-panel)", border: "1px solid var(--border-medium)",
+            borderRadius: 10, padding: "8px 0", width: 220, maxHeight: "70%",
+            boxShadow: "0 8px 24px rgba(0,0,0,0.45)", display: "flex", flexDirection: "column",
+          }}>
+            <div style={{ padding: "4px 12px 8px", fontSize: 9, fontWeight: 800,
+              textTransform: "uppercase", letterSpacing: "0.1em", color: "var(--text-muted)" }}>
+              Layers
+            </div>
+            {drawings.length === 0 ? (
+              <div style={{ padding: "4px 12px 8px", fontSize: 11, color: "var(--text-muted)" }}>
+                No drawings on this chart
+              </div>
+            ) : (
+              <div style={{ maxHeight: 260, overflowY: "auto" }}>
+                {drawings.map((d, i) => {
+                  const isSelected = d.id === selectedDrawingId;
+                  // Numbered within its own kind (1st rectangle, 2nd
+                  // rectangle, ...), not by overall position in a mixed-kind
+                  // list — otherwise two rectangles with a trend line drawn
+                  // between them show up as "Rectangle 1" / "Rectangle 3".
+                  const sameKindIndex = drawings.slice(0, i).filter(x => x.kind === d.kind).length + 1;
+                  const label = d.kind === "text" && d.text ? d.text : `${DRAWING_KIND_LABELS[d.kind]} ${sameKindIndex}`;
+                  return (
+                    <div
+                      key={d.id}
+                      onClick={() => setSelectedDrawingId(d.id)}
+                      style={{
+                        display: "flex", alignItems: "center", gap: 8, padding: "6px 12px", cursor: "pointer",
+                        background: isSelected ? "var(--accent-dim)" : "transparent",
+                      }}
+                    >
+                      <span style={{ width: 8, height: 8, borderRadius: 2, background: d.color, flexShrink: 0 }} />
+                      <span style={{
+                        flex: 1, minWidth: 0, fontSize: 11, fontWeight: 600, whiteSpace: "nowrap",
+                        overflow: "hidden", textOverflow: "ellipsis",
+                        color: isSelected ? "var(--accent-text)" : "var(--text-primary)",
+                        opacity: d.hidden ? 0.5 : 1,
+                      }}>
+                        {label}
+                      </span>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); toggleDrawingHidden(d.id); }}
+                        title={d.hidden ? "Show" : "Hide"}
+                        style={{
+                          display: "flex", alignItems: "center", justifyContent: "center",
+                          width: 20, height: 20, padding: 0, flexShrink: 0,
+                          background: "none", border: "none", cursor: "pointer",
+                          color: d.hidden ? "var(--text-muted)" : "var(--text-secondary)",
+                        }}
+                      >
+                        {d.hidden ? <EyeOff size={13} /> : <Eye size={13} />}
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>,
+          document.body
+        )}
+        <div style={{ position: "relative", flex: 1, minWidth: 0 }}>
         {tfLoading && (
           <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", zIndex: 10, pointerEvents: "none" }}>
             <span style={{ fontSize: 11, color: "var(--text-muted)", letterSpacing: "0.05em" }}>Loading…</span>
           </div>
         )}
+        {viewMode === "candles" && tfRows.length > 0 && (() => {
+          const latest = tfRows[tfRows.length - 1];
+          const bar = hoverBar ?? { open: latest.open, high: latest.high, low: latest.low, close: latest.close };
+          const dec = decimalsForPair(pairRef.current, bar.close);
+          const up = bar.close >= bar.open;
+          const { up: upColor, down: downColor } = CANDLE_COLOR_SCHEMES[candleColorScheme];
+          const color = up ? upColor : downColor;
+          const chgAbs = bar.close - bar.open;
+          const chgPct = bar.open !== 0 ? (chgAbs / bar.open) * 100 : 0;
+          return (
+            <div style={{
+              position: "absolute", top: 8, left: 12, zIndex: 5, pointerEvents: "none",
+              display: "flex", flexWrap: "wrap", alignItems: "baseline", gap: "3px 8px", maxWidth: "90%",
+              fontSize: 10, fontWeight: 600, letterSpacing: "0.02em", color, textShadow: "0 1px 2px rgba(0,0,0,0.6)",
+            }}>
+              <span>O <b>{formatPrice(bar.open, dec)}</b></span>
+              <span>H <b>{formatPrice(bar.high, dec)}</b></span>
+              <span>L <b>{formatPrice(bar.low, dec)}</b></span>
+              <span>C <b>{formatPrice(bar.close, dec)}</b></span>
+              <span>{up ? "+" : ""}{formatPrice(chgAbs, dec)} ({up ? "+" : ""}{chgPct.toFixed(2)}%)</span>
+            </div>
+          );
+        })()}
         {anyActive && (
           <div style={{
-            position: "absolute", top: 8, left: 12, zIndex: 5, pointerEvents: "none",
-            display: "flex", flexWrap: "wrap", gap: "2px 8px", maxWidth: "70%",
+            position: "absolute", top: 24, left: 12, zIndex: 5, pointerEvents: "none",
+            display: "flex", flexDirection: "column", gap: 2, maxWidth: "70%",
           }}>
             {IND_DEFS.filter(d => activeInds.has(d.key)).map(({ key, label, color }) => (
               <span key={key} style={{
@@ -6019,6 +7166,7 @@ function PriceHistoryChart({
           </div>
         )}
         <div ref={containerRef} style={{ height: (expandHeight || compact) ? "100%" : 480 + heightBoost, opacity: tfLoading ? 0.3 : 1 }} />
+        </div>
       </div>
     </div>
   );
@@ -11782,6 +12930,46 @@ function candleTouchesTrendline(low: number, high: number, time: number, line: T
   return low <= price && high >= price;
 }
 
+// Same idea, against a user-drawn Gann Fan's 9 ratio rays — pure time/price
+// arithmetic (no chart/pixel space involved), each ray's slope scaled off
+// the p1→p2 baseline exactly as GannRenderer draws it, valid only forward
+// from the anchor (p1) like a trend line's own t1 cutoff.
+function candleTouchesGannFan(low: number, high: number, time: number, gann: Drawing): boolean {
+  if (!gann.p2 || time < gann.p1.time) return false;
+  const dtBase = gann.p2.time - gann.p1.time;
+  if (dtBase === 0) return false;
+  const dpBase = gann.p2.price - gann.p1.price;
+  return GANN_RATIOS.some(g => {
+    const dt = dtBase * g.dxMul;
+    if (dt === 0) return false;
+    const dp = dpBase * g.dyMul;
+    const price = gann.p1.price + (dp / dt) * (time - gann.p1.time);
+    return low <= price && high >= price;
+  });
+}
+
+// Same idea against a user-drawn Fibonacci Retracement or Extension's
+// horizontal levels — valid from whichever of the drawing's own points is
+// earliest forward, matching how DrawingRenderer draws each one starting at
+// that same x.
+function candleTouchesFibLevels(low: number, high: number, time: number, fib: Drawing): boolean {
+  if (!fib.p2) return false;
+  if (fib.kind === "fibext") {
+    if (!fib.p3) return false;
+    if (time < Math.min(fib.p1.time, fib.p2.time, fib.p3.time)) return false;
+    return FIBEXT_LEVELS.some(ratio => {
+      const price = fib.p3!.price + (fib.p2!.price - fib.p1.price) * ratio;
+      return low <= price && high >= price;
+    });
+  }
+  if (fib.kind !== "fib") return false;
+  if (time < Math.min(fib.p1.time, fib.p2.time)) return false;
+  return FIB_LEVELS.some(ratio => {
+    const price = fib.p1.price + (fib.p2!.price - fib.p1.price) * ratio;
+    return low <= price && high >= price;
+  });
+}
+
 interface ReversalInfo { name: string; bias: "bullish" | "bearish" }
 
 function computeReversalFlags(
@@ -11789,16 +12977,22 @@ function computeReversalFlags(
   zones: ZoneBox[],
   eightAmBoxes: TimeRangeBox[],
   trendlines: TrendlineSegment[],
+  drawings: Drawing[],
   enabledPatterns: Set<string>,
   zoneFilterOn: boolean,
   eightAmBoxFilterOn: boolean,
   trendlineFilterOn: boolean,
+  gannFilterOn: boolean,
+  fibFilterOn: boolean,
+  maxCount: number | null,
 ): (ReversalInfo | null)[] {
   const flags: (ReversalInfo | null)[] = new Array(rows.length).fill(null);
   if (enabledPatterns.size === 0) return flags;
   const demandZones = zones.filter(z => z.type === "demand");
   const supplyZones = zones.filter(z => z.type === "supply");
-  const anyFilterOn = zoneFilterOn || eightAmBoxFilterOn || trendlineFilterOn;
+  const gannDrawings = gannFilterOn ? drawings.filter(d => d.kind === "gann" && !d.hidden) : [];
+  const fibDrawings  = fibFilterOn  ? drawings.filter(d => (d.kind === "fib" || d.kind === "fibext") && !d.hidden) : [];
+  const anyFilterOn = zoneFilterOn || eightAmBoxFilterOn || trendlineFilterOn || gannFilterOn || fibFilterOn;
   // rows' final entry is still the forming candle (live poll updates it in
   // place until the bar closes) — its O/H/L/C can still change, so it must
   // never be flagged as a reversal even if it currently matches a pattern's
@@ -11813,8 +13007,8 @@ function computeReversalFlags(
     // No filter active (default): every detected + enabled pattern qualifies
     // regardless of location. With a filter active: Zone strictly requires
     // bullish reversals inside/on a currently-viewed demand zone and bearish
-    // inside/on supply (no cross-bias); 8AM Box and Trend Line count either
-    // bias, per whichever filters are on.
+    // inside/on supply (no cross-bias); every other filter (8AM Box, Trend
+    // Line, Gann Fan, Fibonacci) counts either bias, per whichever are on.
     const qualifying = !anyFilterOn
       ? patterns[0]
       : patterns.find(p => {
@@ -11823,9 +13017,21 @@ function computeReversalFlags(
             : supplyZones.some(z => candleTouchesZone(r.low, r.high, t, z)));
           const boxMatch   = eightAmBoxFilterOn && eightAmBoxes.some(b => candleTouchesTimeRangeBox(r.low, r.high, t, b));
           const trendMatch = trendlineFilterOn && trendlines.some(l => candleTouchesTrendline(r.low, r.high, t, l));
-          return zoneMatch || boxMatch || trendMatch;
+          const gannMatch  = gannFilterOn && gannDrawings.some(g => candleTouchesGannFan(r.low, r.high, t, g));
+          const fibMatch   = fibFilterOn && fibDrawings.some(f => candleTouchesFibLevels(r.low, r.high, t, f));
+          return zoneMatch || boxMatch || trendMatch || gannMatch || fibMatch;
         });
     if (qualifying) flags[i] = { name: qualifying.name, bias: qualifying.bias as "bullish" | "bearish" };
+  }
+  // Keep only the most recent `maxCount` qualifying candles — a long history
+  // of them buries the ones that still matter under a wall of older ones.
+  if (maxCount !== null && maxCount > 0) {
+    let kept = 0;
+    for (let i = flags.length - 1; i >= 0; i--) {
+      if (flags[i] === null) continue;
+      kept++;
+      if (kept > maxCount) flags[i] = null;
+    }
   }
   return flags;
 }
@@ -12495,6 +13701,37 @@ function getLiveCandles(pair: string, tf: string): Promise<RawCandleTf[]> {
     if (cur && cur.promise === promise) rawCandleCache.delete(key);
   });
   return promise;
+}
+
+// One instrument+timeframe candle series, fetched only while `enabled` (a
+// toggle button — Supply/Demand zone, Trend Line, Pivot, Sessions, 8am box —
+// is on) and cleared to [] the moment it's switched off. Consolidates what
+// used to be a hand-rolled useState+useEffect pair repeated ~18 times across
+// PriceHistoryChart (one per timeframe per feature) into a single call each.
+// pollMs is optional: the Supply/Demand zone, Sessions, and 8am box features
+// pass 10_000 so a still-forming candle's O/H/L/C keeps tracking live price;
+// the auto Trend Line and Pivot Points features only ever fetch once per
+// toggle/pair change (that distinction is intentional and predates this
+// hook — preserved exactly, not something to unify away).
+function useLiveCandles(pair: string, tf: string, enabled: boolean, pollMs?: number): RawCandleTf[] {
+  const [candles, setCandles] = useState<RawCandleTf[]>([]);
+  useEffect(() => {
+    if (!enabled) { setCandles([]); return; }
+    // Switching pair/tf/enabled while a fetch is in flight must not let
+    // that superseded fetch's late resolution overwrite the state a NEWER
+    // effect run already set — without this, flipping EUR/USD -> GBP/USD
+    // could briefly render EUR-priced zones/trend lines on the GBP chart
+    // if the EUR fetch happens to resolve after the GBP one.
+    let cancelled = false;
+    const load = () => getLiveCandles(pair, tf)
+      .then(c => { if (!cancelled) setCandles(c); })
+      .catch(() => { if (!cancelled) setCandles([]); });
+    load();
+    if (!pollMs) return () => { cancelled = true; };
+    const id = setInterval(load, pollMs);
+    return () => { cancelled = true; clearInterval(id); };
+  }, [enabled, pair, tf, pollMs]);
+  return candles;
 }
 
 const STACK_TFS = ["1W", "1D", "4H", "1H", "15M", "5M", "1M"] as const;
@@ -13474,7 +14711,7 @@ export function AnalyticsV3() {
   // mounts a fresh instance — consume() picks up that request even though
   // it was dispatched before this component (and its subscribe below,
   // which only covers a favorite clicked while already on this page) existed.
-  const [selectedPair, setSelectedPair] = useState(() => pairSelectionEvents.consume() ?? "EUR/USD");
+  const [selectedPair, setSelectedPair] = useState(() => pairSelectionEvents.consume() ?? getLastChartSelection()?.pair ?? "EUR/USD");
   const [aisRowCollapsed, setAisRowCollapsed] = useState(true);
   const [belowChartCollapsed, setBelowChartCollapsed] = useState(false);
   const [rightOfChartCollapsed, setRightOfChartCollapsed] = useState(false);
@@ -13945,8 +15182,15 @@ export function AnalyticsV3() {
     });
   }
   const [expanded, setExpanded] = useState<PanelMeta | null>(null);
-  const [chartTf, setChartTf] = useState<"1W" | "1D" | "4H" | "1H" | "15M" | "5M" | "1M">("1D");
+  const CHART_TFS = ["1W", "1D", "4H", "1H", "15M", "5M", "1M"] as const;
+  const [chartTf, setChartTf] = useState<"1W" | "1D" | "4H" | "1H" | "15M" | "5M" | "1M">(() => {
+    const saved = getLastChartSelection()?.chartTf;
+    return (CHART_TFS as readonly string[]).includes(saved ?? "") ? (saved as typeof CHART_TFS[number]) : "1D";
+  });
   const [indicatorTf, setIndicatorTf] = useState<"1W" | "1D" | "4H" | "1H" | "15M" | "5M" | "1M">("1D");
+  // Remember the instrument+timeframe across navigation and app restarts —
+  // see getLastChartSelection in preferences.ts.
+  useEffect(() => { setLastChartSelection(selectedPair, chartTf); }, [selectedPair, chartTf]);
 
   // Quad View — 2x2 grid of 4 fully independent PriceHistoryChart instances
   // (each with its own instrument, timeframe, and full toolbar) instead of

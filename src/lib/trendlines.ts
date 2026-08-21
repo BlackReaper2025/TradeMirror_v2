@@ -17,6 +17,7 @@ export interface TrendlineSegment {
   p2: number; // price at later pivot
   srcDurationSec: number; // typical bar duration on the source timeframe
   color: string;
+  tfLabel: string; // which timeframe this ray was computed on (e.g. "1H"), for the chart label
 }
 
 const toTime = (c: RawCandleTf) => Math.floor(new Date(c.timestamp).getTime() / 1000);
@@ -29,6 +30,7 @@ function buildRays(
   count: number,
   srcDurationSec: number,
   color: string,
+  tfLabel: string,
 ): TrendlineSegment[] {
   const rays: TrendlineSegment[] = [];
   for (let k = 0; k < count; k++) {
@@ -42,6 +44,7 @@ function buildRays(
       t2: toTime(candles[i2]), p2: priceOf(i2),
       srcDurationSec,
       color,
+      tfLabel,
     });
   }
   return rays;
@@ -54,7 +57,7 @@ function buildRays(
  * ray 1 connects the two most recent pivots, ray 2 the pair before that, etc.
  */
 export function computeAutoTrendlines(
-  candles: RawCandleTf[], lookback = 2, count = 1, color = "#3b82f6",
+  candles: RawCandleTf[], lookback = 2, count = 1, color = "#3b82f6", tfLabel = "",
 ): TrendlineSegment[] {
   const n = candles.length;
   if (n < lookback * 2 + 3 || count < 1) return [];
@@ -63,7 +66,7 @@ export function computeAutoTrendlines(
   const srcDurationSec = toTime(candles[n - 1]) - toTime(candles[n - 2]);
 
   return [
-    ...buildRays(candles, pivotLows,  "support",    i => candles[i].low,  count, srcDurationSec, color),
-    ...buildRays(candles, pivotHighs, "resistance", i => candles[i].high, count, srcDurationSec, color),
+    ...buildRays(candles, pivotLows,  "support",    i => candles[i].low,  count, srcDurationSec, color, tfLabel),
+    ...buildRays(candles, pivotHighs, "resistance", i => candles[i].high, count, srcDurationSec, color, tfLabel),
   ];
 }

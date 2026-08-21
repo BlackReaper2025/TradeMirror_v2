@@ -145,16 +145,24 @@ export interface ReversalSettings {
   zoneFilter: boolean;
   eightAmBoxFilter: boolean;
   trendlineFilter: boolean;
+  gannFilter: boolean;
+  fibFilter: boolean;
   patternGroups: string[];
   showLabels: boolean;
+  // How many of the most recent qualifying reversal candles to actually
+  // flag, counting back from the latest — null means no limit. A long
+  // history tends to bury the ones that still matter under a wall of older
+  // ones, so this caps it to whatever count is actually useful right now.
+  maxCount: number | null;
 }
 const REVERSAL_SETTINGS_KEY = "tm_reversal_settings";
 
 export function getReversalSettings(defaultPatternGroups: string[]): ReversalSettings {
   const fallback: ReversalSettings = {
-    zoneFilter: false, eightAmBoxFilter: false, trendlineFilter: false,
+    zoneFilter: false, eightAmBoxFilter: false, trendlineFilter: false, gannFilter: false, fibFilter: false,
     patternGroups: [...defaultPatternGroups],
     showLabels: false,
+    maxCount: null,
   };
   try {
     const raw = localStorage.getItem(REVERSAL_SETTINGS_KEY);
@@ -164,10 +172,13 @@ export function getReversalSettings(defaultPatternGroups: string[]): ReversalSet
       zoneFilter:       typeof parsed.zoneFilter === "boolean" ? parsed.zoneFilter : fallback.zoneFilter,
       eightAmBoxFilter: typeof parsed.eightAmBoxFilter === "boolean" ? parsed.eightAmBoxFilter : fallback.eightAmBoxFilter,
       trendlineFilter:  typeof parsed.trendlineFilter === "boolean" ? parsed.trendlineFilter : fallback.trendlineFilter,
+      gannFilter:       typeof parsed.gannFilter === "boolean" ? parsed.gannFilter : fallback.gannFilter,
+      fibFilter:        typeof parsed.fibFilter === "boolean" ? parsed.fibFilter : fallback.fibFilter,
       patternGroups:    Array.isArray(parsed.patternGroups) && parsed.patternGroups.every((g) => typeof g === "string")
         ? parsed.patternGroups
         : fallback.patternGroups,
       showLabels:       typeof parsed.showLabels === "boolean" ? parsed.showLabels : fallback.showLabels,
+      maxCount:         typeof parsed.maxCount === "number" && parsed.maxCount > 0 ? parsed.maxCount : fallback.maxCount,
     };
   } catch {
     return fallback;
@@ -200,6 +211,177 @@ export function getQuadPairs(): [string, string, string, string] {
 export function setQuadPairs(pairs: [string, string, string, string]): void {
   localStorage.setItem(QUAD_PAIRS_KEY, JSON.stringify(pairs));
   window.dispatchEvent(new CustomEvent("tm:prefs-changed"));
+}
+
+// Manual chart drawings (trend line / ray / horizontal / rectangle / fib /
+// gann / text) placed via the chart's drawing-tool rail. Kept per
+// instrument+timeframe, same way TradingView scopes drawings to a chart.
+export interface StoredDrawPoint { time: number; price: number; }
+export interface StoredDrawing {
+  id: string;
+  kind: "trendline" | "ray" | "horizontal" | "horizontalray" | "rectangle" | "fib" | "fibext" | "gann" | "text";
+  p1: StoredDrawPoint;
+  p2?: StoredDrawPoint;
+  p3?: StoredDrawPoint; // "fibext" only — the 3rd (retracement) anchor point
+  text?: string;
+  color: string;
+  hidden?: boolean; // toggled from the Layers panel — kept, not deleted
+}
+
+// Keyed by instrument only (not timeframe) — a drawing's (time, price) point
+// is meaningful on any timeframe of the same instrument, and TradingView
+// itself shows the same drawings across all of a symbol's timeframes rather
+// than hiding them the moment you switch chart resolution.
+function chartDrawingsKey(pair: string): string {
+  return `tm_chart_drawings_${pair}`;
+}
+
+function isStoredDrawPoint(v: unknown): v is StoredDrawPoint {
+  return !!v && typeof v === "object"
+    && typeof (v as StoredDrawPoint).time === "number"
+    && typeof (v as StoredDrawPoint).price === "number";
+}
+
+const DRAWING_KINDS = new Set(["trendline", "ray", "horizontal", "horizontalray", "rectangle", "fib", "fibext", "gann", "text"]);
+
+function isStoredDrawing(v: unknown): v is StoredDrawing {
+  if (!v || typeof v !== "object") return false;
+  const d = v as StoredDrawing;
+  if (typeof d.id !== "string" || !DRAWING_KINDS.has(d.kind) || typeof d.color !== "string") return false;
+  if (!isStoredDrawPoint(d.p1)) return false;
+  if (d.p2 !== undefined && !isStoredDrawPoint(d.p2)) return false;
+  if (d.p3 !== undefined && !isStoredDrawPoint(d.p3)) return false;
+  if (d.text !== undefined && typeof d.text !== "string") return false;
+  if (d.hidden !== undefined && typeof d.hidden !== "boolean") return false;
+  return true;
+}
+
+export function getChartDrawings(pair: string): StoredDrawing[] {
+  try {
+    const raw = localStorage.getItem(chartDrawingsKey(pair));
+    if (!raw) return [];
+    const parsed: unknown = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.filter(isStoredDrawing) : [];
+  } catch {
+    return [];
+  }
+}
+export function setChartDrawings(pair: string, drawings: StoredDrawing[]): void {
+  localStorage.setItem(chartDrawingsKey(pair), JSON.stringify(drawings));
+}
+
+// Last instrument+timeframe viewed on the Analytics chart. Drawings are
+// already durable per pair+tf (above) — what wasn't durable is which pair+tf
+// the chart opens back up on, so navigating away and back (AppShell
+// unmounts/remounts pages, no keep-alive) or restarting the app landed back
+// on the hardcoded EUR/USD 1D default and made any drawings on whatever the
+// user had actually been looking at seem to have vanished.
+const LAST_CHART_SELECTION_KEY = "tm_analytics_last_selection";
+export interface LastChartSelection { pair: string; chartTf: string; }
+
+export function getLastChartSelection(): LastChartSelection | null {
+  try {
+    const raw = localStorage.getItem(LAST_CHART_SELECTION_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<LastChartSelection>;
+    if (typeof parsed.pair === "string" && typeof parsed.chartTf === "string") {
+      return { pair: parsed.pair, chartTf: parsed.chartTf };
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+export function setLastChartSelection(pair: string, chartTf: string): void {
+  localStorage.setItem(LAST_CHART_SELECTION_KEY, JSON.stringify({ pair, chartTf }));
+}
+
+// Which indicators/overlays are toggled on and how the chart is currently
+// styled — the toolbar state, not tied to any one instrument (unlike
+// drawings, which are anchored to specific price/time coordinates and stay
+// scoped per pair+tf). Turning Sessions on for EUR/USD and expecting it
+// still on after switching to GBP/USD or restarting the app means this is
+// meant to behave like a standing display preference, not per-chart state.
+// Only the single (non-Quad-View) chart reads/writes this — 4 independent
+// Quad View tiles sharing one stored toggle set would otherwise clobber
+// each other every time any one of them changed something.
+export interface ChartViewSettings {
+  viewMode: "candles" | "line";
+  activeInds: string[];
+  candleColorScheme: "default" | "tradingview";
+  showDailyZones: boolean;
+  show4HZones: boolean;
+  show1HZones: boolean;
+  show15MZones: boolean;
+  show5MZones: boolean;
+  showWeeklyTrend: boolean;
+  showDailyTrend: boolean;
+  show4HTrend: boolean;
+  show1HTrend: boolean;
+  show15MTrend: boolean;
+  show5MTrend: boolean;
+  show1MTrend: boolean;
+  showNews: boolean;
+  showTappedZone: boolean;
+  showSessions: boolean;
+  sessionVisibility: { tokyo: boolean; london: boolean; newyork: boolean };
+  sessionBackCount: number;
+}
+const DEFAULT_CHART_VIEW_SETTINGS: ChartViewSettings = {
+  viewMode: "candles",
+  activeInds: ["volume"],
+  candleColorScheme: "tradingview",
+  showDailyZones: false, show4HZones: false, show1HZones: false, show15MZones: false, show5MZones: false,
+  showWeeklyTrend: true, showDailyTrend: false, show4HTrend: false, show1HTrend: false, show15MTrend: false,
+  show5MTrend: false, show1MTrend: false,
+  showNews: false,
+  showTappedZone: true,
+  showSessions: false,
+  sessionVisibility: { tokyo: true, london: true, newyork: true },
+  sessionBackCount: 5,
+};
+const CHART_VIEW_SETTINGS_KEY = "tm_chart_view_settings";
+
+export function getChartViewSettings(): ChartViewSettings {
+  const d = DEFAULT_CHART_VIEW_SETTINGS;
+  try {
+    const raw = localStorage.getItem(CHART_VIEW_SETTINGS_KEY);
+    if (!raw) return d;
+    const p = JSON.parse(raw) as Partial<ChartViewSettings>;
+    return {
+      viewMode: p.viewMode === "line" ? "line" : d.viewMode,
+      activeInds: Array.isArray(p.activeInds) && p.activeInds.every((v) => typeof v === "string") ? p.activeInds : d.activeInds,
+      candleColorScheme: p.candleColorScheme === "default" || p.candleColorScheme === "tradingview" ? p.candleColorScheme : d.candleColorScheme,
+      showDailyZones: typeof p.showDailyZones === "boolean" ? p.showDailyZones : d.showDailyZones,
+      show4HZones: typeof p.show4HZones === "boolean" ? p.show4HZones : d.show4HZones,
+      show1HZones: typeof p.show1HZones === "boolean" ? p.show1HZones : d.show1HZones,
+      show15MZones: typeof p.show15MZones === "boolean" ? p.show15MZones : d.show15MZones,
+      show5MZones: typeof p.show5MZones === "boolean" ? p.show5MZones : d.show5MZones,
+      showWeeklyTrend: typeof p.showWeeklyTrend === "boolean" ? p.showWeeklyTrend : d.showWeeklyTrend,
+      showDailyTrend: typeof p.showDailyTrend === "boolean" ? p.showDailyTrend : d.showDailyTrend,
+      show4HTrend: typeof p.show4HTrend === "boolean" ? p.show4HTrend : d.show4HTrend,
+      show1HTrend: typeof p.show1HTrend === "boolean" ? p.show1HTrend : d.show1HTrend,
+      show15MTrend: typeof p.show15MTrend === "boolean" ? p.show15MTrend : d.show15MTrend,
+      show5MTrend: typeof p.show5MTrend === "boolean" ? p.show5MTrend : d.show5MTrend,
+      show1MTrend: typeof p.show1MTrend === "boolean" ? p.show1MTrend : d.show1MTrend,
+      showNews: typeof p.showNews === "boolean" ? p.showNews : d.showNews,
+      showTappedZone: typeof p.showTappedZone === "boolean" ? p.showTappedZone : d.showTappedZone,
+      showSessions: typeof p.showSessions === "boolean" ? p.showSessions : d.showSessions,
+      sessionVisibility: (p.sessionVisibility && typeof p.sessionVisibility === "object")
+        ? {
+            tokyo: p.sessionVisibility.tokyo !== false,
+            london: p.sessionVisibility.london !== false,
+            newyork: p.sessionVisibility.newyork !== false,
+          }
+        : d.sessionVisibility,
+      sessionBackCount: typeof p.sessionBackCount === "number" ? p.sessionBackCount : d.sessionBackCount,
+    };
+  } catch {
+    return d;
+  }
+}
+export function setChartViewSettings(settings: ChartViewSettings): void {
+  localStorage.setItem(CHART_VIEW_SETTINGS_KEY, JSON.stringify(settings));
 }
 
 export function getAnalyticsPanelOrder(defaultOrder: string[]): string[] {
