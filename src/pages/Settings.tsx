@@ -1,9 +1,11 @@
 import { useState, useEffect } from "react";
 import { Plus, Check, Trash2, FolderOpen, Pencil, Archive, ArchiveRestore } from "lucide-react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import { Panel, PanelHeader } from "../components/ui/Panel";
+import { Panel } from "../components/ui/Panel";
 import { getTimeFormat, setTimeFormat, type TimeFormat } from "../lib/preferences";
-import { getMusicUrl, setMusicUrl, getSlideshowFolder, setSlideshowFolder, getSlideshowInterval, setSlideshowInterval, getAccountBrokerUrl, setAccountBrokerUrl } from "../lib/preferences";
+import { getAccountPropFirm, setAccountPropFirm, type PropFirm } from "../lib/preferences";
+import { getPropFirmServerZone, setPropFirmServerZone } from "../lib/preferences";
+import { getSlideshowFolder, setSlideshowFolder, getSlideshowInterval, setSlideshowInterval, getAccountBrokerUrl, setAccountBrokerUrl } from "../lib/preferences";
 import {
   getSettings,
   getActiveAccounts,
@@ -31,43 +33,60 @@ import { tradeEvents } from "../lib/tradeEvents";
 
 function SectionTitle({ children }: { children: React.ReactNode }) {
   return (
-    <h2 className="text-[11px] font-semibold uppercase tracking-widest mt-2 mb-1 px-1" style={{ color: "var(--text-muted)" }}>
+    <h2 className="text-[10px] font-semibold uppercase tracking-widest mt-0.5 mb-0.5 px-1" style={{ color: "var(--text-muted)" }}>
       {children}
     </h2>
   );
 }
 
-function ToggleOption({
-  label, description, value, selected, onSelect,
-}: {
-  label: string; description?: string; value: string;
-  selected: boolean; onSelect: (v: string) => void;
-}) {
+// Compact in-panel header — replaces the shared PanelHeader (14px text, 16px
+// bottom margin) with a smaller/tighter one scoped to this page only, so
+// PanelHeader's spacing elsewhere in the app (Dashboard, etc.) is untouched.
+function CompactHeader({ label, children }: { label: string; children?: React.ReactNode }) {
   return (
-    <button
-      onClick={() => onSelect(value)}
-      className="flex items-center justify-between w-full px-4 py-3 rounded-lg text-left transition-all"
-      style={{
-        background: selected ? "var(--accent-dim)" : "var(--bg-panel-alt)",
-        border: selected ? "1px solid var(--accent-border)" : "1px solid var(--border-subtle)",
-        color: selected ? "var(--accent-text)" : "var(--text-primary)",
-      }}
-    >
-      <div>
-        <div className="text-[13px] font-medium">{label}</div>
-        {description && (
-          <div className="text-[11px] mt-0.5" style={{ color: selected ? "var(--accent-text)" : "var(--text-muted)" }}>
-            {description}
-          </div>
-        )}
-      </div>
-      <div
-        className="w-4 h-4 rounded-full border-2 flex items-center justify-center shrink-0"
-        style={{ borderColor: selected ? "var(--accent)" : "var(--border-medium)" }}
-      >
-        {selected && <div className="w-2 h-2 rounded-full" style={{ background: "var(--accent)" }} />}
-      </div>
-    </button>
+    <div className="flex items-center justify-between mb-2">
+      <span className="text-[11px] font-semibold uppercase tracking-widest" style={{ color: "var(--text-secondary)" }}>
+        {label}
+      </span>
+      {children}
+    </div>
+  );
+}
+
+// Compact pill row for small mutually-exclusive choices (time format, timezone,
+// account type, prop firm) — replaces the old full-height ToggleOption cards
+// so a binary/ternary choice takes one row instead of two stacked cards.
+function SegmentedControl<T extends string>({
+  options, value, onChange, size = "default",
+}: {
+  options: { value: T; label: string }[];
+  value: T;
+  onChange: (v: T) => void;
+  size?: "default" | "sm";
+}) {
+  const sm = size === "sm";
+  return (
+    <div className={sm ? "flex gap-1" : "flex gap-2"}>
+      {options.map(o => (
+        <button
+          key={o.value}
+          type="button"
+          onClick={() => onChange(o.value)}
+          className={
+            sm
+              ? "px-2.5 py-1 rounded-md text-[11px] font-medium transition-all"
+              : "flex-1 px-3 py-1.5 rounded-lg text-[12px] font-medium transition-all"
+          }
+          style={{
+            background: value === o.value ? "var(--accent-dim)" : "var(--bg-panel-alt)",
+            border:     value === o.value ? "1px solid var(--accent-border)" : "1px solid var(--border-subtle)",
+            color:      value === o.value ? "var(--accent-text)" : "var(--text-secondary)",
+          }}
+        >
+          {o.label}
+        </button>
+      ))}
+    </div>
   );
 }
 
@@ -79,8 +98,8 @@ function FieldInput({
   placeholder?: string; type?: string;
 }) {
   return (
-    <div className="flex flex-col gap-1.5">
-      <label className="text-[12px] font-medium" style={{ color: "var(--text-secondary)" }}>
+    <div className="flex flex-col gap-1">
+      <label className="text-[11px] font-medium" style={{ color: "var(--text-secondary)" }}>
         {label}
       </label>
       <input
@@ -88,7 +107,7 @@ function FieldInput({
         value={value}
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
-        className="w-full px-3 py-2.5 rounded-lg text-[13px] transition-colors outline-none"
+        className="w-full px-3 py-2 rounded-lg text-[13px] transition-colors outline-none"
         style={{
           background: "var(--bg-panel-alt)",
           border: "1px solid var(--border-subtle)",
@@ -172,8 +191,11 @@ function SaveButton({
 
 // ─── Main Settings page ───────────────────────────────────────────────────────
 
+type SettingsTab = "accounts" | "app";
+
 export function Settings() {
   const { ready } = useDatabase();
+  const [settingsTab, setSettingsTab] = useState<SettingsTab>("accounts");
 
   // ── Time format ──
   const [timeFormat, setLocalFormat] = useState<TimeFormat>(getTimeFormat);
@@ -184,13 +206,9 @@ export function Settings() {
   }
 
   // ── External URLs ──
-  const [musicUrl,        setMusicLocal]        = useState(getMusicUrl);
   const [slideshowFolder,   setSlideshowLocal]   = useState(getSlideshowFolder);
   const [slideshowInterval, setSlideshowInterval_] = useState(() => String(getSlideshowInterval()));
 
-  function saveMusicUrl() {
-    setMusicUrl(musicUrl.trim());
-  }
   function saveSlideshowFolder() {
     setSlideshowFolder(slideshowFolder.trim());
   }
@@ -214,8 +232,26 @@ export function Settings() {
   const [startBal,       setStartBal]       = useState("");
   const [dailyTgt,       setDailyTgt]       = useState("");
   const [acctBrokerUrl,  setAcctBrokerUrl]  = useState("");
+  const [propFirm,       setPropFirmLocal]  = useState<PropFirm>("E8 Markets");
+  const [serverZone,     setServerZoneLocal] = useState<string>(() => getPropFirmServerZone("E8 Markets"));
   const [acctSaving,     setAcctSaving]     = useState(false);
   const [acctSaved,      setAcctSaved]      = useState(false);
+
+  // Falls back to matching the account's Broker/Firm name when no explicit
+  // prop-firm choice has been saved yet for this account.
+  function inferPropFirmFallback(brokerOrFirm: string): PropFirm {
+    return brokerOrFirm === "FTMO" ? "FTMO" : "E8 Markets";
+  }
+  function handlePropFirmChange(v: string) {
+    const firm = v as PropFirm;
+    setPropFirmLocal(firm);
+    setServerZoneLocal(getPropFirmServerZone(firm));
+    if (account) setAccountPropFirm(account.id, firm);
+  }
+  function handleServerZoneChange(zone: string) {
+    setServerZoneLocal(zone);
+    setPropFirmServerZone(propFirm, zone);
+  }
 
   // ── Archived accounts ──
   const [archivedAccounts, setArchivedAccounts] = useState<Account[]>([]);
@@ -229,7 +265,7 @@ export function Settings() {
   const [newBroker,      setNewBroker]      = useState("");
   const [newStartBal,    setNewStartBal]    = useState("");
   const [newDailyTgt,    setNewDailyTgt]    = useState("");
-  const [newType,        setNewType]        = useState<"prop" | "personal" | "challenge">("personal");
+  const [newType,        setNewType]        = useState<"prop" | "personal" | "challenge" | "oanda">("personal");
   const [newSaving,      setNewSaving]      = useState(false);
 
   async function loadAccounts() {
@@ -246,6 +282,9 @@ export function Settings() {
       setStartBal(String(acc.startingBalance));
       setDailyTgt(String(acc.dailyTarget));
       setAcctBrokerUrl(getAccountBrokerUrl(acc.id));
+      const firm = getAccountPropFirm(acc.id, inferPropFirmFallback(acc.brokerOrFirm));
+      setPropFirmLocal(firm);
+      setServerZoneLocal(getPropFirmServerZone(firm));
     }
   }
   useEffect(() => { loadAccounts(); }, [ready]);
@@ -261,6 +300,9 @@ export function Settings() {
       setStartBal(String(acc.startingBalance));
       setDailyTgt(String(acc.dailyTarget));
       setAcctBrokerUrl(getAccountBrokerUrl(acc.id));
+      const firm = getAccountPropFirm(acc.id, inferPropFirmFallback(acc.brokerOrFirm));
+      setPropFirmLocal(firm);
+      setServerZoneLocal(getPropFirmServerZone(firm));
     }
     tradeEvents.notify();
   }
@@ -523,132 +565,159 @@ export function Settings() {
     }
   }
 
-  // ── Clear trades ──
-  const [clearing,      setClearing]      = useState(false);
-  const [clearConfirm,  setClearConfirm]  = useState(false);
-  const [clearDone,     setClearDone]     = useState(false);
-
-  async function handleClearTrades() {
-    if (!clearConfirm) {
-      setClearConfirm(true);
-      setTimeout(() => setClearConfirm(false), 6000);
-      return;
-    }
-    if (!ready) return;
-    setClearConfirm(false);
-    setClearing(true);
-    setClearDone(false);
-    try {
-      const settings = await getSettings();
-      await clearAllTradesForAccount(settings?.selectedAccountId ?? "acc-1");
-      tradeEvents.notify();
-      setClearDone(true);
-      setTimeout(() => setClearDone(false), 3000);
-    } catch (err) {
-      console.error("[Settings] clear failed:", err);
-    } finally {
-      setClearing(false);
-    }
-  }
-
   return (
-    <div className="flex-1 overflow-y-auto" style={{ padding: "20px 24px 40px" }}>
-      <div className="flex flex-col gap-4" style={{ maxWidth: 680 }}>
+    <div className="flex-1 flex flex-col overflow-hidden" style={{ padding: "14px 24px" }}>
+      <div className="flex flex-col gap-2 flex-1 min-h-0" style={{ maxWidth: 1040 }}>
 
-        <div>
-          <h1 className="text-[20px] font-semibold" style={{ color: "var(--text-primary)" }}>Settings</h1>
-          <p className="text-[13px] mt-1" style={{ color: "var(--text-muted)" }}>
-            Preferences are saved locally to this device.
-          </p>
+        <h1 className="text-[15px] font-semibold" style={{ color: "var(--text-primary)" }}>Settings</h1>
+
+        {/* ── Tab bar ── */}
+        <div className="flex gap-1 shrink-0" style={{ borderBottom: "1px solid var(--border-subtle)" }}>
+          {(["accounts", "app"] as SettingsTab[]).map(t => (
+            <button
+              key={t}
+              onClick={() => setSettingsTab(t)}
+              className="px-4 py-2 text-[12px] font-semibold transition-colors"
+              style={{
+                color: settingsTab === t ? "var(--accent-text)" : "var(--text-secondary)",
+                borderBottom: settingsTab === t ? "2px solid var(--accent)" : "2px solid transparent",
+                background: settingsTab === t ? "var(--accent-dim)" : "transparent",
+                borderRadius: settingsTab === t ? "6px 6px 0 0" : undefined,
+                marginBottom: -1,
+              }}
+            >
+              {t === "accounts" ? "Accounts" : "App"}
+            </button>
+          ))}
         </div>
 
+        {settingsTab === "accounts" && (
+        <>
         {/* ── Accounts ── */}
         <SectionTitle>Accounts</SectionTitle>
 
-        {/* Account switcher */}
-        <Panel>
-          <div className="flex items-center justify-between mb-3">
-            <PanelHeader label="Your Accounts" />
+        {/* This row absorbs whatever vertical space the fixed sections below
+            don't use — Your Accounts scrolls internally instead of pushing
+            the whole page into scroll. */}
+        <div className="flex gap-2 flex-1 min-h-0" style={{ minHeight: 140 }}>
+        {/* Account switcher — half its previous (equal-split) width */}
+        <div className="flex-1 min-w-0" style={{ flexBasis: "25%" }}>
+        <Panel className="!p-3 h-full flex flex-col min-h-0">
+          <CompactHeader label="Your Accounts">
             <button
               onClick={() => setShowNewForm(v => !v)}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12px] font-semibold transition-all"
+              className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-semibold transition-all"
               style={{
                 background: showNewForm ? "var(--accent-dim)" : "rgba(255,255,255,0.07)",
                 border:     showNewForm ? "1px solid var(--accent-border)" : "1px solid rgba(255,255,255,0.14)",
                 color:      showNewForm ? "var(--accent-text)" : "var(--text-secondary)",
               }}
             >
-              <Plus size={12} /> New Account
+              <Plus size={11} /> New
             </button>
-          </div>
+          </CompactHeader>
 
-          <div className="flex flex-col gap-2">
+          <div className="flex flex-col gap-1.5 flex-1 min-h-0 overflow-y-auto">
             {allAccounts.map(acc => {
               const isSelected = acc.id === selectedId;
               return (
                 <button
                   key={acc.id}
                   onClick={() => handleSelectAccount(acc.id)}
-                  className="flex items-center justify-between w-full px-4 py-3 rounded-lg text-left transition-all"
+                  className="flex items-center justify-between w-full px-3 py-2 rounded-lg text-left transition-all"
                   style={{
                     background: isSelected ? "var(--accent-dim)" : "var(--bg-panel-alt)",
                     border:     isSelected ? "1px solid var(--accent-border)" : "1px solid var(--border-subtle)",
                   }}
                 >
-                  <div>
-                    <div className="text-[13px] font-semibold" style={{ color: isSelected ? "var(--accent-text)" : "var(--text-primary)" }}>
+                  <div className="flex items-baseline gap-1.5 min-w-0">
+                    <span className="text-[12.5px] font-semibold truncate" style={{ color: isSelected ? "var(--accent-text)" : "var(--text-primary)" }}>
                       {acc.name}
-                    </div>
-                    <div className="text-[11px] mt-0.5" style={{ color: isSelected ? "var(--accent-text)" : "var(--text-muted)" }}>
-                      {acc.brokerOrFirm} · {acc.accountType} · ${acc.currentBalance.toLocaleString("en-US", { minimumFractionDigits: 2 })}
-                    </div>
+                    </span>
+                    <span className="text-[10.5px] shrink-0" style={{ color: isSelected ? "var(--accent-text)" : "var(--text-muted)" }}>
+                      {acc.brokerOrFirm} · ${acc.currentBalance.toLocaleString("en-US", { minimumFractionDigits: 0 })}
+                    </span>
                   </div>
-                  {isSelected && <Check size={14} style={{ color: "var(--accent)" }} />}
+                  {isSelected && <Check size={13} className="shrink-0" style={{ color: "var(--accent)" }} />}
                 </button>
               );
             })}
             {allAccounts.length === 0 && (
-              <p className="text-[13px]" style={{ color: "var(--text-muted)" }}>Loading accounts…</p>
+              <p className="text-[12px]" style={{ color: "var(--text-muted)" }}>Loading accounts…</p>
             )}
           </div>
 
-          {/* New Account form */}
-          {showNewForm && (
-            <div className="flex flex-col gap-3 mt-4 pt-4" style={{ borderTop: "1px solid var(--border-subtle)" }}>
-              <div className="text-[12px] font-semibold uppercase tracking-widest" style={{ color: "var(--text-muted)" }}>
-                New Account
+          {/* Archived accounts — folded into this panel rather than a
+              separate section; shrink-0 so it never eats into the active
+              list's space beyond its own capped height. */}
+          {archivedAccounts.length > 0 && (
+            <div className="shrink-0 mt-2 pt-2" style={{ borderTop: "1px solid var(--border-subtle)" }}>
+              <div className="text-[10px] font-semibold uppercase tracking-widest mb-1.5" style={{ color: "var(--text-muted)" }}>
+                Archived
               </div>
-              <div className="grid grid-cols-2 gap-3">
+              <div className="flex flex-col gap-1.5 overflow-y-auto" style={{ maxHeight: 260 }}>
+                {archivedAccounts.map(acc => (
+                  <div
+                    key={acc.id}
+                    className="flex items-center justify-between px-3 py-2 rounded-lg"
+                    style={{ background: "var(--bg-panel-alt)", border: "1px solid var(--border-subtle)" }}
+                  >
+                    <div className="flex items-baseline gap-1.5 min-w-0">
+                      <span className="text-[12.5px] font-semibold truncate" style={{ color: "var(--text-muted)" }}>
+                        {acc.name}
+                      </span>
+                      <span className="text-[10.5px] shrink-0" style={{ color: "var(--text-muted)", opacity: 0.7 }}>
+                        {acc.brokerOrFirm} · ${acc.currentBalance.toLocaleString("en-US", { minimumFractionDigits: 0 })}
+                      </span>
+                    </div>
+                    <button
+                      onClick={() => handleUnarchiveAccount(acc.id)}
+                      disabled={unarchiving === acc.id || !ready}
+                      className="ml-4 shrink-0 flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-semibold transition-all disabled:opacity-50"
+                      style={{
+                        background: "rgba(255,255,255,0.06)",
+                        border: "1px solid rgba(255,255,255,0.12)",
+                        color: "var(--text-secondary)",
+                      }}
+                    >
+                      <ArchiveRestore size={11} />
+                      {unarchiving === acc.id ? "Restoring…" : "Restore"}
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* New Account form — shrink-0 so it's always fully visible; the
+              account list above (flex-1 min-h-0) yields space to it instead. */}
+          {showNewForm && (
+            <div className="shrink-0 flex flex-col gap-2 mt-3 pt-3 overflow-y-auto" style={{ borderTop: "1px solid var(--border-subtle)", maxHeight: "50%" }}>
+              <div className="grid grid-cols-2 gap-2">
                 <FieldInput label="Account Name" value={newName} onChange={setNewName} placeholder="e.g. FTMO Funded" />
                 <FieldInput label="Broker / Firm" value={newBroker} onChange={setNewBroker} placeholder="e.g. FTMO" />
               </div>
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-2 gap-2">
                 <FieldInput label="Starting Balance ($)" value={newStartBal} onChange={setNewStartBal} placeholder="e.g. 100000" type="number" />
                 <FieldInput label="Daily Target ($)" value={newDailyTgt} onChange={setNewDailyTgt} placeholder="e.g. 500" type="number" />
               </div>
-              <div className="flex flex-col gap-1.5">
-                <label className="text-[12px] font-medium" style={{ color: "var(--text-secondary)" }}>Account Type</label>
-                <div className="flex gap-2">
-                  {(["personal", "prop", "challenge"] as const).map(t => (
-                    <button
-                      key={t}
-                      onClick={() => setNewType(t)}
-                      className="px-3 py-1.5 rounded-lg text-[12px] font-medium capitalize transition-all"
-                      style={{
-                        background: newType === t ? "var(--accent-dim)" : "var(--bg-panel-alt)",
-                        border:     newType === t ? "1px solid var(--accent-border)" : "1px solid var(--border-subtle)",
-                        color:      newType === t ? "var(--accent-text)" : "var(--text-secondary)",
-                      }}
-                    >
-                      {t}
-                    </button>
-                  ))}
-                </div>
+              <div className="flex flex-col gap-1">
+                <label className="text-[11px] font-medium" style={{ color: "var(--text-secondary)" }}>Account Type</label>
+                <SegmentedControl
+                  options={[
+                    { value: "personal", label: "Personal" },
+                    { value: "prop", label: "Prop" },
+                    { value: "challenge", label: "Challenge" },
+                    { value: "oanda", label: "OANDA" },
+                  ]}
+                  value={newType}
+                  onChange={setNewType}
+                />
               </div>
-              <div className="flex justify-end gap-2 pt-1">
+              <div className="flex justify-end gap-2">
                 <button
                   onClick={() => setShowNewForm(false)}
-                  className="px-4 py-2 rounded-lg text-[12px] font-semibold transition-all"
+                  className="px-3 py-1.5 rounded-lg text-[11px] font-semibold transition-all"
                   style={{ background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.12)", color: "var(--text-secondary)" }}
                 >
                   Cancel
@@ -660,146 +729,169 @@ export function Settings() {
             </div>
           )}
         </Panel>
+        </div>
 
-        {/* Edit selected account */}
-        <Panel>
-          <PanelHeader label="Edit Selected Account" />
+        {/* Edit selected account — stretches to match Your Accounts' height;
+            scrolls internally as a fallback if the window gets very short. */}
+        <div className="flex-1 min-w-0" style={{ flexBasis: "75%" }}>
+        <Panel className="!p-3 h-full flex flex-col min-h-0">
+          <CompactHeader label="Edit Selected Account" />
+          <div className="shrink-0" style={{ height: 1, background: "var(--border-subtle)", marginBottom: 8 }} />
           {account ? (
-            <div className="flex flex-col gap-4">
-              <div className="grid grid-cols-2 gap-3">
-                <FieldInput label="Account Name" value={acctName} onChange={setAcctName} placeholder="e.g. FTMO Funded" />
-                <FieldInput label="Starting Balance ($)" value={startBal} onChange={setStartBal} placeholder="e.g. 100000" type="number" />
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                <FieldInput label="Daily Target ($)" value={dailyTgt} onChange={setDailyTgt} placeholder="e.g. 500" type="number" />
-                <div className="flex flex-col gap-1.5">
-                  <label className="text-[12px] font-medium" style={{ color: "var(--text-secondary)" }}>Broker / Firm</label>
-                  <div className="px-3 py-2.5 rounded-lg text-[13px]" style={{ background: "var(--bg-panel-alt)", border: "1px solid var(--border-subtle)", color: "var(--text-muted)" }}>
-                    {account.brokerOrFirm}
-                  </div>
+            <div className="flex flex-col gap-2 flex-1 min-h-0 overflow-y-auto">
+              <div className="flex items-end gap-3">
+                <div className="flex flex-col gap-1">
+                  <label className="text-[11px] font-medium" style={{ color: "var(--text-secondary)" }} title="Determines which server timezone the Trade Log's Server Time entry mode converts from">
+                    Prop Firm
+                  </label>
+                  <SegmentedControl
+                    options={[
+                      { value: "FTMO", label: "FTMO" },
+                      { value: "E8 Markets", label: "E8 Markets" },
+                    ]}
+                    value={propFirm}
+                    onChange={handlePropFirmChange}
+                    size="sm"
+                  />
                 </div>
               </div>
-              <FieldInput label="Brokerage URL" value={acctBrokerUrl} onChange={setAcctBrokerUrl} placeholder="https://your-broker.com/dashboard" />
-              <div className="flex items-center justify-between pt-1">
+              <div className="flex items-end gap-3">
+                <div style={{ width: "50%" }}>
+                  <FieldInput label="Brokerage URL" value={acctBrokerUrl} onChange={setAcctBrokerUrl} placeholder="https://broker.com/dashboard" />
+                </div>
+                <div className="flex flex-col gap-1 min-w-0 ml-auto">
+                  <label
+                    className="text-[11px] font-medium"
+                    style={{ color: "var(--text-secondary)" }}
+                    title="The IANA timezone this prop firm's trade server reports times in"
+                  >
+                    Server Timezone
+                  </label>
+                  <select
+                    value={serverZone}
+                    onChange={(e) => handleServerZoneChange(e.target.value)}
+                    className="px-2 py-1 rounded-md text-[11px] outline-none"
+                    style={{ background: "var(--bg-panel-alt)", border: "1px solid var(--border-subtle)", color: "var(--text-primary)", maxWidth: 180 }}
+                  >
+                    <option value="Europe/Helsinki">Europe/Helsinki (EET/EEST)</option>
+                    <option value="Europe/Athens">Europe/Athens (EET/EEST)</option>
+                    <option value="Europe/Bucharest">Europe/Bucharest (EET/EEST)</option>
+                    <option value="Europe/London">Europe/London (GMT/BST)</option>
+                    <option value="America/New_York">America/New_York (EST/EDT)</option>
+                    <option value="UTC">UTC</option>
+                  </select>
+                </div>
+              </div>
+              <div className="shrink-0" style={{ height: 1, background: "var(--border-subtle)", margin: "8px 0" }} />
+              <div style={{ width: "20%" }}>
+                <FieldInput label="Account Name" value={acctName} onChange={setAcctName} placeholder="e.g. FTMO Funded" />
+              </div>
+              <div style={{ width: "20%" }}>
+                <FieldInput label="Starting Balance ($)" value={startBal} onChange={setStartBal} placeholder="e.g. 100000" type="number" />
+              </div>
+              <div style={{ width: "20%" }}>
+                <FieldInput label="Daily Target ($)" value={dailyTgt} onChange={setDailyTgt} placeholder="e.g. 500" type="number" />
+              </div>
+              <div className="shrink-0" style={{ height: 1, background: "var(--border-subtle)", marginTop: 48 }} />
+              <div className="flex items-end gap-2" style={{ width: "50%" }}>
+                <div className="flex-1">
+                  <FieldInput
+                    label="Payout reset — new balance"
+                    value={resetBal}
+                    onChange={(v) => { setResetBal(v); setResetConfirm(false); setResetDone(false); }}
+                    placeholder={account ? `Current: $${account.currentBalance.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : "Enter amount"}
+                    type="number"
+                  />
+                </div>
+                <button
+                  onClick={handleResetBalance}
+                  disabled={resetting || !ready || !resetBal || !parseFloat(resetBal)}
+                  className="shrink-0 px-3 py-2 rounded-lg text-[11px] font-semibold transition-all disabled:opacity-50"
+                  style={{
+                    background: resetDone    ? "rgba(74,222,128,0.1)"
+                              : resetConfirm ? "rgba(248,113,113,0.15)"
+                              : "var(--accent-dim)",
+                    border:     resetDone    ? "1px solid rgba(74,222,128,0.3)"
+                              : resetConfirm ? "1px solid rgba(248,113,113,0.4)"
+                              : "1px solid var(--accent-border)",
+                    color:      resetDone    ? "#4ade80"
+                              : resetConfirm ? "#f87171"
+                              : "var(--accent-text)",
+                  }}
+                  title="Trade history is preserved — only the balance anchor is adjusted"
+                >
+                  {resetting ? "Resetting…" : resetDone ? "✓ Reset" : resetConfirm ? "Confirm?" : "Reset Balance"}
+                </button>
+              </div>
+              <div className="flex items-center justify-between pt-2 mt-auto" style={{ borderTop: "1px solid var(--border-subtle)" }}>
                 <span className="text-[11px]" style={{ color: "var(--text-muted)" }}>
-                  Current balance: <span style={{ color: "var(--text-secondary)" }}>${account.currentBalance.toLocaleString("en-US", { minimumFractionDigits: 2 })}</span>
+                  Balance: <span style={{ color: "var(--text-secondary)" }}>${account.currentBalance.toLocaleString("en-US", { minimumFractionDigits: 2 })}</span>
                 </span>
-                <SaveButton onClick={handleSaveAccount} disabled={acctSaving || !ready}>
-                  {acctSaving ? "Saving…" : acctSaved ? "✓ Saved" : "Save Changes"}
-                </SaveButton>
+                <div className="flex gap-2">
+                  <button
+                    onClick={handleExport}
+                    disabled={exporting || !ready}
+                    className="shrink-0 px-2.5 py-1.5 rounded-lg text-[11px] font-semibold transition-all disabled:opacity-50"
+                    style={{
+                      background: exportDone ? "rgba(74,222,128,0.1)" : "var(--bg-panel-alt)",
+                      border:     exportDone ? "1px solid rgba(74,222,128,0.3)" : "1px solid var(--border-medium)",
+                      color:      exportDone ? "#4ade80" : "var(--text-secondary)",
+                    }}
+                    title="Downloads all trades and journal entries as a CSV file"
+                  >
+                    {exporting ? "Exporting…" : exportDone ? "✓ Downloaded" : "Export CSV"}
+                  </button>
+                  <button
+                    onClick={handleArchiveAccount}
+                    disabled={archiving || !ready || !account}
+                    className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[11px] font-semibold transition-all disabled:opacity-50"
+                    style={{
+                      background: archiveConfirm ? "rgba(251,191,36,0.15)" : "rgba(251,191,36,0.08)",
+                      border:     archiveConfirm ? "1px solid rgba(251,191,36,0.5)" : "1px solid rgba(251,191,36,0.25)",
+                      color:      "#fbbf24",
+                    }}
+                    title="Remove this account from your portfolio without losing trade data"
+                  >
+                    <Archive size={12} />
+                    {archiving ? "Archiving…" : archiveConfirm ? "Confirm?" : "Archive"}
+                  </button>
+                  <SaveButton onClick={handleSaveAccount} disabled={acctSaving || !ready}>
+                    {acctSaving ? "Saving…" : acctSaved ? "✓ Saved" : "Save"}
+                  </SaveButton>
+                </div>
               </div>
             </div>
           ) : (
-            <p className="text-[13px]" style={{ color: "var(--text-muted)" }}>Loading account…</p>
+            <p className="text-[12px]" style={{ color: "var(--text-muted)" }}>Loading account…</p>
           )}
         </Panel>
-
-        {/* ── Archive Account ── */}
-        <Panel>
-          <PanelHeader label="Archive Account" />
-          <div className="flex items-center justify-between">
-            <div>
-              <div className="text-[13px]" style={{ color: "var(--text-secondary)" }}>
-                Remove this account from your portfolio without losing trade data.
-              </div>
-              <div className="text-[11px] mt-0.5" style={{ color: "var(--text-muted)" }}>
-                Archived accounts are hidden from the dashboard and portfolio. All trades are preserved for analytics.
-              </div>
-            </div>
-            <button
-              onClick={handleArchiveAccount}
-              disabled={archiving || !ready || !account}
-              className="ml-4 shrink-0 flex items-center gap-1.5 px-4 py-2 rounded-lg text-[12px] font-semibold transition-all disabled:opacity-50"
-              style={{
-                background: archiveConfirm ? "rgba(251,191,36,0.15)" : "rgba(251,191,36,0.08)",
-                border:     archiveConfirm ? "1px solid rgba(251,191,36,0.5)" : "1px solid rgba(251,191,36,0.25)",
-                color:      "#fbbf24",
-              }}
-            >
-              <Archive size={13} />
-              {archiving ? "Archiving…" : archiveConfirm ? "Confirm archive?" : "Archive Account"}
-            </button>
-          </div>
-        </Panel>
-
-        {/* ── Archived Accounts ── */}
-        {archivedAccounts.length > 0 && (
-          <>
-            <SectionTitle>Archived Accounts</SectionTitle>
-            <Panel>
-              <PanelHeader label="Archived Accounts" />
-              <div className="text-[12px] mb-3" style={{ color: "var(--text-muted)" }}>
-                These accounts are hidden from the dashboard. Trade data is fully preserved.
-              </div>
-              <div className="flex flex-col gap-2">
-                {archivedAccounts.map(acc => (
-                  <div
-                    key={acc.id}
-                    className="flex items-center justify-between px-4 py-3 rounded-lg"
-                    style={{ background: "var(--bg-panel-alt)", border: "1px solid var(--border-subtle)" }}
-                  >
-                    <div>
-                      <div className="text-[13px] font-semibold" style={{ color: "var(--text-muted)" }}>
-                        {acc.name}
-                      </div>
-                      <div className="text-[11px] mt-0.5" style={{ color: "var(--text-muted)", opacity: 0.7 }}>
-                        {acc.brokerOrFirm} · {acc.accountType} · ${acc.currentBalance.toLocaleString("en-US", { minimumFractionDigits: 2 })}
-                      </div>
-                    </div>
-                    <button
-                      onClick={() => handleUnarchiveAccount(acc.id)}
-                      disabled={unarchiving === acc.id || !ready}
-                      className="ml-4 shrink-0 flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12px] font-semibold transition-all disabled:opacity-50"
-                      style={{
-                        background: "rgba(255,255,255,0.06)",
-                        border: "1px solid rgba(255,255,255,0.12)",
-                        color: "var(--text-secondary)",
-                      }}
-                    >
-                      <ArchiveRestore size={12} />
-                      {unarchiving === acc.id ? "Restoring…" : "Restore"}
-                    </button>
-                  </div>
-                ))}
-              </div>
-            </Panel>
-          </>
+        </div>
+        </div>
+        </>
         )}
 
-        {/* ── Display ── */}
-        <SectionTitle>Display</SectionTitle>
-        <Panel>
-          <PanelHeader label="Time Format" />
-          <div className="flex flex-col gap-2">
-            <ToggleOption label="12-hour" description="e.g. 02:30 PM" value="12h" selected={timeFormat === "12h"} onSelect={handleTimeFormatChange} />
-            <ToggleOption label="24-hour" description="e.g. 14:30" value="24h" selected={timeFormat === "24h"} onSelect={handleTimeFormatChange} />
-          </div>
-        </Panel>
+        {settingsTab === "app" && (
+        <Panel className="!p-4 flex flex-col gap-5 flex-1 min-h-0 overflow-y-auto">
 
-        {/* ── External Links ── */}
-        <SectionTitle>External Links</SectionTitle>
-        <Panel>
-          <PanelHeader label="Music" />
-          <div className="flex items-end gap-3">
-            <div className="flex-1">
-              <FieldInput label="Music Playlist URL" value={musicUrl} onChange={setMusicLocal} placeholder="https://music.youtube.com/playlist?list=..." />
-            </div>
-            <SaveButton onClick={saveMusicUrl}>Save</SaveButton>
+          {/* ── Preferences ── */}
+          <div>
+            <CompactHeader label="Time Format" />
+            <SegmentedControl
+              options={[{ value: "12h", label: "12-hour" }, { value: "24h", label: "24-hour" }]}
+              value={timeFormat}
+              onChange={handleTimeFormatChange}
+              size="sm"
+            />
           </div>
-        </Panel>
 
-        {/* ── Inspiration Slideshow ── */}
-        <SectionTitle>Inspiration</SectionTitle>
-        <Panel>
-          <PanelHeader label="Slideshow Folder" />
-          <div className="flex flex-col gap-2">
-            <p className="text-[12px]" style={{ color: "var(--text-muted)" }}>
-              Paste the full path to a local folder containing your inspiration images. The equity curve panel can display them as a slideshow.
-            </p>
-            <div className="flex items-end gap-3">
-              <div className="flex-1">
+          <div style={{ height: 1, background: "var(--border-subtle)" }} />
+
+          <div>
+            <CompactHeader label="Personalization" />
+            <div className="flex items-end gap-2">
+              <div style={{ width: "50%" }}>
                 <FieldInput
-                  label="Folder Path"
+                  label="Slideshow Folder"
                   value={slideshowFolder}
                   onChange={setSlideshowLocal}
                   placeholder="e.g. C:\Users\Geoff\Pictures\Inspiration"
@@ -807,7 +899,7 @@ export function Settings() {
               </div>
               <button
                 onClick={browseSlideshowFolder}
-                className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-[12px] font-semibold transition-all shrink-0"
+                className="flex items-center gap-1 px-2.5 py-2 rounded-lg text-[11px] font-semibold transition-all shrink-0"
                 style={{
                   background: "rgba(255,255,255,0.07)",
                   border: "1px solid rgba(255,255,255,0.14)",
@@ -815,265 +907,143 @@ export function Settings() {
                 }}
                 onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = "rgba(255,255,255,0.12)"; (e.currentTarget as HTMLElement).style.color = "var(--text-primary)"; }}
                 onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = "rgba(255,255,255,0.07)"; (e.currentTarget as HTMLElement).style.color = "var(--text-secondary)"; }}
+                title="Browse for a folder"
               >
-                <FolderOpen size={13} /> Browse
+                <FolderOpen size={12} />
               </button>
-              <SaveButton onClick={saveSlideshowFolder}>Save</SaveButton>
-            </div>
-            <div className="flex items-end gap-3 mt-2">
-              <div style={{ width: 140 }}>
+              <div style={{ width: 90 }}>
                 <FieldInput
-                  label="Slide Interval (seconds)"
+                  label="Interval (s)"
                   value={slideshowInterval}
                   onChange={setSlideshowInterval_}
                   placeholder="60"
                 />
               </div>
-              <SaveButton onClick={saveSlideshowInterval}>Save</SaveButton>
+              <SaveButton onClick={() => { saveSlideshowFolder(); saveSlideshowInterval(); }}>Save</SaveButton>
             </div>
           </div>
-        </Panel>
 
-        {/* ── Psychology Quotes ── */}
-        <SectionTitle>Psychology Quotes</SectionTitle>
-        <Panel>
-          <div className="flex items-center justify-between mb-3">
-            <PanelHeader label="Quote Library" />
-            <button
-              onClick={() => setShowAddQuote(v => !v)}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12px] font-semibold transition-all"
-              style={{
-                background: showAddQuote ? "var(--accent-dim)" : "rgba(255,255,255,0.07)",
-                border:     showAddQuote ? "1px solid var(--accent-border)" : "1px solid rgba(255,255,255,0.14)",
-                color:      showAddQuote ? "var(--accent-text)" : "var(--text-secondary)",
-              }}
-            >
-              <Plus size={12} /> Add Quote
-            </button>
-          </div>
+          <div style={{ height: 1, background: "var(--border-subtle)" }} />
 
-          {/* Add quote form */}
-          {showAddQuote && (
-            <div className="flex flex-col gap-3 mb-4 pb-4" style={{ borderBottom: "1px solid var(--border-subtle)" }}>
-              <FieldInput label="Quote" value={newQuoteText} onChange={setNewQuoteText} placeholder="Enter the quote text…" />
-              <FieldInput label="Author (optional)" value={newQuoteAuthor} onChange={setNewQuoteAuthor} placeholder="e.g. Mark Douglas" />
-              <div className="flex justify-end gap-2">
-                <button
-                  onClick={() => { setShowAddQuote(false); setNewQuoteText(""); setNewQuoteAuthor(""); }}
-                  className="px-4 py-2 rounded-lg text-[12px] font-semibold transition-all"
-                  style={{ background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.12)", color: "var(--text-secondary)" }}
-                >
-                  Cancel
-                </button>
-                <SaveButton
-                  onClick={handleAddQuote}
-                  disabled={quoteAdding || !newQuoteText.trim()}
-                >
-                  {quoteAdding ? "Adding…" : "Add Quote"}
-                </SaveButton>
-              </div>
-            </div>
-          )}
-
-          {/* Quote list */}
-          <div className="flex flex-col gap-2 overflow-y-auto" style={{ maxHeight: 260 }}>
-            {allQuotes.length === 0 && (
-              <p className="text-[13px]" style={{ color: "var(--text-muted)" }}>No quotes yet. Add one above.</p>
-            )}
-            {allQuotes.map(q => (
-              <div
-                key={q.id}
-                className="flex flex-col gap-2 px-4 py-3 rounded-lg"
-                style={{ background: "var(--bg-panel-alt)", border: `1px solid ${editingId === q.id ? "var(--accent-border)" : "var(--border-subtle)"}` }}
+          {/* ── Psychology Quotes ── */}
+          <div style={{ maxWidth: 600 }}>
+            <CompactHeader label="Quote Library">
+              <button
+                onClick={() => setShowAddQuote(v => !v)}
+                className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-semibold transition-all"
+                style={{
+                  background: showAddQuote ? "var(--accent-dim)" : "rgba(255,255,255,0.07)",
+                  border:     showAddQuote ? "1px solid var(--accent-border)" : "1px solid rgba(255,255,255,0.14)",
+                  color:      showAddQuote ? "var(--accent-text)" : "var(--text-secondary)",
+                }}
               >
-                {editingId === q.id ? (
-                  <>
-                    <textarea
-                      value={editText}
-                      onChange={e => setEditText(e.target.value)}
-                      rows={2}
-                      className="w-full rounded-lg px-3 py-2 text-[13px] resize-none"
-                      style={{ background: "var(--bg-base)", border: "1px solid var(--border-subtle)", color: "var(--text-primary)", outline: "none" }}
-                    />
-                    <input
-                      value={editAuthor}
-                      onChange={e => setEditAuthor(e.target.value)}
-                      placeholder="Author (optional)"
-                      className="w-full rounded-lg px-3 py-2 text-[12px]"
-                      style={{ background: "var(--bg-base)", border: "1px solid var(--border-subtle)", color: "var(--text-primary)", outline: "none" }}
-                    />
-                    <div className="flex justify-end gap-2">
-                      <button
-                        onClick={cancelEdit}
-                        className="px-3 py-1.5 rounded-lg text-[12px] font-semibold"
-                        style={{ background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.12)", color: "var(--text-secondary)" }}
-                      >
-                        Cancel
-                      </button>
-                      <SaveButton onClick={handleSaveQuote} disabled={quoteSaving || !editText.trim()}>
-                        {quoteSaving ? "Saving…" : "Save"}
-                      </SaveButton>
-                    </div>
-                  </>
-                ) : (
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="flex-1 min-w-0">
-                      <p className="text-[13px] leading-snug" style={{ color: "var(--text-primary)" }}>{q.text}</p>
-                      {q.author && <p className="text-[11px] mt-0.5 font-medium" style={{ color: "var(--text-muted)" }}>— {q.author}</p>}
-                    </div>
-                    <div className="flex items-center gap-1 shrink-0 mt-0.5">
-                      <button
-                        onClick={() => startEdit(q)}
-                        className="w-6 h-6 rounded flex items-center justify-center transition-colors"
-                        style={{ color: "var(--text-muted)" }}
-                        onMouseEnter={e => (e.currentTarget as HTMLElement).style.color = "var(--text-primary)"}
-                        onMouseLeave={e => (e.currentTarget as HTMLElement).style.color = "var(--text-muted)"}
-                      >
-                        <Pencil size={12} />
-                      </button>
-                      <button
-                        onClick={() => handleDeleteQuote(q.id)}
-                        className="w-6 h-6 rounded flex items-center justify-center transition-colors"
-                        style={{ color: "var(--text-muted)" }}
-                        onMouseEnter={e => (e.currentTarget as HTMLElement).style.color = "#f87171"}
-                        onMouseLeave={e => (e.currentTarget as HTMLElement).style.color = "var(--text-muted)"}
-                      >
-                        <Trash2 size={13} />
-                      </button>
-                    </div>
-                  </div>
-                )}
-              </div>
-            ))}
-          </div>
-        </Panel>
+                <Plus size={11} /> Add
+              </button>
+            </CompactHeader>
 
-        {/* ── Data ── */}
-        <SectionTitle>Data</SectionTitle>
-        <Panel>
-          <PanelHeader label="Export" />
-          <div className="flex items-center justify-between">
-            <div>
-              <div className="text-[13px] font-medium" style={{ color: "var(--text-primary)" }}>Export trade history</div>
-              <div className="text-[11px] mt-0.5" style={{ color: "var(--text-muted)" }}>Downloads all trades and journal entries as a CSV file.</div>
-            </div>
-            <button
-              onClick={handleExport}
-              disabled={exporting || !ready}
-              className="ml-4 shrink-0 px-4 py-2 rounded-lg text-[12px] font-semibold transition-all disabled:opacity-50"
-              style={{
-                background: exportDone ? "rgba(74,222,128,0.1)" : "var(--accent-dim)",
-                border:     exportDone ? "1px solid rgba(74,222,128,0.3)" : "1px solid var(--accent-border)",
-                color:      exportDone ? "#4ade80" : "var(--accent-text)",
-              }}
-            >
-              {exporting ? "Exporting…" : exportDone ? "✓ Downloaded" : "Export CSV"}
-            </button>
-          </div>
-        </Panel>
-
-        {/* ── Balance Reset ── */}
-        <SectionTitle>Balance</SectionTitle>
-        <Panel>
-          <PanelHeader label="Payout Reset" />
-          <div
-            className="flex items-start gap-3 px-4 py-3 rounded-lg mb-4"
-            style={{ background: "rgba(99,102,241,0.06)", border: "1px solid rgba(99,102,241,0.2)" }}
-          >
-            <p className="text-[12px] leading-relaxed" style={{ color: "rgba(165,180,252,0.9)" }}>
-              Use this after receiving a payout. Enter your new account balance and confirm. Trade history is preserved — only the balance anchor is adjusted.
-            </p>
-          </div>
-          <div className="flex flex-col gap-3">
-            <div className="flex items-center gap-3">
-              <div className="flex-1">
-                <div className="text-[12px] font-medium mb-1.5" style={{ color: "var(--text-secondary)" }}>
-                  New balance after payout
+            {/* Add quote form */}
+            {showAddQuote && (
+              <div className="flex flex-col gap-2 mb-2 pb-2" style={{ borderBottom: "1px solid var(--border-subtle)" }}>
+                <FieldInput label="Quote" value={newQuoteText} onChange={setNewQuoteText} placeholder="Enter the quote text…" />
+                <FieldInput label="Author (optional)" value={newQuoteAuthor} onChange={setNewQuoteAuthor} placeholder="e.g. Mark Douglas" />
+                <div className="flex justify-end gap-2">
+                  <button
+                    onClick={() => { setShowAddQuote(false); setNewQuoteText(""); setNewQuoteAuthor(""); }}
+                    className="px-3 py-1.5 rounded-lg text-[11px] font-semibold transition-all"
+                    style={{ background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.12)", color: "var(--text-secondary)" }}
+                  >
+                    Cancel
+                  </button>
+                  <SaveButton
+                    onClick={handleAddQuote}
+                    disabled={quoteAdding || !newQuoteText.trim()}
+                  >
+                    {quoteAdding ? "Adding…" : "Add Quote"}
+                  </SaveButton>
                 </div>
-                <input
-                  type="number"
-                  value={resetBal}
-                  onChange={(e) => { setResetBal(e.target.value); setResetConfirm(false); setResetDone(false); }}
-                  placeholder={account ? `Current: $${account.currentBalance.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : "Enter amount"}
-                  className="w-full px-3 py-2.5 rounded-lg text-[13px] transition-colors outline-none"
-                  style={{
-                    background: "var(--bg-panel-alt)",
-                    border: "1px solid var(--border-subtle)",
-                    color: "var(--text-primary)",
-                  }}
-                  onFocus={(e) => { (e.currentTarget as HTMLElement).style.borderColor = "var(--accent-border)"; }}
-                  onBlur={(e)  => { (e.currentTarget as HTMLElement).style.borderColor = "var(--border-subtle)"; }}
-                />
               </div>
-              <button
-                onClick={handleResetBalance}
-                disabled={resetting || !ready || !resetBal || !parseFloat(resetBal)}
-                className="shrink-0 px-4 py-2.5 rounded-lg text-[12px] font-semibold transition-all disabled:opacity-50 mt-6"
-                style={{
-                  background: resetDone    ? "rgba(74,222,128,0.1)"
-                            : resetConfirm ? "rgba(248,113,113,0.15)"
-                            : "var(--accent-dim)",
-                  border:     resetDone    ? "1px solid rgba(74,222,128,0.3)"
-                            : resetConfirm ? "1px solid rgba(248,113,113,0.4)"
-                            : "1px solid var(--accent-border)",
-                  color:      resetDone    ? "#4ade80"
-                            : resetConfirm ? "#f87171"
-                            : "var(--accent-text)",
-                }}
-              >
-                {resetting ? "Resetting…" : resetDone ? "✓ Reset" : resetConfirm ? "Confirm reset?" : "Reset Balance"}
-              </button>
+            )}
+
+            {/* Quote list */}
+            <div className="flex flex-col gap-1.5 overflow-y-auto" style={{ maxHeight: 220 }}>
+              {allQuotes.length === 0 && (
+                <p className="text-[12px]" style={{ color: "var(--text-muted)" }}>No quotes yet. Add one above.</p>
+              )}
+              {allQuotes.map(q => (
+                <div
+                  key={q.id}
+                  className="flex flex-col gap-1.5 px-3 py-2 rounded-lg"
+                  style={{ background: "var(--bg-panel-alt)", border: `1px solid ${editingId === q.id ? "var(--accent-border)" : "var(--border-subtle)"}` }}
+                >
+                  {editingId === q.id ? (
+                    <>
+                      <textarea
+                        value={editText}
+                        onChange={e => setEditText(e.target.value)}
+                        rows={2}
+                        className="w-full rounded-lg px-3 py-2 text-[13px] resize-none"
+                        style={{ background: "var(--bg-base)", border: "1px solid var(--border-subtle)", color: "var(--text-primary)", outline: "none" }}
+                      />
+                      <input
+                        value={editAuthor}
+                        onChange={e => setEditAuthor(e.target.value)}
+                        placeholder="Author (optional)"
+                        className="w-full rounded-lg px-3 py-2 text-[12px]"
+                        style={{ background: "var(--bg-base)", border: "1px solid var(--border-subtle)", color: "var(--text-primary)", outline: "none" }}
+                      />
+                      <div className="flex justify-end gap-2">
+                        <button
+                          onClick={cancelEdit}
+                          className="px-3 py-1.5 rounded-lg text-[12px] font-semibold"
+                          style={{ background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.12)", color: "var(--text-secondary)" }}
+                        >
+                          Cancel
+                        </button>
+                        <SaveButton onClick={handleSaveQuote} disabled={quoteSaving || !editText.trim()}>
+                          {quoteSaving ? "Saving…" : "Save"}
+                        </SaveButton>
+                      </div>
+                    </>
+                  ) : (
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="flex-1 min-w-0">
+                        <p className="text-[12.5px] leading-snug" style={{ color: "var(--text-primary)" }}>{q.text}</p>
+                        {q.author && <p className="text-[10.5px] mt-0.5 font-medium" style={{ color: "var(--text-muted)" }}>— {q.author}</p>}
+                      </div>
+                      <div className="flex items-center gap-1 shrink-0 mt-0.5">
+                        <button
+                          onClick={() => startEdit(q)}
+                          className="w-5 h-5 rounded flex items-center justify-center transition-colors"
+                          style={{ color: "var(--text-muted)" }}
+                          onMouseEnter={e => (e.currentTarget as HTMLElement).style.color = "var(--text-primary)"}
+                          onMouseLeave={e => (e.currentTarget as HTMLElement).style.color = "var(--text-muted)"}
+                        >
+                          <Pencil size={11} />
+                        </button>
+                        <button
+                          onClick={() => handleDeleteQuote(q.id)}
+                          className="w-5 h-5 rounded flex items-center justify-center transition-colors"
+                          style={{ color: "var(--text-muted)" }}
+                          onMouseEnter={e => (e.currentTarget as HTMLElement).style.color = "#f87171"}
+                          onMouseLeave={e => (e.currentTarget as HTMLElement).style.color = "var(--text-muted)"}
+                        >
+                          <Trash2 size={12} />
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ))}
             </div>
+          </div>
+
+          <div className="mt-auto pt-3 flex" style={{ borderTop: "1px solid var(--border-subtle)" }}>
+            <DangerButton onClick={handleDeleteAccount} disabled={!ready || !account}>
+              {deleteConfirm ? "Confirm delete?" : "Delete Account"}
+            </DangerButton>
           </div>
         </Panel>
-
-        {/* ── Developer Tools ── */}
-        <SectionTitle>Developer Tools</SectionTitle>
-        <Panel>
-          <PanelHeader label="Developer Tools" />
-          <div
-            className="flex items-start gap-3 px-4 py-3 rounded-lg mb-4"
-            style={{ background: "rgba(251,191,36,0.06)", border: "1px solid rgba(251,191,36,0.2)" }}
-          >
-            <span className="text-[13px]" style={{ color: "#fbbf24" }}>⚠</span>
-            <p className="text-[12px] leading-relaxed" style={{ color: "#fbbf24" }}>
-              These actions are irreversible. All trade data will be permanently deleted.
-            </p>
-          </div>
-
-          <div className="flex flex-col gap-3">
-            <div className="flex items-center justify-between">
-              <div>
-                <div className="text-[13px] font-medium" style={{ color: "var(--text-primary)" }}>Clear all trades</div>
-                <div className="text-[11px] mt-0.5" style={{ color: "var(--text-muted)" }}>Deletes all trades, journals, and daily stats. Resets balance.</div>
-              </div>
-              <button
-                onClick={handleClearTrades}
-                disabled={clearing || !ready}
-                className="ml-4 shrink-0 px-4 py-2 rounded-lg text-[12px] font-semibold transition-all disabled:opacity-50"
-                style={{
-                  background: clearDone ? "rgba(74,222,128,0.1)" : clearConfirm ? "rgba(248,113,113,0.15)" : "var(--bg-panel-alt)",
-                  color:      clearDone ? "#4ade80"               : clearConfirm ? "#f87171"                : "var(--text-secondary)",
-                  border:     clearDone ? "1px solid rgba(74,222,128,0.3)" : clearConfirm ? "1px solid rgba(248,113,113,0.4)" : "1px solid var(--border-medium)",
-                }}
-              >
-                {clearing ? "Clearing…" : clearDone ? "✓ Cleared" : clearConfirm ? "Confirm — delete all?" : "Clear Trades"}
-              </button>
-            </div>
-
-            <div style={{ height: 1, background: "var(--border-subtle)" }} />
-
-            <div className="flex items-center justify-between">
-              <div>
-                <div className="text-[13px] font-medium" style={{ color: "#f87171" }}>Delete account</div>
-                <div className="text-[11px] mt-0.5" style={{ color: "var(--text-muted)" }}>Marks account as inactive and clears all data.</div>
-              </div>
-              <DangerButton onClick={handleDeleteAccount} disabled={!ready || !account}>
-                {deleteConfirm ? "Confirm delete?" : "Delete Account"}
-              </DangerButton>
-            </div>
-          </div>
-        </Panel>
+        )}
 
       </div>
     </div>

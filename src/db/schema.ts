@@ -11,7 +11,7 @@ export const accounts = sqliteTable("accounts", {
   currentBalance: real("current_balance").notNull(),
   dailyTarget: real("daily_target").notNull(),
   accountType: text("account_type", {
-    enum: ["prop", "personal", "challenge"],
+    enum: ["prop", "personal", "challenge", "oanda"],
   }).notNull(),
   brokerUrl: text("broker_url"),
   isActive: integer("is_active", { mode: "boolean" }).notNull().default(true),

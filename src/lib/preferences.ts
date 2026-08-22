@@ -6,7 +6,6 @@ export type TimeFormat = "12h" | "24h";
 
 const KEYS = {
   timeFormat:        "tm_time_format",
-  musicUrl:          "tm_music_url",
   slideshowFolder:   "tm_slideshow_folder",
   slideshowInterval: "tm_slideshow_interval",
   treasuryAuctionsBackfilled: "tm_treasury_auctions_backfilled",
@@ -20,20 +19,42 @@ export function setTimeFormat(fmt: TimeFormat): void {
   window.dispatchEvent(new CustomEvent("tm:prefs-changed"));
 }
 
+// Per-account prop firm — determines which server timezone the Trade Log's
+// "Server Time" entry mode converts from (see src/lib/serverTime.ts).
+export type PropFirm = "FTMO" | "E8 Markets";
+
+export function getAccountPropFirm(accountId: string, fallback: PropFirm = "E8 Markets"): PropFirm {
+  const v = localStorage.getItem(`tm_prop_firm_${accountId}`);
+  return v === "FTMO" || v === "E8 Markets" ? v : fallback;
+}
+export function setAccountPropFirm(accountId: string, firm: PropFirm): void {
+  localStorage.setItem(`tm_prop_firm_${accountId}`, firm);
+  window.dispatchEvent(new CustomEvent("tm:prefs-changed"));
+}
+
+// Server timezone per prop firm — the IANA zone that firm's trade server
+// reports times in, used to convert "Server Time" entries into TradeMirror's
+// storage zone (see src/lib/serverTime.ts). Keyed by firm, not account, since
+// the server zone is a property of the firm, not any one account.
+const DEFAULT_PROP_FIRM_SERVER_ZONE: Record<PropFirm, string> = {
+  "FTMO":       "Europe/Helsinki",
+  "E8 Markets": "Europe/Helsinki",
+};
+
+export function getPropFirmServerZone(firm: PropFirm): string {
+  return localStorage.getItem(`tm_prop_firm_zone_${firm}`) ?? DEFAULT_PROP_FIRM_SERVER_ZONE[firm];
+}
+export function setPropFirmServerZone(firm: PropFirm, zone: string): void {
+  localStorage.setItem(`tm_prop_firm_zone_${firm}`, zone);
+  window.dispatchEvent(new CustomEvent("tm:prefs-changed"));
+}
+
 // Per-account brokerage URLs — keyed by account ID
 export function getAccountBrokerUrl(accountId: string): string {
   return localStorage.getItem(`tm_broker_url_${accountId}`) ?? "";
 }
 export function setAccountBrokerUrl(accountId: string, url: string): void {
   localStorage.setItem(`tm_broker_url_${accountId}`, url.trim());
-  window.dispatchEvent(new CustomEvent("tm:prefs-changed"));
-}
-
-export function getMusicUrl(): string {
-  return localStorage.getItem(KEYS.musicUrl) ?? "";
-}
-export function setMusicUrl(url: string): void {
-  localStorage.setItem(KEYS.musicUrl, url);
   window.dispatchEvent(new CustomEvent("tm:prefs-changed"));
 }
 

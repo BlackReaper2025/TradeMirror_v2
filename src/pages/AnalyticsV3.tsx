@@ -3048,8 +3048,7 @@ class NewsLinePrimitive {
 }
 
 // "My time" for time-of-day chart indicators (8am box, trading sessions) —
-// matches the app's existing local-time convention used for FTMO
-// time-of-day conversions (src/lib/ftmoTime.ts).
+// matches the app's canonical trade-storage timezone (src/lib/serverTime.ts).
 const SESSION_LOCAL_ZONE = "America/New_York";
 
 // Chart time axis / crosshair — also rendered in SESSION_LOCAL_ZONE so the

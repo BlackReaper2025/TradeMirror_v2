@@ -64,7 +64,7 @@ export async function createAccount(data: {
   brokerOrFirm: string;
   startingBalance: number;
   dailyTarget: number;
-  accountType: "prop" | "personal" | "challenge";
+  accountType: "prop" | "personal" | "challenge" | "oanda";
   brokerUrl?: string;
 }): Promise<Account> {
   const db = getDb();

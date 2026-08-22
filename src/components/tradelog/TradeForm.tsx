@@ -6,7 +6,8 @@ import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { FormField, inputClass, inputStyle } from "../ui/FormField";
 import { getImagesByTradeId } from "../../db/queries";
 import type { Account, TradeWithJournal } from "../../db/queries";
-import { ftmoTimeToLocal } from "../../lib/ftmoTime";
+import { serverTimeToStorage } from "../../lib/serverTime";
+import { getAccountPropFirm, type PropFirm } from "../../lib/preferences";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -630,7 +631,7 @@ interface Props {
 
 type Tab = "trade" | "journal" | "screenshots";
 
-export function TradeForm({ existingTrade, defaultDate, onClose, onSaved, onDuplicate }: Props) {
+export function TradeForm({ account, existingTrade, defaultDate, onClose, onSaved, onDuplicate }: Props) {
   const isEdit = existingTrade != null;
   const [values, setValues]   = useState<TradeFormValues>(() =>
     isEdit ? tradeToFormValues(existingTrade!) : makeEmpty(defaultDate)
@@ -638,9 +639,9 @@ export function TradeForm({ existingTrade, defaultDate, onClose, onSaved, onDupl
   const [tab, setTab]         = useState<Tab>("trade");
   const [saving, setSaving]   = useState(false);
   const [errors, setErrors]   = useState<Partial<Record<keyof TradeFormValues, string>>>({});
-  // New trades are logged straight from the FTMO/MetaTrader report (server time);
-  // edits load already-converted local timestamps, so default this off for edits.
-  const [ftmoTime, setFtmoTime] = useState(!isEdit);
+  // New trades are logged straight from the prop firm's report (server time);
+  // edits load already-converted stored timestamps, so default this off for edits.
+  const [serverTime, setServerTime] = useState(!isEdit);
   const [lightboxPath, setLightboxPath] = useState<string | null>(null);
   const historyRef            = useRef<TradeFormValues[]>([]);
   const isUndoRef             = useRef(false);
@@ -697,13 +698,17 @@ export function TradeForm({ existingTrade, defaultDate, onClose, onSaved, onDupl
     if (!validate()) return;
     setSaving(true);
     try {
-      const toSave = ftmoTime
+      const propFirm: PropFirm = getAccountPropFirm(
+        account.id,
+        account.brokerOrFirm === "FTMO" ? "FTMO" : "E8 Markets"
+      );
+      const toSave = serverTime
         ? {
             ...values,
-            openedAt: ftmoTimeToLocal(values.openedAt),
-            closedAt: ftmoTimeToLocal(values.closedAt),
-            maeTime:  ftmoTimeToLocal(values.maeTime),
-            mfeTime:  ftmoTimeToLocal(values.mfeTime),
+            openedAt: serverTimeToStorage(values.openedAt, propFirm),
+            closedAt: serverTimeToStorage(values.closedAt, propFirm),
+            maeTime:  serverTimeToStorage(values.maeTime, propFirm),
+            mfeTime:  serverTimeToStorage(values.mfeTime, propFirm),
           }
         : values;
       await onSaved(toSave);
@@ -770,7 +775,7 @@ export function TradeForm({ existingTrade, defaultDate, onClose, onSaved, onDupl
         {/* ── Form body ── */}
         <form id="trade-form-inner" onSubmit={handleSubmit} className="flex-1 overflow-y-auto">
           <div className="px-6 py-1.5" style={{ display: tab === "trade" ? "block" : "none" }}>
-            <TradeTab values={values} set={set} rr={rr} errors={errors} ftmoTime={ftmoTime} setFtmoTime={setFtmoTime} />
+            <TradeTab values={values} set={set} rr={rr} errors={errors} serverTime={serverTime} setServerTime={setServerTime} />
           </div>
           <div className="px-6 py-2" style={{ display: tab === "journal" ? "block" : "none" }}>
             <JournalTab values={values} set={set} />
@@ -884,11 +889,11 @@ interface TabProps {
   set: <K extends keyof TradeFormValues>(key: K, val: TradeFormValues[K]) => void;
   rr?: string;
   errors?: Partial<Record<keyof TradeFormValues, string>>;
-  ftmoTime?: boolean;
-  setFtmoTime?: (v: boolean) => void;
+  serverTime?: boolean;
+  setServerTime?: (v: boolean) => void;
 }
 
-function TradeTab({ values, set, rr, errors = {}, ftmoTime, setFtmoTime }: TabProps) {
+function TradeTab({ values, set, rr, errors = {}, serverTime, setServerTime }: TabProps) {
   return (
     <div className="flex flex-col gap-1.5" style={{ paddingTop: 12 }}>
 
@@ -929,12 +934,12 @@ function TradeTab({ values, set, rr, errors = {}, ftmoTime, setFtmoTime }: TabPr
         <FormField
           label="Closed at"
           labelRight={
-            setFtmoTime && (
+            setServerTime && (
               <label className="flex items-center gap-1.5 cursor-pointer select-none">
                 <input
                   type="checkbox"
-                  checked={!!ftmoTime}
-                  onChange={(e) => setFtmoTime(e.target.checked)}
+                  checked={!!serverTime}
+                  onChange={(e) => setServerTime(e.target.checked)}
                   style={{
                     accentColor: "var(--accent)",
                     background: "var(--bg-panel-alt)",
@@ -943,7 +948,7 @@ function TradeTab({ values, set, rr, errors = {}, ftmoTime, setFtmoTime }: TabPr
                   }}
                 />
                 <span className="text-[10px] font-medium" style={{ color: "var(--text-muted)" }}>
-                  FTMO Server Time
+                  Server Time
                 </span>
               </label>
             )

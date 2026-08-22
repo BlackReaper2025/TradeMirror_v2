@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import {
   LayoutDashboard, ScrollText, BarChart2,
   Settings, Star, X, GripVertical,
-  PanelLeftClose, PanelLeftOpen, ExternalLink, Music,
+  PanelLeftClose, PanelLeftOpen, ExternalLink,
 } from "lucide-react";
 import { PieChart, Pie, Cell, ResponsiveContainer } from "recharts";
 import { clsx } from "clsx";
@@ -10,7 +10,7 @@ import { pairSelectionEvents } from "../../lib/pairSelection";
 import { quoteCache, startWarmLoop, setWarmPriorityPairs, WARM_INTERVAL_MS } from "../analytics/InstrumentTicker";
 import { useAccountAndPortfolio, type PortfolioItem } from "../../hooks/useAccountAndPortfolio";
 import { logoSrc } from "../../config/branding";
-import { getMusicUrl, getAccountBrokerUrl, getFavoritePairs, removeFavoritePair, reorderFavoritePairs } from "../../lib/preferences";
+import { getAccountBrokerUrl, getFavoritePairs, removeFavoritePair, reorderFavoritePairs } from "../../lib/preferences";
 import { useTheme } from "../../theme/ThemeContext";
 import { openUrl as openExternal } from "@tauri-apps/plugin-opener";
 
@@ -338,11 +338,10 @@ function FavoritesPanel({
 
 export function Sidebar({ activePage, onNavigate, collapsed, onToggleCollapse }: SidebarProps) {
   const { account, portfolio } = useAccountAndPortfolio();
-  const [musicUrl,     setMusicUrl]     = useState(getMusicUrl);
   const [favorites,    setFavorites]    = useState<string[]>(getFavoritePairs);
 
   useEffect(() => {
-    const handler = () => { setMusicUrl(getMusicUrl()); setFavorites(getFavoritePairs()); };
+    const handler = () => { setFavorites(getFavoritePairs()); };
     window.addEventListener("tm:prefs-changed", handler);
     return () => window.removeEventListener("tm:prefs-changed", handler);
   }, []);
@@ -469,7 +468,7 @@ export function Sidebar({ activePage, onNavigate, collapsed, onToggleCollapse }:
           gap: 2,
         }}
       >
-        {/* Brokerage, Music, Settings */}
+        {/* Brokerage, Settings */}
         <div style={{ padding: collapsed ? "0 4px 0" : "0 8px 0", display: "flex", flexDirection: "column", gap: 2 }}>
           <IconBtn
             icon={ExternalLink}
@@ -479,12 +478,6 @@ export function Sidebar({ activePage, onNavigate, collapsed, onToggleCollapse }:
               const url = account ? getAccountBrokerUrl(account.id) : "";
               url ? openUrl(url) : onNavigate("settings");
             }}
-          />
-          <IconBtn
-            icon={Music}
-            label={musicUrl ? "Music" : "Music (set URL in Settings)"}
-            collapsed={collapsed}
-            onClick={() => musicUrl ? openUrl(musicUrl) : onNavigate("settings")}
           />
           <NavBtn
             icon={Settings}
