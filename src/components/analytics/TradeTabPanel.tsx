@@ -7,7 +7,7 @@
 // (Phase 17+) is expected to still run through src/lib/riskEngine.ts, not
 // duplicate this validation.
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useSyncExternalStore } from "react";
 import { getDb } from "../../db/index";
 import { tradeIdeas, executions } from "../../db/schema";
 import { getSettings, getAccount, getAccountProfile, getActiveAccounts, type Account, type AccountProfile } from "../../db/queries";
@@ -84,6 +84,7 @@ export function TradeTabPanel({ pair }: { pair: string }) {
   const [activeIdea, setActiveIdea] = useState<ActiveTradeIdeaCheck | null>(null);
   const [cancelling, setCancelling] = useState(false);
   const [cooldown, setCooldown] = useState<CooldownCheck | null>(null);
+  const [missingRiskInputs, setMissingRiskInputs] = useState<string[]>([]);
 
   async function refreshActiveIdea() {
     setActiveIdea(await checkOneActiveTradeIdea());
@@ -125,9 +126,8 @@ export function TradeTabPanel({ pair }: { pair: string }) {
 
   // Push every edit into the shared store — this is what the chart overlay
   // (src/pages/AnalyticsV3.tsx's PriceHistoryChart) reads to draw the planned
-  // Entry/SL/TP lines. One-way for now: editing here updates the chart;
-  // dragging a line back to edit the form is a separate, riskier follow-up
-  // since it means touching the chart's existing drag/hit-test system.
+  // Entry/SL/TP lines, and also drag them. Tagged "form" so the pull effect
+  // below can tell this write apart from a chart-originated one and not loop.
   useEffect(() => {
     const entryVal = parseFloat(entry);
     const slVal = parseFloat(sl);
@@ -137,8 +137,21 @@ export function TradeTabPanel({ pair }: { pair: string }) {
       entry: Number.isFinite(entryVal) ? entryVal : null,
       stop: Number.isFinite(slVal) ? slVal : null,
       target: Number.isFinite(tpVal) ? tpVal : null,
-    });
+    }, "form");
   }, [pair, side, entry, sl, tp]);
+
+  // Pull a chart-originated drag (see AnalyticsV3.tsx's planned-line drag
+  // handler) back into these text inputs. Gated on source === "chart" so
+  // this never fires on the echo of the push effect's own "form" write —
+  // without that guard, every keystroke here would immediately overwrite
+  // itself with a stale re-parsed value and fight the user's typing.
+  const storeState = useSyncExternalStore(plannedTradeStore.subscribe, plannedTradeStore.get);
+  useEffect(() => {
+    if (storeState.source !== "chart" || storeState.pair !== pair) return;
+    if (storeState.entry != null) setEntry(String(storeState.entry));
+    if (storeState.stop != null) setSl(String(storeState.stop));
+    if (storeState.target != null) setTp(String(storeState.target));
+  }, [storeState, pair]);
 
   const entryN = parseFloat(entry);
   const slN = parseFloat(sl);
@@ -175,8 +188,18 @@ export function TradeTabPanel({ pair }: { pair: string }) {
     setSaving(true);
     setSavedMsg("");
     setPreview(null);
+    setMissingRiskInputs([]);
     try {
       const activeCopyTargets = copyTradeEnabled ? copyTargets.filter((c) => c.enabled) : [];
+
+      // Every account that would get an execution MUST produce a real
+      // proposedRiskDollars — the 1%-max-risk check (Phase 11) is the whole
+      // point of this engine, and silently omitting an account from
+      // riskInputs (e.g. because Volume/Point Value was left blank) would
+      // let a trade through with NO risk validation for that account rather
+      // than a correctly blocked one. Block placement instead and say why.
+      const missing: string[] = [];
+      if (!hasVol || !hasPv) missing.push(account.name);
 
       // "Calculate E8 and OANDA quantities independently; never copy raw lot
       // size" (Phase 16) — each account uses its OWN volume/point-value, not
@@ -192,6 +215,11 @@ export function TradeTabPanel({ pair }: { pair: string }) {
           : null;
         copyRisk.set(c.accountId, cRisk);
         if (cRisk != null) riskInputs.push({ accountId: c.accountId, proposedRiskDollars: cRisk });
+        else missing.push(c.accountName);
+      }
+      if (missing.length > 0) {
+        setMissingRiskInputs(missing);
+        return;
       }
 
       const validation = await validateTradeIdea({ stopPrice: slN, accounts: riskInputs });
@@ -263,7 +291,7 @@ export function TradeTabPanel({ pair }: { pair: string }) {
     }
   }
 
-  const canPlace = hasEntry && hasSl && !saving && (activeIdea?.ok ?? true) && (cooldown?.ok ?? true);
+  const canPlace = hasEntry && hasSl && hasVol && hasPv && !saving && (activeIdea?.ok ?? true) && (cooldown?.ok ?? true);
 
   return (
     <div style={{ height: "100%", overflowY: "auto", padding: "10px 10px 4px" }}>
@@ -437,6 +465,11 @@ export function TradeTabPanel({ pair }: { pair: string }) {
           {saving ? "Checking…" : "Place Trade (Planning Mode)"}
         </button>
 
+        {missingRiskInputs.length > 0 && (
+          <div className="flex flex-col gap-1 text-[10px] p-2 rounded-md" style={{ background: "rgba(248,113,113,0.08)", border: "1px solid rgba(248,113,113,0.25)", color: "#f87171" }}>
+            <span>Blocked: Volume and Point Value are required for every account this trade would go to, so the 1% risk check has something real to validate — missing for: {missingRiskInputs.join(", ")}.</span>
+          </div>
+        )}
         {result && !result.approved && (
           <div className="flex flex-col gap-1 text-[10px] p-2 rounded-md" style={{ background: "rgba(248,113,113,0.08)", border: "1px solid rgba(248,113,113,0.25)", color: "#f87171" }}>
             {!result.oneActiveTradeIdea.ok && <span>Blocked: another Trade Idea is already active ({result.oneActiveTradeIdea.activeIdea?.symbol}).</span>}

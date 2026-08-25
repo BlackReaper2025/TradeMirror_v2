@@ -125,6 +125,10 @@ const MIGRATIONS: string[] = [
     created_at TEXT NOT NULL
   )`,
   `CREATE INDEX IF NOT EXISTS idx_cooldowns_until ON cooldowns(cooldown_until)`,
+  // v15 — dedicated field for auto-generated broker-sync notes (partial-close
+  // leg info, P&L estimate debug), previously crammed into technical_notes
+  // where the user puts their own trade commentary.
+  `ALTER TABLE trades ADD COLUMN sync_notes TEXT`,
 ];
 
 export async function runMigrations(): Promise<void> {

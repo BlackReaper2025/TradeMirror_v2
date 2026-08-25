@@ -90,21 +90,6 @@ body {
   --chart-fill-to:    rgba(126, 214, 46, 0.00);
 }
 
-/* ─── Yellow theme (positive, target not hit) ─────── */
-/* Only accent tokens change — backgrounds stay neutral dark so panels stay
-   clean. Dynamic color lives in borders, glow, and accent elements only. */
-.theme-yellow {
-  --accent:           #f59e0b;
-  --accent-dim:       rgba(245, 158, 11, 0.18);
-  --accent-glow:      rgba(245, 158, 11, 0.20);
-  --accent-border:    rgba(245, 158, 11, 0.38);
-  --accent-text:      #fbbf24;
-
-  --chart-line:       #f59e0b;
-  --chart-fill-from:  rgba(245, 158, 11, 0.24);
-  --chart-fill-to:    rgba(245, 158, 11, 0.00);
-}
-
 /* ─── Red theme (negative day) ──────────────────────  */
 .theme-red {
   --accent:           #f03a3a;
@@ -132,7 +117,7 @@ body {
 /* ─── Panel — unified glow system ───────────────────── */
 /*
  * The accent border + outer bloom live here, on the base .panel class.
- * Because CSS vars are swapped by .theme-yellow / .theme-red on <html>,
+ * Because CSS vars are swapped by .theme-red on <html>,
  * every panel everywhere in the app — Dashboard, Trade Log, Settings,
  * placeholder pages — automatically picks up the current state color.
  * No per-panel props needed for the base treatment.
@@ -158,8 +143,7 @@ body {
 
 /* ─── Sidebar state border ───────────────────────────── */
 /* Ties the sidebar edge into the global state color */
-.theme-yellow aside,
-.theme-red   aside {
+.theme-red aside {
   border-right-color: var(--accent-border);
 }
 

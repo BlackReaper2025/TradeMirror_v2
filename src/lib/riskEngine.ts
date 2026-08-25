@@ -22,6 +22,8 @@ import { eq, inArray, gt, desc } from "drizzle-orm";
 import { getDb } from "../db/index";
 import { tradeIdeas, executions, cooldowns } from "../db/schema";
 import { getAccount, getAccountProfile, getTodayFullStats } from "../db/queries";
+import { getAccountPropFirm } from "./preferences";
+import { getServerDayBoundsInStorageZone } from "./serverTime";
 
 // ─── Cooldown (Phase 12) ────────────────────────────────────────────────────
 // "Confirmed stop-out triggers a persistent 12-hour global no-new-trade
@@ -64,18 +66,22 @@ export function looksLikeStopOut(
 export async function recordStopOutCooldown(params: {
   executionId: string;
   accountId: string;
-  stopOutAtIso: string;
+  /** Genuine UTC epoch milliseconds — NOT a naive/local-zone string. The
+   *  trades table stores timestamps as naive wall-clock strings in a display
+   *  zone (see tradelockerSync.ts/oandaSync.ts), which `new Date(str)` would
+   *  silently misinterpret as the machine's local zone instead — this param
+   *  is typed as ms specifically so that ambiguity can't leak in here. */
+  stopOutAtMs: number;
   cooldownHours: number;
 }): Promise<void> {
   const db = getDb();
-  const cooldownUntil = new Date(
-    new Date(params.stopOutAtIso).getTime() + params.cooldownHours * 3600_000
-  ).toISOString();
+  const stopOutAtIso = new Date(params.stopOutAtMs).toISOString();
+  const cooldownUntil = new Date(params.stopOutAtMs + params.cooldownHours * 3600_000).toISOString();
   await db.insert(cooldowns).values({
     id: `cooldown-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
     triggeredByExecutionId: params.executionId,
     triggeredByAccountId: params.accountId,
-    stopOutAt: params.stopOutAtIso,
+    stopOutAt: stopOutAtIso,
     cooldownUntil,
     createdAt: new Date().toISOString(),
   });
@@ -176,7 +182,12 @@ export async function checkAccountRisk(input: RiskCheckInput): Promise<AccountRi
   let staticDrawdownRemaining: number | null = null;
 
   if (profile?.dailyDrawdownAmount != null) {
-    const today = await getTodayFullStats(account.id);
+    // Bound to this account's actual prop-firm server-day reset (e.g. E8
+    // Markets resets the daily drawdown at 00:00 server time), not the
+    // machine's local midnight — otherwise this check could clear a loss
+    // from its count hours before (or after) the firm actually does.
+    const dayBounds = await getServerDayBoundsInStorageZone(account.id, getAccountPropFirm(account.id));
+    const today = await getTodayFullStats(account.id, dayBounds);
     const dailyUsed = Math.max(0, -today.totalPnl); // only realized losses count against it
     dailyDrawdownRemaining = profile.dailyDrawdownAmount - dailyUsed;
   }

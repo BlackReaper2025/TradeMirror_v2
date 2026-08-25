@@ -36,6 +36,7 @@ function buildTradeFields(values: TradeFormValues, openedAt: string, closedAt: s
     fees:           values.fees         ? parseFloat(values.fees)        : 0,
     pnl:            values.pnl          ? parseFloat(values.pnl)         : 0,
     technicalNotes: values.technicalNotes.trim()  || undefined,
+    syncNotes:      values.syncNotes.trim()       || undefined,
     tags:           values.tags.trim()            || undefined,
     tradeRef:       values.tradeRef.trim()        || undefined,
     exitPrice:      values.exitPrice  ? parseFloat(values.exitPrice)  : undefined,

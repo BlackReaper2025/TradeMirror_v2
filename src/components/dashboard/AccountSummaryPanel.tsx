@@ -5,7 +5,7 @@
 import { useState } from "react";
 import { TrendingUp, TrendingDown, Trophy, Activity, Layers } from "lucide-react";
 import { Panel } from "../ui/Panel";
-import type { Account, TodayLiveStats, AllTimeStats } from "../../db/queries";
+import type { Account, AccountProfile, TodayLiveStats, AllTimeStats } from "../../db/queries";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -29,6 +29,7 @@ const PERIODS: StatPeriod[] = ["All Time", "Monthly", "Weekly", "Today"];
 
 interface Props {
   account:        Account | null;
+  accountProfile: AccountProfile | null;
   todayStats:     TodayLiveStats;
   allTimeStats:   AllTimeStats;
   monthlyStats:   AllTimeStats;
@@ -39,7 +40,7 @@ interface Props {
 // ─── Component ────────────────────────────────────────────────────────────────
 
 export function AccountSummaryPanel({
-  account, todayStats, allTimeStats, monthlyStats, weeklyStats, todayFullStats,
+  account, accountProfile, todayStats, allTimeStats, monthlyStats, weeklyStats, todayFullStats,
 }: Props) {
   const [period, setPeriod] = useState<StatPeriod>("Today");
 
@@ -49,7 +50,34 @@ export function AccountSummaryPanel({
 
   const pnl        = s.totalPnl;
   const isPosToday = pnl >= 0;
-  const targetPct  = Math.min(100, account.dailyTarget > 0 ? (todayStats.totalPnl / account.dailyTarget) * 100 : 0);
+
+  // ── Daily range gauge: today's P&L plotted between the daily drawdown
+  // limit (loss side) and the daily target (profit side), rather than just
+  // "% of target". Red/green only — no yellow, no in-between state.
+  const todayPnl       = todayStats.totalPnl;
+  const dailyDrawdown  = Math.max(0, accountProfile?.dailyDrawdownAmount ?? 0);
+  const dailyTarget    = Math.max(0, account.dailyTarget ?? 0);
+  const gaugeRange     = dailyDrawdown + dailyTarget;
+  const zeroPct        = gaugeRange > 0 ? (dailyDrawdown / gaugeRange) * 100 : 0;
+  const isTodayPos     = todayPnl >= 0;
+
+  let gaugeFillLeftPct  = zeroPct;
+  let gaugeFillWidthPct = 0;
+  if (isTodayPos) {
+    const posPct = dailyTarget > 0 ? Math.min(100, (todayPnl / dailyTarget) * 100) : 0;
+    gaugeFillWidthPct = (posPct / 100) * (100 - zeroPct);
+  } else {
+    const negPct = dailyDrawdown > 0 ? Math.min(100, (Math.abs(todayPnl) / dailyDrawdown) * 100) : 0;
+    gaugeFillWidthPct = (negPct / 100) * zeroPct;
+    gaugeFillLeftPct  = zeroPct - gaugeFillWidthPct;
+  }
+
+  const gaugeColor     = isTodayPos ? "#22c55e" : "#ef4444";
+  const gaugeTextColor = isTodayPos ? "var(--accent-text)" : "#f87171"; // matches Today P&L value styling
+  const gaugeLabel = isTodayPos
+    ? (dailyTarget   > 0 ? `${Math.min(100, (todayPnl / dailyTarget) * 100).toFixed(0)}% to target` : "—")
+    : (dailyDrawdown > 0 ? `${Math.min(100, (Math.abs(todayPnl) / dailyDrawdown) * 100).toFixed(0)}% of drawdown` : "—");
+
   const allTimeGain  = account.currentBalance - account.startingBalance;
   const allTimeIsPos = allTimeGain >= 0;
   const allTimePct   = account.startingBalance > 0
@@ -159,22 +187,39 @@ export function AccountSummaryPanel({
             </div>
           </div>
 
-          {/* Target progress */}
+          {/* Daily range: drawdown limit ←→ profit target */}
           <div className="flex-1 min-w-0">
             <div className="flex items-center justify-between mb-1">
-              <span className="text-[10px]" style={{ color: "var(--text-muted)" }}>Daily target</span>
+              <span className="text-[10px]" style={{ color: "var(--text-muted)" }}>Daily range</span>
               <span
                 className="text-[11px] font-bold tabular-nums"
-                style={{ color: "var(--accent-text)" }}
+                style={{ color: gaugeTextColor }}
               >
-                {targetPct.toFixed(0)}%
+                {gaugeLabel}
               </span>
             </div>
-            <div className="h-1.5 rounded-full" style={{ background: "var(--border-subtle)" }}>
+            <div className="relative h-1.5 rounded-full" style={{ background: "var(--border-subtle)" }}>
               <div
-                className="h-full rounded-full transition-all duration-500"
-                style={{ width: `${targetPct}%`, background: "var(--accent)" }}
+                className="absolute inset-y-0 rounded-full transition-all duration-500"
+                style={{ left: `${gaugeFillLeftPct}%`, width: `${gaugeFillWidthPct}%`, background: gaugeColor }}
               />
+              {/* Zero-P&L marker */}
+              <div
+                className="absolute top-1/2"
+                style={{
+                  left: `${zeroPct}%`, width: 2, height: 7,
+                  background: "var(--text-muted)", opacity: 0.6,
+                  transform: "translate(-50%, -50%)",
+                }}
+              />
+            </div>
+            <div className="flex items-center justify-between mt-1">
+              <span className="text-[9px]" style={{ color: "var(--text-muted)" }}>
+                {dailyDrawdown > 0 ? `-${fmtStat(dailyDrawdown)}` : "no DD limit"}
+              </span>
+              <span className="text-[9px]" style={{ color: "var(--text-muted)" }}>
+                {dailyTarget > 0 ? `+${fmtStat(dailyTarget)}` : "no target"}
+              </span>
             </div>
           </div>
         </div>

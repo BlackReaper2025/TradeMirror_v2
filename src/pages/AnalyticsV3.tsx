@@ -1461,6 +1461,24 @@ function hitTestRectHandle(chart: any, series: any, d: Drawing, px: number, py: 
   return null;
 }
 
+// Hit-test the three planned Entry/SL/TP price lines (Phase 14 chart
+// overlay) for a drag grab. Unlike Drawing objects these are plain
+// full-width price lines, not points anchored to a specific x — only the
+// y-distance to the line matters, checked across the line's full width.
+function hitTestPlannedLine(series: any, pair: string, my: number): "entry" | "stop" | "target" | null {
+  const pt = plannedTradeStore.get();
+  if (pt.pair !== pair) return null;
+  const candidates: Array<["entry" | "stop" | "target", number | null]> = [
+    ["entry", pt.entry], ["stop", pt.stop], ["target", pt.target],
+  ];
+  for (const [key, price] of candidates) {
+    if (price == null) continue;
+    const y = series.priceToCoordinate(price);
+    if (y != null && Math.abs(y - my) <= 6) return key;
+  }
+  return null;
+}
+
 class DrawingRenderer {
   _p: DrawingPrimitive;
   constructor(p: DrawingPrimitive) { this._p = p; }
@@ -5473,21 +5491,51 @@ function PriceHistoryChart({
     // derived edge-midpoint handles (resize — moves only one axis).
     const onContainerMouseDown = (e: MouseEvent) => {
       if (activeDrawToolRef.current !== "cursor") return;
-      const id = selectedDrawingIdRef.current;
-      if (!id) return;
-      const drawing = drawingsRef.current.find(d => d.id === id);
-      if (!drawing) return;
       const chart = chartRef.current, series = seriesRef.current;
       const xy = lastMouseXYRef.current;
       if (!chart || !series || !xy) return;
-      const anchorHit = hitTestAnchorPoint(chart, series, drawing, xy.x, xy.y);
-      const rectHandle = !anchorHit ? hitTestRectHandle(chart, series, drawing, xy.x, xy.y) : null;
-      if (!anchorHit && !rectHandle) return;
+
+      const id = selectedDrawingIdRef.current;
+      const drawing = id ? drawingsRef.current.find(d => d.id === id) : undefined;
+      const anchorHit = drawing ? hitTestAnchorPoint(chart, series, drawing, xy.x, xy.y) : null;
+      const rectHandle = drawing && !anchorHit ? hitTestRectHandle(chart, series, drawing, xy.x, xy.y) : null;
+
+      // A selected drawing's own handle takes priority over a planned line
+      // if both happen to sit under the cursor.
+      if (!anchorHit && !rectHandle) {
+        const plannedHit = hitTestPlannedLine(series, pairRef.current, xy.y);
+        if (plannedHit) {
+          e.preventDefault();
+          e.stopPropagation();
+          const onMove = () => {
+            const mxy = lastMouseXYRef.current;
+            if (!mxy) return;
+            let price = series.coordinateToPrice(mxy.y);
+            if (price === null) return;
+            if (magnetModeRef.current) {
+              const snap = findMagnetSnap(chart, series, mxy.x, mxy.y, tfRowsRef.current);
+              if (snap) price = snap.price;
+            }
+            if (plannedHit === "entry") plannedTradeStore.set({ entry: price }, "chart");
+            else if (plannedHit === "stop") plannedTradeStore.set({ stop: price }, "chart");
+            else plannedTradeStore.set({ target: price }, "chart");
+          };
+          const onUp = () => {
+            window.removeEventListener("mousemove", onMove);
+            window.removeEventListener("mouseup", onUp);
+            activeDragListenersRef.current = null;
+          };
+          window.addEventListener("mousemove", onMove);
+          window.addEventListener("mouseup", onUp);
+          activeDragListenersRef.current = { onMove, onUp };
+        }
+        return;
+      }
       e.preventDefault();
       e.stopPropagation();
       draggingHandleRef.current = anchorHit
-        ? { mode: "anchor", id, point: anchorHit }
-        : { mode: "rectResize", id, handle: rectHandle! };
+        ? { mode: "anchor", id: id!, point: anchorHit }
+        : { mode: "rectResize", id: id!, handle: rectHandle! };
 
       const onMove = () => {
         const dh = draggingHandleRef.current;

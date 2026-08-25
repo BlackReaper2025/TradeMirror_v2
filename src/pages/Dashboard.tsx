@@ -44,9 +44,7 @@ export function Dashboard() {
   useEffect(() => {
     if (!data.account || !data.todayStats) return;
     const pnl = data.todayStats.totalPnl ?? 0;
-    if (pnl > 0)      setThemeState("green");
-    else if (pnl < 0) setThemeState("red");
-    else               setThemeState("yellow");
+    setThemeState(pnl >= 0 ? "green" : "red");
   }, [data.account, data.todayStats, setThemeState]);
 
   const handleSelectDate = useCallback(async (date: string, isUserAction = true) => {
@@ -111,6 +109,7 @@ export function Dashboard() {
         <div style={{ gridColumn: "1 / 4", gridRow: "1 / 7" }}>
           <AccountSummaryPanel
             account={data.account}
+            accountProfile={data.accountProfile}
             todayStats={data.todayStats}
             allTimeStats={data.allTimeStats}
             monthlyStats={data.monthlyStats}

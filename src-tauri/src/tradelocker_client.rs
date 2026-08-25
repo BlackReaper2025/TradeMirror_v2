@@ -404,3 +404,17 @@ pub fn get_instruments(account_id: &str, acc_num: &str) -> Result<Vec<TlInstrume
         .map_err(|e| format!("TradeLocker instruments response could not be parsed: {}", e))?;
     Ok(data.instruments)
 }
+
+// Contract specs (lotSize, tickSize, tickCost, currencies) needed to turn a
+// price move into a dollar P&L — TradeLocker's read-only API has no P&L
+// field anywhere (confirmed against every relevant endpoint's documented
+// column list), so this is the only real data available to compute one
+// ourselves rather than guess. Returned as raw JSON rather than a typed
+// struct: the exact shape of the tiered tickSize/tickCost arrays isn't
+// documented with an example, so parsing it strictly in Rust risked a hard
+// failure on a shape mismatch — safer to let the caller inspect it directly.
+pub fn get_instrument_details(acc_num: &str, tradable_instrument_id: &str, route_id: &str) -> Result<serde_json::Value, String> {
+    let path = format!("/trade/instruments/{}?routeId={}", tradable_instrument_id, route_id);
+    let raw = trade_get(&path, acc_num)?;
+    raw.get("d").cloned().ok_or_else(|| "TradeLocker instrument details response missing 'd'".to_string())
+}

@@ -414,7 +414,7 @@ export function Settings() {
       if (res.errors.length > 0) {
         setTlError(res.errors.join(" | "));
       }
-      setTlSyncResult(`${res.opened} opened, ${res.updated} updated, ${res.closed} closed`);
+      setTlSyncResult(`${res.opened} opened, ${res.updated} updated, ${res.split} split, ${res.closed} closed`);
     } catch (err) {
       setTlError(String(err));
     } finally {

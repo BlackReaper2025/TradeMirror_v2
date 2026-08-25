@@ -18,6 +18,35 @@ export async function resolveAccountServerZone(accountId: string, propFirmFallba
   return profile?.serverTimezone || getPropFirmServerZone(propFirmFallback);
 }
 
+// Prop firms reset the daily drawdown at midnight in THEIR server timezone,
+// not at UTC or the machine's local midnight (E8 Markets, for one, resets at
+// 00:00 server time — see help.e8markets.com's Daily Drawdown article). This
+// returns the current server-day's [start, end) window translated into
+// TradeMirror's storage zone, so callers can bound a trades.closedAt/
+// openedAt range query against the account's actual reset boundary instead
+// of the trader's own calendar day.
+export async function getServerDayBoundsInStorageZone(
+  accountId: string,
+  propFirmFallback: PropFirm
+): Promise<{ start: string; end: string }> {
+  const serverZone = await resolveAccountServerZone(accountId, propFirmFallback);
+
+  const nowInServerZone = utcMsToZonedWallTimeStr(Date.now(), serverZone); // "YYYY-MM-DDTHH:MM"
+  const [y, mo, d] = nowInServerZone.slice(0, 10).split("-").map(Number);
+
+  const dayStartUtcMs = zonedWallTimeToUtcMs(y, mo, d, 0, 0, serverZone);
+  // Next server-day midnight computed from calendar y/mo/d+1 (JS Date
+  // normalizes month/year rollover), not "+24h in ms" — a DST transition day
+  // in the server zone isn't always exactly 24 hours long.
+  const next = new Date(Date.UTC(y, mo - 1, d + 1));
+  const nextDayStartUtcMs = zonedWallTimeToUtcMs(next.getUTCFullYear(), next.getUTCMonth() + 1, next.getUTCDate(), 0, 0, serverZone);
+
+  return {
+    start: utcMsToZonedWallTimeStr(dayStartUtcMs, STORAGE_ZONE),
+    end:   utcMsToZonedWallTimeStr(nextDayStartUtcMs, STORAGE_ZONE),
+  };
+}
+
 // Convert a "YYYY-MM-DDTHH:MM" string entered in a server's local time into
 // the equivalent "YYYY-MM-DDTHH:MM" string in TradeMirror's storage zone.
 export function serverTimeToStorage(datetimeLocalStr: string, serverZone: string): string {

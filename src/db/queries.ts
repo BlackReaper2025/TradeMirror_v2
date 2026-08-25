@@ -219,15 +219,25 @@ export interface TodayLiveStats {
   largestLoss: number;
 }
 
-export async function getTodayLiveStats(accountId: string): Promise<TodayLiveStats> {
+// "Today" for P&L/drawdown purposes isn't necessarily the machine's calendar
+// day — a prop firm resets its daily drawdown at midnight in ITS server
+// timezone (see src/lib/serverTime.ts's getServerDayBoundsInStorageZone),
+// which can fall hours away from local midnight. Callers that care about that
+// (Dashboard, risk engine) pass the resolved [start, end) window in
+// TradeMirror's storage zone; anything else falls back to the machine-local
+// calendar day, unchanged from before.
+export interface DayBounds { start: string; end: string; }
+
+function todayCondition(accountId: string, col: typeof trades.closedAt, dayBounds?: DayBounds): SQL | undefined {
+  if (dayBounds) {
+    return and(eq(trades.accountId, accountId), gte(col, dayBounds.start), lt(col, dayBounds.end));
+  }
   const today = localDateStr();
-  const stats = await aggregateTradeStats(
-    and(
-      eq(trades.accountId, accountId),
-      gte(trades.closedAt, today + "T00:00:00"),
-      lte(trades.closedAt, today + "T23:59:59")
-    )
-  );
+  return and(eq(trades.accountId, accountId), gte(col, today + "T00:00:00"), lte(col, today + "T23:59:59"));
+}
+
+export async function getTodayLiveStats(accountId: string, dayBounds?: DayBounds): Promise<TodayLiveStats> {
+  const stats = await aggregateTradeStats(todayCondition(accountId, trades.closedAt, dayBounds));
   const { totalPnl, tradeCount, winCount, lossCount, largestWin, largestLoss } = stats;
   return { totalPnl, tradeCount, winCount, lossCount, largestWin, largestLoss };
 }
@@ -246,19 +256,12 @@ export async function getTodayStats(accountId: string) {
 
 // ─── Dashboard: today's trades ────────────────────────────────────────────────
 
-export async function getTodayTrades(accountId: string): Promise<Trade[]> {
+export async function getTodayTrades(accountId: string, dayBounds?: DayBounds): Promise<Trade[]> {
   const db = getDb();
-  const today = localDateStr();
   return db
     .select()
     .from(trades)
-    .where(
-      and(
-        eq(trades.accountId, accountId),
-        gte(trades.closedAt, today + "T00:00:00"),
-        lte(trades.closedAt, today + "T23:59:59")
-      )
-    )
+    .where(todayCondition(accountId, trades.closedAt, dayBounds))
     .orderBy(desc(trades.closedAt));
 }
 
@@ -633,13 +636,8 @@ export async function getWeeklyStats(accountId: string): Promise<AllTimeStats> {
 
 // ─── Dashboard: today full stats — AllTimeStats shape, current day only ───────
 
-export async function getTodayFullStats(accountId: string): Promise<AllTimeStats> {
-  const today = localDateStr();
-  return aggregateTradeStats(and(
-    eq(trades.accountId, accountId),
-    gte(trades.closedAt, today + "T00:00:00"),
-    lte(trades.closedAt, today + "T23:59:59"),
-  ));
+export async function getTodayFullStats(accountId: string, dayBounds?: DayBounds): Promise<AllTimeStats> {
+  return aggregateTradeStats(todayCondition(accountId, trades.closedAt, dayBounds));
 }
 
 // ─── Dashboard: quotes ────────────────────────────────────────────────────────
@@ -774,6 +772,7 @@ export interface CreateTradeInput {
   fees?: number;
   pnl?: number;
   technicalNotes?: string;
+  syncNotes?: string;
   tags?: string;
   tradeRef?: string;
   slPips?: number;
@@ -818,6 +817,7 @@ export async function createTrade(input: CreateTradeInput): Promise<void> {
     fees: input.fees ?? 0,
     pnl: input.pnl ?? 0,
     technicalNotes: input.technicalNotes ?? null,
+    syncNotes: input.syncNotes ?? null,
     tags: input.tags ?? null,
     tradeRef: input.tradeRef ?? null,
     slPips: input.slPips ?? null,
@@ -884,6 +884,7 @@ export async function updateTrade(
       fees:           input.fees ?? 0,
       pnl:            input.pnl ?? 0,
       technicalNotes: input.technicalNotes ?? null,
+      syncNotes:      input.syncNotes ?? null,
       tags:           input.tags ?? null,
       tradeRef:       input.tradeRef ?? null,
       slPips:         input.slPips ?? null,

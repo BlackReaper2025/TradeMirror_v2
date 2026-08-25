@@ -11,12 +11,13 @@
 // one TradeMirror account were ever linked to both brokers.
 
 import { invoke } from "@tauri-apps/api/core";
-import { eq, and } from "drizzle-orm";
+import { eq, and, isNotNull } from "drizzle-orm";
 import { getDb } from "../db/index";
 import { trades, executions, tradeIdeas } from "../db/schema";
-import { getAccountProfile } from "../db/queries";
+import { getAccountProfile, recalculateDailyStats, updateAccountBalance } from "../db/queries";
 import { tradeEvents } from "./tradeEvents";
 import { looksLikeStopOut, recordStopOutCooldown } from "./riskEngine";
+import { utcMsToZonedWallTimeStr } from "./timezone";
 
 interface OandaOrderSummary { price?: string; distance?: string; }
 interface OandaTrade {
@@ -47,6 +48,25 @@ function toNum(v: string | number | null | undefined): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
+// The rest of the app stores trades.openedAt/closedAt as NAIVE wall-clock
+// strings in this zone (see src/lib/serverTime.ts's STORAGE_ZONE), not raw
+// UTC ISO strings — OANDA's own timestamps (e.g. closeTime) ARE genuine UTC
+// ISO, so they need converting the same way TradeLocker's epoch-ms timestamps
+// do (see tradelockerSync.ts for the fuller explanation of why this matters
+// for recalculateDailyStats's day-boundary comparison).
+const STORAGE_ZONE = "America/New_York";
+
+function isoToStorageZone(iso: string | null | undefined): string | null {
+  if (!iso) return null;
+  const ms = Date.parse(iso);
+  if (!Number.isFinite(ms)) return null;
+  return utcMsToZonedWallTimeStr(ms, STORAGE_ZONE) + ":00";
+}
+
+function nowStorageZone(): string {
+  return utcMsToZonedWallTimeStr(Date.now(), STORAGE_ZONE) + ":00";
+}
+
 // Reverses src-tauri/src/lib.rs's to_oanda_instrument() special-case table so
 // synced instrument names match the app's display convention ("US500" not
 // "SPX500_USD"). Standard pairs just swap the underscore for a slash.
@@ -69,6 +89,10 @@ function normalizeOandaInstrument(raw: string): string {
  */
 export async function syncOandaAccount(accountId: string): Promise<OandaSyncResult> {
   const result: OandaSyncResult = { opened: 0, updated: 0, closed: 0, errors: [] };
+  // daily_stats (what the Dashboard and Calendar panel actually read, not
+  // the trades table directly) is a derived aggregate — same gap and same
+  // fix as tradelockerSync.ts, see its comment for why this is needed.
+  const touchedDays = new Set<string>();
 
   const profile = await getAccountProfile(accountId);
   if (!profile?.oandaAccountId) {
@@ -96,7 +120,7 @@ export async function syncOandaAccount(accountId: string): Promise<OandaSyncResu
     const side: "long" | "short" = units < 0 ? "short" : "long";
     const entryPrice = toNum(t.price);
     const qty = Math.abs(units) || null;
-    const openedAtIso = t.openTime || new Date().toISOString();
+    const openedAtIso = isoToStorageZone(t.openTime) ?? nowStorageZone();
     const stopPrice   = toNum(t.stopLossOrder?.price);
     const targetPrice = toNum(t.takeProfitOrder?.price);
 
@@ -140,15 +164,46 @@ export async function syncOandaAccount(accountId: string): Promise<OandaSyncResu
         result.errors.push(`Trade ${brokerPositionId}: ${String(err)}`);
       }
     } else {
+      // Re-normalize the symbol on every sync too, not just SL/TP — see the
+      // matching comment in tradelockerSync.ts for why a row created before
+      // a normalizer fix needs a way to self-heal rather than staying wrong
+      // forever.
       const exec = existing[0];
       if (exec.status === "open" && exec.tradeId) {
+        // A partial close leaves the trade id unchanged, still in the
+        // open-trades list, just with smaller currentUnits than last synced
+        // — same gap as TradeLocker (see tradelockerSync.ts for the fuller
+        // fix). OANDA's read-only trades-history endpoint only returns
+        // fully-CLOSED trades, so a still-open partial reduction never shows
+        // up there — there's no reliable way from what's wired up here to
+        // recover the exact partial-close price, so this only records that
+        // it happened and the new remaining size, honestly, rather than
+        // fabricating a price.
+        const EPS = 1e-9;
+        const isPartialClose = exec.quantity != null && qty != null && qty < exec.quantity - EPS;
+        const noteAppend = isPartialClose
+          ? `[Partial close ${new Date().toISOString()}] Size reduced from ${exec.quantity} to ${qty} units. `
+            + `Exit price/P&L for the closed portion not captured — check OANDA for details.`
+          : undefined;
+        const tradeRow = noteAppend
+          ? (await db.select().from(trades).where(eq(trades.id, exec.tradeId)).limit(1))[0]
+          : null;
+
         await db.update(trades).set({
+          instrument: symbol,
           stopPrice: stopPrice ?? undefined,
           targetPrice: targetPrice ?? undefined,
+          size: qty ?? undefined,
+          // syncNotes, not technicalNotes — the latter is the user's own
+          // commentary field, kept free of auto-generated sync notices.
+          syncNotes: noteAppend
+            ? [tradeRow?.syncNotes, noteAppend].filter(Boolean).join("\n")
+            : undefined,
         }).where(eq(trades.id, exec.tradeId));
         await db.update(executions).set({
           stopPrice: stopPrice ?? undefined,
           targetPrice: targetPrice ?? undefined,
+          quantity: qty ?? undefined,
         }).where(eq(executions.id, exec.id));
         result.updated++;
       }
@@ -178,7 +233,8 @@ export async function syncOandaAccount(accountId: string): Promise<OandaSyncResu
     const closed = history.find((t) => String(t.id) === exec.brokerPositionId);
     const exitPrice   = closed ? toNum(closed.averageClosePrice) : null;
     const pnl         = closed ? toNum(closed.realizedPL) : null; // OANDA-reported, not computed here
-    const closedAtIso = closed?.closeTime ?? new Date().toISOString();
+    const closedAtIso = isoToStorageZone(closed?.closeTime) ?? nowStorageZone();
+    const closedAtUtcMs = closed?.closeTime ? Date.parse(closed.closeTime) : Date.now();
 
     if (exec.tradeId) {
       const tradeRow = (await db.select().from(trades).where(eq(trades.id, exec.tradeId)).limit(1))[0];
@@ -187,12 +243,13 @@ export async function syncOandaAccount(accountId: string): Promise<OandaSyncResu
         exitPrice: exitPrice ?? undefined,
         pnl: pnl ?? undefined,
       }).where(eq(trades.id, exec.tradeId));
+      touchedDays.add(closedAtIso.slice(0, 10));
 
       if (tradeRow && looksLikeStopOut(tradeRow.side, exec.stopPrice, exitPrice)) {
         await recordStopOutCooldown({
           executionId: exec.id,
           accountId,
-          stopOutAtIso: closedAtIso,
+          stopOutAtMs: Number.isFinite(closedAtUtcMs) ? closedAtUtcMs : Date.now(),
           cooldownHours: profile.cooldownHours ?? 12,
         });
       }
@@ -203,6 +260,57 @@ export async function syncOandaAccount(accountId: string): Promise<OandaSyncResu
       pnl: pnl ?? undefined,
     }).where(eq(executions.id, exec.id));
     result.closed++;
+  }
+
+  // Re-validate daily_stats for every closed trade's day on every sync, not
+  // just days touched by fresh activity this run — see the matching comment
+  // in tradelockerSync.ts for why relying only on fresh-activity days is
+  // fragile (touchedDays otherwise gets exactly one chance per trade, ever).
+  const allClosed = await db.select().from(trades)
+    .where(and(eq(trades.accountId, accountId), isNotNull(trades.closedAt)));
+  for (const t of allClosed) {
+    // Repair rows written before the storage-zone fix above existed — see
+    // the matching comment in tradelockerSync.ts.
+    let fixedClosedAt = t.closedAt!;
+    let fixedOpenedAt = t.openedAt;
+    let needsDateFix = false;
+    if (fixedClosedAt.endsWith("Z")) {
+      const ms = Date.parse(fixedClosedAt);
+      if (Number.isFinite(ms)) { fixedClosedAt = utcMsToZonedWallTimeStr(ms, STORAGE_ZONE) + ":00"; needsDateFix = true; }
+    }
+    if (fixedOpenedAt.endsWith("Z")) {
+      const ms = Date.parse(fixedOpenedAt);
+      if (Number.isFinite(ms)) { fixedOpenedAt = utcMsToZonedWallTimeStr(ms, STORAGE_ZONE) + ":00"; needsDateFix = true; }
+    }
+    if (needsDateFix) {
+      await db.update(trades).set({ closedAt: fixedClosedAt, openedAt: fixedOpenedAt }).where(eq(trades.id, t.id));
+      t.closedAt = fixedClosedAt;
+    }
+
+    // One-time repair: move any stray auto-generated "[Partial close ...]"
+    // line out of technicalNotes (the user's own commentary field) into
+    // syncNotes, where sync-generated notes belong — see the matching
+    // migration in tradelockerSync.ts.
+    if (t.technicalNotes) {
+      const technicalLines = t.technicalNotes.split("\n");
+      const strayed = technicalLines.filter((l) => l.startsWith("[Partial close "));
+      if (strayed.length > 0) {
+        const remaining = technicalLines.filter((l) => !l.startsWith("[Partial close ")).join("\n").trim();
+        await db.update(trades).set({
+          technicalNotes: remaining || null,
+          syncNotes: [t.syncNotes, ...strayed].filter(Boolean).join("\n"),
+        }).where(eq(trades.id, t.id));
+      }
+    }
+
+    if (t.closedAt) touchedDays.add(t.closedAt.slice(0, 10));
+  }
+
+  for (const day of touchedDays) {
+    await recalculateDailyStats(accountId, day);
+  }
+  if (touchedDays.size > 0) {
+    await updateAccountBalance(accountId);
   }
 
   if (result.opened > 0 || result.closed > 0 || result.updated > 0) {

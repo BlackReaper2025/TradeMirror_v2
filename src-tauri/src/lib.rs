@@ -140,6 +140,80 @@ fn send_telegram_message(text: String) -> Result<(), String> {
     Ok(())
 }
 
+// ─── Price alert engine supervisor ───────────────────────────────────────────
+//
+// Price/RSI/MACD alert evaluation lives in the standalone Python process
+// TradeMirror_Alert_Test/price_alert.py (streams OANDA prices, writes
+// ~/.trademirror/alerts.json + alert_log.json — see AnalyticsV3.tsx's poll
+// loop and AlertsPanel.tsx which read/write those same files). It used to
+// have to be started by hand in its own terminal, which meant it silently
+// stopped watching the moment that terminal was closed. This supervisor
+// starts it with the app and restarts it if it ever exits.
+
+/// Shared handle to the running alert-engine child process, so it can be
+/// killed on app exit instead of orphaned.
+struct AlertEngineHandle(std::sync::Arc<std::sync::Mutex<Option<std::process::Child>>>);
+
+fn alert_engine_dir() -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("TradeMirror_Alert_Test")
+}
+
+fn spawn_alert_engine_process(dir: &std::path::Path, log_path: &std::path::Path) -> std::io::Result<std::process::Child> {
+    let log_file = std::fs::OpenOptions::new().create(true).append(true).open(log_path)?;
+    let mut cmd = std::process::Command::new("python");
+    cmd.arg("price_alert.py")
+        .current_dir(dir)
+        .stdout(log_file.try_clone()?)
+        .stderr(log_file);
+
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+
+    cmd.spawn()
+}
+
+/// Runs for the lifetime of the app on its own thread: spawns the alert
+/// engine, waits for it to exit (crash, killed, whatever), and restarts it
+/// after a short backoff. `handle` always holds the currently-running
+/// child (or None while restarting) so app shutdown can kill it.
+fn run_alert_engine_supervisor(handle: std::sync::Arc<std::sync::Mutex<Option<std::process::Child>>>) {
+    let dir = alert_engine_dir();
+    let log_path = std::path::Path::new(&home_dir()).join(".trademirror").join("alert_engine.log");
+
+    loop {
+        match spawn_alert_engine_process(&dir, &log_path) {
+            Ok(child) => {
+                println!("[alert-engine] started (pid {})", child.id());
+                *handle.lock().unwrap() = Some(child);
+
+                // Poll rather than block on Child::wait() so app shutdown can
+                // still take the lock and kill this child at any moment.
+                loop {
+                    std::thread::sleep(std::time::Duration::from_millis(500));
+                    let mut guard = handle.lock().unwrap();
+                    let exited = match guard.as_mut() {
+                        Some(c) => matches!(c.try_wait(), Ok(Some(_)) | Err(_)),
+                        None => true, // killed externally (app shutting down)
+                    };
+                    drop(guard);
+                    if exited { break; }
+                }
+                *handle.lock().unwrap() = None;
+            }
+            Err(e) => {
+                eprintln!("[alert-engine] failed to start: {}", e);
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_secs(5));
+    }
+}
+
 // ─── Analytics V3 — sync OANDA → indicators → SQLite ─────────────────────────
 
 /// Home directory, cross-platform ($HOME on macOS/Linux, %USERPROFILE% on Windows).
@@ -285,6 +359,11 @@ fn tradelocker_get_orders_history(account_id: String, acc_num: String) -> Result
 #[tauri::command]
 fn tradelocker_get_instruments(account_id: String, acc_num: String) -> Result<Vec<tradelocker_client::TlInstrument>, String> {
     tradelocker_client::get_instruments(&account_id, &acc_num)
+}
+
+#[tauri::command]
+fn tradelocker_get_instrument_details(acc_num: String, tradable_instrument_id: String, route_id: String) -> Result<serde_json::Value, String> {
+    tradelocker_client::get_instrument_details(&acc_num, &tradable_instrument_id, &route_id)
 }
 
 // ─── OANDA trading account — read-only (Phase 8) ──────────────────────────────
@@ -1015,9 +1094,29 @@ pub fn run() {
                 }
             });
 
+            // Price alert engine (TradeMirror_Alert_Test/price_alert.py) — used to
+            // require someone to leave it running in its own terminal, and quietly
+            // stopped watching the moment that terminal closed. Now the app owns
+            // its lifecycle: start it here, restart it if it ever exits, kill it
+            // on app shutdown (see the ExitRequested handler below).
+            let engine_handle = app.state::<AlertEngineHandle>().0.clone();
+            std::thread::spawn(move || run_alert_engine_supervisor(engine_handle));
+
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![list_images, read_credentials_file, write_text_file, save_trade_screenshot, save_chart_screenshot, get_candles_v3, sync_oanda_candles_v3, send_test_notification, send_telegram_message, get_forex_news, get_economic_calendar, get_stored_economic_events, sync_treasury_auctions, get_stored_treasury_auctions, backfill_treasury_auctions, get_live_price, get_live_candles, get_live_candles_computed, get_synthesis, tradelocker_connect, tradelocker_disconnect, tradelocker_status, tradelocker_list_accounts, tradelocker_get_account_state, tradelocker_get_positions, tradelocker_get_orders, tradelocker_get_orders_history, tradelocker_get_instruments, oanda_list_accounts, oanda_get_account_summary, oanda_get_open_positions, oanda_get_open_trades, oanda_get_trades_history, oanda_get_pending_orders])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .invoke_handler(tauri::generate_handler![list_images, read_credentials_file, write_text_file, save_trade_screenshot, save_chart_screenshot, get_candles_v3, sync_oanda_candles_v3, send_test_notification, send_telegram_message, get_forex_news, get_economic_calendar, get_stored_economic_events, sync_treasury_auctions, get_stored_treasury_auctions, backfill_treasury_auctions, get_live_price, get_live_candles, get_live_candles_computed, get_synthesis, tradelocker_connect, tradelocker_disconnect, tradelocker_status, tradelocker_list_accounts, tradelocker_get_account_state, tradelocker_get_positions, tradelocker_get_orders, tradelocker_get_orders_history, tradelocker_get_instruments, tradelocker_get_instrument_details, oanda_list_accounts, oanda_get_account_summary, oanda_get_open_positions, oanda_get_open_trades, oanda_get_trades_history, oanda_get_pending_orders])
+        .manage(AlertEngineHandle(std::sync::Arc::new(std::sync::Mutex::new(None))))
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app_handle, event| {
+            if let tauri::RunEvent::ExitRequested { .. } = event {
+                if let Some(state) = app_handle.try_state::<AlertEngineHandle>() {
+                    if let Ok(mut guard) = state.0.lock() {
+                        if let Some(child) = guard.as_mut() {
+                            let _ = child.kill();
+                        }
+                    }
+                }
+            }
+        });
 }

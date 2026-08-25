@@ -39,6 +39,7 @@ export const trades = sqliteTable("trades", {
   pnl: real("pnl").default(0),
   screenshotPath: text("screenshot_path"),
   technicalNotes: text("technical_notes"),
+  syncNotes: text("sync_notes"), // auto-generated notes from broker sync (partial-close legs, P&L estimate debug) — kept separate from the user's own technicalNotes
   tags: text("tags"), // JSON array stored as string
   tradeRef: text("trade_ref"),
   slPips: real("sl_pips"),

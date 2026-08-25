@@ -3,6 +3,8 @@ import { useEffect, useState, useCallback } from "react";
 import { useDatabase } from "../db/DatabaseProvider";
 import { tradeEvents } from "../lib/tradeEvents";
 import { useAccountAndPortfolio } from "./useAccountAndPortfolio";
+import { getAccountPropFirm } from "../lib/preferences";
+import { getServerDayBoundsInStorageZone } from "../lib/serverTime";
 import {
   getTodayLiveStats,
   getTodayTrades,
@@ -13,14 +15,17 @@ import {
   getEquityCurve,
   getCalendarDays,
   getActiveQuotes,
+  getAccountProfile,
   type Account,
   type Trade,
   type TodayLiveStats,
   type AllTimeStats,
+  type AccountProfile,
 } from "../db/queries";
 
 export interface DashboardData {
   account:        Account | null;
+  accountProfile: AccountProfile | null;
   todayStats:     TodayLiveStats;
   allTimeStats:   AllTimeStats;
   monthlyStats:   AllTimeStats;
@@ -46,6 +51,7 @@ const EMPTY_TODAY: TodayLiveStats = {
 
 const EMPTY: DashboardData = {
   account:        null,
+  accountProfile: null,
   todayStats:     EMPTY_TODAY,
   allTimeStats:   EMPTY_STATS,
   monthlyStats:   EMPTY_STATS,
@@ -77,16 +83,23 @@ export function useDashboardData() {
 
     try {
       const accountId = account.id;
+      // "Today" follows this account's prop-firm server-day reset (e.g. E8
+      // Markets resets the daily drawdown at 00:00 server time), not the
+      // machine's local midnight — see getServerDayBoundsInStorageZone.
+      // Deliberately resolved before the Promise.all below rather than
+      // inside it, since every "today" query needs the same bounds.
+      const dayBounds = await getServerDayBoundsInStorageZone(accountId, getAccountPropFirm(accountId));
       const [
-        todayStats, allTimeStats, monthlyStats, weeklyStats, todayFullStats,
+        accountProfile, todayStats, allTimeStats, monthlyStats, weeklyStats, todayFullStats,
         recentTrades, equityCurve, calendarDays, quotes,
       ] = await Promise.all([
-        getTodayLiveStats(accountId),
+        getAccountProfile(accountId),
+        getTodayLiveStats(accountId, dayBounds),
         getAllTimeStats(accountId),
         getMonthlyStats(accountId),
         getWeeklyStats(accountId),
-        getTodayFullStats(accountId),
-        getTodayTrades(accountId),
+        getTodayFullStats(accountId, dayBounds),
+        getTodayTrades(accountId, dayBounds),
         // Always the full ~10y range, not just what the active EquityChart
         // timeframe needs — getEquityCurve's running balance is computed by
         // walking forward from account.startingBalance through every daily
@@ -108,7 +121,7 @@ export function useDashboardData() {
         getActiveQuotes(),
       ]);
 
-      setData({ account, todayStats, allTimeStats, monthlyStats, weeklyStats, todayFullStats, recentTrades, equityCurve, calendarDays, portfolio, quotes });
+      setData({ account, accountProfile, todayStats, allTimeStats, monthlyStats, weeklyStats, todayFullStats, recentTrades, equityCurve, calendarDays, portfolio, quotes });
       setLoading(false);
     } catch (err) {
       console.error("[useDashboardData] Query failed:", err);
