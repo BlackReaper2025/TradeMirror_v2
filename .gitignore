@@ -34,3 +34,7 @@ TradeMirror_Alert_Test/alert_log.json
 
 # Claude Code worktrees (local-only)
 .claude/worktrees/
+
+# Python bytecode cache
+__pycache__/
+*.pyc

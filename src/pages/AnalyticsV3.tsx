@@ -5,7 +5,7 @@
 //  Row 2         — Evidence: 5 equal group cards (Trend, MACD, Momentum, Volatility, Directional)
 //  Row 3         — Detail:   Entry/Exit plan | Signal history dots | Live indicator bars
 //
-import { useEffect, useLayoutEffect, useRef, useState, useCallback, useMemo, memo } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, useCallback, useMemo, memo, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import {
   ComposedChart, Bar, Line, Area, XAxis, YAxis, ReferenceLine, ReferenceArea,
@@ -16,6 +16,8 @@ import { Maximize2, Minimize2, X, GripVertical, Settings, Camera, Info, LayoutGr
 import { toPng } from "html-to-image";
 import { getSettings, getAllTradesWithJournal, addTradeImage, localDateStr, type TradeWithJournal } from "../db/queries";
 import { PairSelector, ALL_ASSETS } from "../components/analytics/PairSelector";
+import { TradeTabPanel } from "../components/analytics/TradeTabPanel";
+import { plannedTradeStore } from "../lib/plannedTradeStore";
 import { InstrumentTicker }      from "../components/analytics/InstrumentTicker";
 import { AnalyticsClock }        from "../components/analytics/AnalyticsClock";
 import { useAnalytics, setLiveAnalytics, signalHistory, historicalAccuracy,
@@ -35,6 +37,7 @@ import { AlertsPanel, type Alert } from "../components/panels/AlertsPanel";
 import { computeSupplyDemandZones, type SupplyDemandZone } from "../lib/supplyDemand";
 import { computeAutoTrendlines, type TrendlineSegment } from "../lib/trendlines";
 import { decimalsForPair, formatPrice } from "../lib/priceFormat";
+import { utcMsToZonedWallTimeStr } from "../lib/timezone";
 import { invoke }                from "@tauri-apps/api/core";
 import { homeDir, join }         from "@tauri-apps/api/path";
 import {
@@ -533,7 +536,25 @@ function buildPriceAnalysis(rows: SheetRow[]): { headline: string; bullets: stri
 
 // ─── Indicator helpers ─────────────────────────────────────────────────────────
 
-type IndKey = "bb" | "ichi" | "ema9" | "ema20" | "ema50" | "ema200" | "sma200" | "sma400" | "volume" | "reversal" | "session8am" | "pivots";
+type IndKey = "bb" | "ichi" | "ema9" | "ema20" | "ema50" | "ema200" | "sma200" | "sma400" | "vwap" | "volume" | "reversal" | "session8am" | "pivots";
+
+// Forex trading day rolls over at 5pm New York time (interbank market close),
+// not UTC midnight — matches STORAGE_ZONE in lib/serverTime.ts. VWAP resets
+// at this boundary, DST-aware via utcMsToZonedWallTimeStr.
+const FOREX_SESSION_ZONE = "America/New_York";
+function forexSessionKey(timestampIso: string): string {
+  const utcMs = new Date(timestampIso).getTime();
+  const nyStr = utcMsToZonedWallTimeStr(utcMs, FOREX_SESSION_ZONE); // "YYYY-MM-DDTHH:MM"
+  const [datePart, timePart] = nyStr.split("T");
+  const [y, mo, d] = datePart.split("-").map(Number);
+  const hour = Number(timePart.split(":")[0]);
+  const dayMs = Date.UTC(y, mo - 1, d);
+  const sessionDayMs = hour >= 17 ? dayMs : dayMs - 86_400_000; // still part of the session that opened the prior day
+  return new Date(sessionDayMs).toISOString().slice(0, 10);
+}
+// Intraday timeframes VWAP resets sessions for — meaningless on 1D/1W where
+// each bar already spans a session (or more).
+const VWAP_TIMEFRAMES = new Set(["4H", "1H", "15M", "5M", "1M"]);
 
 // ─── Quad View lock — broadcast the primary tile's toolbar settings to the
 // other 3 tiles ────────────────────────────────────────────────────────────
@@ -571,6 +592,7 @@ const IND_DEFS: { key: IndKey; label: string; color: string }[] = [
   { key: "ema200",label: "EMA 200", color: "#bf5af2" },
   { key: "sma200",label: "SMA 200", color: "#38bdf8" },
   { key: "sma400",label: "SMA 400", color: "#f472b6" },
+  { key: "vwap",  label: "VWAP",    color: "#ffffff" },
   { key: "volume",label: "Volume",  color: "#94a3b8" },
 ];
 
@@ -599,6 +621,22 @@ function computeSMA(closes: number[], period: number): (number | null)[] {
     sum += closes[i];
     if (i >= period) sum -= closes[i - period];
     if (i >= period - 1) result[i] = sum / period;
+  }
+  return result;
+}
+
+// Standard session VWAP: cumulative (typical price × volume) / cumulative
+// volume, resetting at each forex session boundary (see forexSessionKey).
+function computeVWAP(candles: RawCandleTf[]): (number | null)[] {
+  const result: (number | null)[] = [];
+  let sumPV = 0, sumV = 0, prevKey: string | null = null;
+  for (const c of candles) {
+    const key = forexSessionKey(c.timestamp);
+    if (key !== prevKey) { sumPV = 0; sumV = 0; prevKey = key; }
+    const typicalPrice = (c.high + c.low + c.close) / 3;
+    sumPV += typicalPrice * c.volume;
+    sumV  += c.volume;
+    result.push(sumV > 0 ? sumPV / sumV : null);
   }
   return result;
 }
@@ -1655,13 +1693,9 @@ type NewsCategoryKey =
   | "cpi" | "pce" | "jobs" | "gdp" | "ism" | "jolts" | "retail_sales" | "ppi" | "jobless_claims"
   | "auction";
 type NewsCategoryGroup = "Monetary Policy" | "Inflation / Growth / Labor" | "Bond Market";
-interface NewsCategoryDef { key: NewsCategoryKey; label: string; color: string; group: NewsCategoryGroup; keywords: string[] }
+interface NewsCategoryDef { key: NewsCategoryKey; label: string; color: string; group: NewsCategoryGroup }
 // Grouped to match the News settings popout's layout: a section header per
-// group, categories listed underneath. fomc/cpi/jobs keep real keyword
-// matching (used by the non-USD live-feed leg below); every other new
-// category here is drawn by the separate SIMPLE_CATEGORY_DEFS pool-scan
-// further down, which doesn't go through eventNewsCategory at all — their
-// keywords stay empty, same reasoning as "auction" already had.
+// group, categories listed underneath.
 // Color is per-group, not per-category, so every marker's color on the
 // chart tells you which group it belongs to at a glance: Monetary Policy
 // red, Inflation/Growth/Labor yellow, Bond Market green.
@@ -1670,24 +1704,26 @@ const GROUP_COLORS: Record<NewsCategoryGroup, string> = {
   "Inflation / Growth / Labor": "#eab308",
   "Bond Market": "#10b981",
 };
+// One color for every high-impact foreign event the showForeignNews catch-all
+// plots — unlike the curated USD categories above these aren't grouped by
+// release type (a rate decision and a GDP print from the same country both
+// land here), so a single distinct color is what identifies the bucket.
+const FOREIGN_NEWS_COLOR = "#3b82f6";
 const NEWS_CATEGORY_DEFS: NewsCategoryDef[] = [
-  { key: "fomc", label: "FOMC", color: GROUP_COLORS["Monetary Policy"], group: "Monetary Policy",
-    keywords: ["fomc statement", "fomc press conference", "fomc meeting minutes", "federal funds rate"] },
-  { key: "sep", label: "SEP / Dot Plot", color: GROUP_COLORS["Monetary Policy"], group: "Monetary Policy", keywords: [] },
-  { key: "fomc_presser", label: "Fed Chair Press Conference", color: GROUP_COLORS["Monetary Policy"], group: "Monetary Policy", keywords: [] },
-  { key: "fomc_minutes", label: "FOMC Minutes", color: GROUP_COLORS["Monetary Policy"], group: "Monetary Policy", keywords: [] },
-  { key: "cpi", label: "CPI", color: GROUP_COLORS["Inflation / Growth / Labor"], group: "Inflation / Growth / Labor",
-    keywords: ["cpi m/m", "cpi y/y", "core cpi m/m", "core cpi y/y", "cpi q/q"] },
-  { key: "pce", label: "PCE / Core PCE", color: GROUP_COLORS["Inflation / Growth / Labor"], group: "Inflation / Growth / Labor", keywords: [] },
-  { key: "jobs", label: "Jobs / NFP", color: GROUP_COLORS["Inflation / Growth / Labor"], group: "Inflation / Growth / Labor",
-    keywords: ["non-farm employment change", "unemployment rate", "average hourly earnings", "employment change"] },
-  { key: "gdp", label: "GDP", color: GROUP_COLORS["Inflation / Growth / Labor"], group: "Inflation / Growth / Labor", keywords: [] },
-  { key: "ism", label: "ISM Manufacturing / Services", color: GROUP_COLORS["Inflation / Growth / Labor"], group: "Inflation / Growth / Labor", keywords: [] },
-  { key: "jolts", label: "JOLTS", color: GROUP_COLORS["Inflation / Growth / Labor"], group: "Inflation / Growth / Labor", keywords: [] },
-  { key: "retail_sales", label: "Retail Sales", color: GROUP_COLORS["Inflation / Growth / Labor"], group: "Inflation / Growth / Labor", keywords: [] },
-  { key: "ppi", label: "PPI", color: GROUP_COLORS["Inflation / Growth / Labor"], group: "Inflation / Growth / Labor", keywords: [] },
-  { key: "jobless_claims", label: "Initial Jobless Claims", color: GROUP_COLORS["Inflation / Growth / Labor"], group: "Inflation / Growth / Labor", keywords: [] },
-  { key: "auction", label: "10Y/30Y Auction", color: GROUP_COLORS["Bond Market"], group: "Bond Market", keywords: [] },
+  { key: "fomc", label: "FOMC", color: GROUP_COLORS["Monetary Policy"], group: "Monetary Policy" },
+  { key: "sep", label: "SEP / Dot Plot", color: GROUP_COLORS["Monetary Policy"], group: "Monetary Policy" },
+  { key: "fomc_presser", label: "Fed Chair Press Conference", color: GROUP_COLORS["Monetary Policy"], group: "Monetary Policy" },
+  { key: "fomc_minutes", label: "FOMC Minutes", color: GROUP_COLORS["Monetary Policy"], group: "Monetary Policy" },
+  { key: "cpi", label: "CPI", color: GROUP_COLORS["Inflation / Growth / Labor"], group: "Inflation / Growth / Labor" },
+  { key: "pce", label: "PCE / Core PCE", color: GROUP_COLORS["Inflation / Growth / Labor"], group: "Inflation / Growth / Labor" },
+  { key: "jobs", label: "Jobs / NFP", color: GROUP_COLORS["Inflation / Growth / Labor"], group: "Inflation / Growth / Labor" },
+  { key: "gdp", label: "GDP", color: GROUP_COLORS["Inflation / Growth / Labor"], group: "Inflation / Growth / Labor" },
+  { key: "ism", label: "ISM Manufacturing / Services", color: GROUP_COLORS["Inflation / Growth / Labor"], group: "Inflation / Growth / Labor" },
+  { key: "jolts", label: "JOLTS", color: GROUP_COLORS["Inflation / Growth / Labor"], group: "Inflation / Growth / Labor" },
+  { key: "retail_sales", label: "Retail Sales", color: GROUP_COLORS["Inflation / Growth / Labor"], group: "Inflation / Growth / Labor" },
+  { key: "ppi", label: "PPI", color: GROUP_COLORS["Inflation / Growth / Labor"], group: "Inflation / Growth / Labor" },
+  { key: "jobless_claims", label: "Initial Jobless Claims", color: GROUP_COLORS["Inflation / Growth / Labor"], group: "Inflation / Growth / Labor" },
+  { key: "auction", label: "10Y/30Y Auction", color: GROUP_COLORS["Bond Market"], group: "Bond Market" },
 ];
 // Which currencies' news are relevant to a given instrument. A genuine
 // forex-style pair ("EUR/USD") is relevant to both of its own two
@@ -2428,14 +2464,6 @@ function ppiFredFallback(dateIso: string): EventDetail | null {
   );
 }
 
-function eventNewsCategory(ev: EconomicEvent): NewsCategoryDef | null {
-  const title = ev.title.toLowerCase();
-  for (const def of NEWS_CATEGORY_DEFS) {
-    if (def.keywords.some(kw => title.includes(kw))) return def;
-  }
-  return null;
-}
-
 // ─── Economic event interpretation (News indicator upgrade — Phase 1) ────────
 // Turns a marker from "CPI happened here" into "what the market learned from
 // CPI here" — actual vs forecast/previous, a surprise magnitude, and a short
@@ -2643,15 +2671,6 @@ function interpretSep(dateIso: string): SepDetail | null {
 // Dispatches a single live-feed event (any country) to the right interpreter
 // by its News category — used for the non-USD leg, where each event is its
 // own standalone marker rather than part of a grouped US release.
-function interpretByCategory(key: NewsCategoryKey, ev: EconomicEvent): EventDetail | null {
-  if (key === "cpi") return interpretCpi(ev);
-  if (key === "fomc") return interpretFomc(ev);
-  const t = ev.title.toLowerCase();
-  if (t.includes("unemployment")) return interpretJobs(undefined, ev, undefined);
-  if (t.includes("earnings"))     return interpretJobs(undefined, undefined, ev);
-  return interpretJobs(ev, undefined, undefined);
-}
-
 // ─── Simple pool-driven categories (PCE, GDP, ISM, JOLTS, Retail Sales, PPI,
 // Initial Jobless Claims, Fed Chair Press Conference, FOMC Minutes) ──────────
 // Unlike FOMC/CPI/Jobs, none of these need a hand-maintained static date
@@ -2700,6 +2719,22 @@ function interpretSimple(ev: EconomicEvent, def: SimpleCategoryDef): EventDetail
     else           { detail.tag = "IN LINE";     detail.direction = "Neutral"; }
   }
   return detail;
+}
+
+// Whether `ev` is already plotted by the SIMPLE_CATEGORY_DEFS pool-scan
+// (retail_sales/gdp/ppi/jobless_claims' non-USD leg, further down) — mirrors
+// that loop's own matching exactly, so the showForeignNews catch-all can
+// skip these and never plot the same release under two different colors.
+function matchesSimpleCategory(ev: EconomicEvent, country: string): boolean {
+  const titleLower = ev.title.toLowerCase();
+  return SIMPLE_CATEGORY_DEFS.some(d =>
+    d.key !== "ism" && d.key !== "pce" && d.key !== "jolts"
+    && !(d.key === "retail_sales" && country === "USD")
+    && !(d.key === "jobless_claims" && country === "USD")
+    && !(d.key === "gdp" && country === "USD")
+    && !(d.key === "ppi" && country === "USD")
+    && d.match(titleLower)
+  );
 }
 
 // Matches a News category's static release date to the real USD event(s)
@@ -3761,6 +3796,13 @@ function PriceHistoryChart({
   const [viewMode,   setViewMode]   = useState<"candles" | "line">(initialChartView?.viewMode ?? "candles");
   const [tfRows,     setTfRows]     = useState<RawCandleTf[]>([]);
   const [tfLoading,  setTfLoading]  = useState(false);
+  // Every tfRows-derived effect below (indicators, news lines, trendline
+  // anchors) needs each candle's UTC seconds — shared here so a 10s live
+  // poll parses each timestamp once instead of once per consumer.
+  const tfTimes = useMemo(
+    () => tfRows.map(r => Math.floor(new Date(r.timestamp).getTime() / 1000) as UTCTimestamp),
+    [tfRows]
+  );
   const [activeInds, setActiveInds] = useState<Set<IndKey>>(
     () => new Set((initialChartView?.activeInds ?? ["volume"]) as IndKey[])
   );
@@ -3855,17 +3897,15 @@ function PriceHistoryChart({
     cpi: true, pce: true, jobs: true, gdp: true, ism: true, jolts: true, retail_sales: true, ppi: true, jobless_claims: true,
     auction: true,
   });
-  // Per-category, per-currency sub-filter — CPI and Jobs Reports both
-  // release under multiple countries (e.g. EUR/USD's own CPI plus every
-  // Eurozone country's CPI all match the "cpi" category), so the category
-  // toggle alone can't isolate just one side. Keyed "key:CURRENCY", true
-  // unless explicitly turned off — absent entries default to visible so
-  // switching pairs doesn't require re-enabling currencies never touched.
-  const [newsCurrencyVisibility, setNewsCurrencyVisibility] = useState<Record<string, boolean>>({});
-  const isNewsCurrencyVisible = useCallback(
-    (key: NewsCategoryKey, currency: string) => newsCurrencyVisibility[`${key}:${currency}`] !== false,
-    [newsCurrencyVisibility]
-  );
+  // Single master switch for the non-USD leg of the pair (e.g. EUR on a
+  // EUR/USD chart) — deliberately NOT a per-country/per-category toggle set
+  // like the USD categories above. Every curated USD category has its own
+  // hand-built historical schedule (FOMC dates, CPI/Jobs release calendars,
+  // etc.); building the same per-country would mean replicating that for
+  // every central bank/statistics office. Instead this plots whatever
+  // high-impact events the live feed + persisted archive actually have for
+  // the charted pair's other currency — see the isForeignNewsCandidate loop.
+  const [showForeignNews, setShowForeignNews] = useState(false);
   const [showNewsSettings, setShowNewsSettings] = useState(false);
   const [newsSettingsPos, setNewsSettingsPos] = useState<{ top: number; left: number } | null>(null);
   const newsBtnRef = useRef<HTMLButtonElement>(null);
@@ -4039,21 +4079,25 @@ function PriceHistoryChart({
   const [reversalSettingsPos, setReversalSettingsPos] = useState<{ top: number; left: number } | null>(null);
   const reversalBtnRef = useRef<HTMLButtonElement>(null);
   const reversalSettingsPopoverRef = useRef<HTMLDivElement>(null);
-  const [reversalZoneFilter, setReversalZoneFilter] = useState(() => getReversalSettings(DEFAULT_REVERSAL_GROUPS).zoneFilter);
-  const [reversalEightAmBoxFilter, setReversalEightAmBoxFilter] = useState(() => getReversalSettings(DEFAULT_REVERSAL_GROUPS).eightAmBoxFilter);
-  const [reversalTrendlineFilter, setReversalTrendlineFilter] = useState(() => getReversalSettings(DEFAULT_REVERSAL_GROUPS).trendlineFilter);
-  const [reversalGannFilter, setReversalGannFilter] = useState(() => getReversalSettings(DEFAULT_REVERSAL_GROUPS).gannFilter);
-  const [reversalFibFilter, setReversalFibFilter] = useState(() => getReversalSettings(DEFAULT_REVERSAL_GROUPS).fibFilter);
+  // One read of localStorage + JSON.parse, captured once at mount, instead of
+  // the 7 separate getReversalSettings() calls (one per field below) this
+  // used to do — each one re-reading and re-parsing the same stored blob.
+  const [initialReversalSettings] = useState(() => getReversalSettings(DEFAULT_REVERSAL_GROUPS));
+  const [reversalZoneFilter, setReversalZoneFilter] = useState(() => initialReversalSettings.zoneFilter);
+  const [reversalEightAmBoxFilter, setReversalEightAmBoxFilter] = useState(() => initialReversalSettings.eightAmBoxFilter);
+  const [reversalTrendlineFilter, setReversalTrendlineFilter] = useState(() => initialReversalSettings.trendlineFilter);
+  const [reversalGannFilter, setReversalGannFilter] = useState(() => initialReversalSettings.gannFilter);
+  const [reversalFibFilter, setReversalFibFilter] = useState(() => initialReversalSettings.fibFilter);
   // How many of the most recent qualifying reversal candles to actually
   // show, counting back from the latest — null shows every one.
-  const [reversalMaxCount, setReversalMaxCount] = useState<number | null>(() => getReversalSettings(DEFAULT_REVERSAL_GROUPS).maxCount);
+  const [reversalMaxCount, setReversalMaxCount] = useState<number | null>(() => initialReversalSettings.maxCount);
   // Stores selected GROUP labels (one toggle per candle shape, covering both
   // its bullish and bearish variant) — expanded to raw pattern names for
   // computeReversalFlags via the mirroring effect below.
-  const [reversalPatternGroups, setReversalPatternGroups] = useState<Set<string>>(() => new Set(getReversalSettings(DEFAULT_REVERSAL_GROUPS).patternGroups));
+  const [reversalPatternGroups, setReversalPatternGroups] = useState<Set<string>>(() => new Set(initialReversalSettings.patternGroups));
   // Label text on/off — the red/green arrows always stay, only the
   // pattern-name text beside them is hidden.
-  const [showReversalLabels, setShowReversalLabels] = useState(() => getReversalSettings(DEFAULT_REVERSAL_GROUPS).showLabels);
+  const [showReversalLabels, setShowReversalLabels] = useState(() => initialReversalSettings.showLabels);
   const reversalZoneFilterRef = useRef(false);
   const reversalEightAmBoxFilterRef = useRef(false);
   const reversalTrendlineFilterRef = useRef(false);
@@ -4097,6 +4141,7 @@ function PriceHistoryChart({
   const seriesRef     = useRef<any>(null);
   const priceLineRef  = useRef<any>(null);
   const openTradePriceLinesRef = useRef<any[]>([]);
+  const plannedPriceLinesRef = useRef<any[]>([]);
   const indSeriesRef  = useRef<Partial<Record<IndKey, any[]>>>({});
   const bbFillPrimRef   = useRef<any>(null);
   const ichiCloudPrimRef = useRef<any>(null);
@@ -4386,7 +4431,6 @@ function PriceHistoryChart({
       // only apply when USD is one of the charted pair's two currencies.
       const addStatic = (key: NewsCategoryKey, isoDates: string[]) => {
         if (!newsCategoryVisibility[key] || !currencies.includes("USD")) return;
-        if (!isNewsCurrencyVisible(key, "USD")) return;
         const def = NEWS_CATEGORY_DEFS.find(d => d.key === key)!;
         for (const iso of isoDates) {
           const t = Math.floor(new Date(iso).getTime() / 1000);
@@ -4471,24 +4515,41 @@ function PriceHistoryChart({
         }
       }
 
-      // Live feed still covers the non-USD leg (e.g. EUR CPI on a EUR/USD
-      // chart) — just the current week, same limitation as the Economic
-      // Calendar panel itself. Labeled with the actual event title (e.g.
-      // "German Prelim CPI m/m") rather than the generic category name —
-      // a bare "CPI EUR" answers "what category" but not "which specific
-      // release", which is the question that actually needs answering
-      // when a country other than the one you expected shows up.
-      for (const ev of calendarEvents) {
-        const def = eventNewsCategory(ev);
-        if (!def || !newsCategoryVisibility[def.key]) continue;
-        const country = ev.country?.toUpperCase();
-        if (!currencies.includes(country)) continue;
-        if (country === "USD") continue; // covered by the static tables above
-        if (!isNewsCurrencyVisible(def.key, country)) continue;
-        const t = Math.floor(new Date(ev.date).getTime() / 1000);
-        if (Number.isNaN(t)) continue;
-        const detail = interpretByCategory(def.key, ev);
-        if (inRange(t)) lines.push({ time: t as UTCTimestamp, label: `${ev.title} (${ev.country})`, color: def.color, detail: detail ?? undefined });
+      // Foreign News master switch — every High or Medium impact event for
+      // the charted pair's non-USD currency, from whatever the live feed +
+      // persisted archive actually have (see dedupedEventPool above), not
+      // limited to a curated list of release types. This is what covers a
+      // non-US central bank's own rate decisions/press conferences — the
+      // direct equivalent of FOMC for that currency — which nothing else
+      // here plots, alongside any other meaningful release. Skips events
+      // the SIMPLE_CATEGORY_DEFS pool-scan below already plots (foreign
+      // retail sales/GDP/PPI/jobless claims) so nothing double-plots.
+      // Labeled with the event's own title (e.g. "ECB Interest Rate
+      // Decision") rather than a category name, since these aren't grouped
+      // by type the way the curated USD categories are.
+      //
+      // High-only turned out to filter out nearly everything: of 184
+      // archived events across 9 currencies, only 17 are ever rated High,
+      // and JPY/CHF had zero — most currencies' real releases (GDP, CPI,
+      // employment) land as Medium on this feed's own rating, not just the
+      // handful of USD/CAD releases that get marked High. Low stays
+      // excluded — that's the bulk of the noise (142 of 184) this toggle
+      // exists to keep off the chart.
+      if (showForeignNews) {
+        for (const ev of dedupedEventPool) {
+          const country = ev.country?.toUpperCase();
+          if (!country || country === "USD" || !currencies.includes(country)) continue;
+          if (ev.impact !== "High" && ev.impact !== "Medium") continue;
+          if (matchesSimpleCategory(ev, country)) continue;
+          const t = Math.floor(new Date(ev.date).getTime() / 1000);
+          if (Number.isNaN(t) || !inRange(t)) continue;
+          lines.push({
+            time: t as UTCTimestamp,
+            label: `${ev.title} (${country})`,
+            color: FOREIGN_NEWS_COLOR,
+            detail: { title: ev.title, headline: fieldDetail(ev.title, ev) },
+          });
+        }
       }
 
       // Treasury auctions — own pipeline (TreasuryDirect, not the
@@ -4529,7 +4590,6 @@ function PriceHistoryChart({
           && d.match(titleLower)
         );
         if (!scDef || !newsCategoryVisibility[scDef.key]) continue;
-        if (!isNewsCurrencyVisible(scDef.key, country)) continue;
         const t = Math.floor(new Date(ev.date).getTime() / 1000);
         if (Number.isNaN(t) || !inRange(t)) continue;
         const catDef = NEWS_CATEGORY_DEFS.find(d => d.key === scDef.key)!;
@@ -4678,11 +4738,11 @@ function PriceHistoryChart({
     }
     if (newsLinePrimRef.current) {
       newsLinePrimRef.current._lines = lines;
-      newsLinePrimRef.current._barTimes = tfRows.map(r => Math.floor(new Date(r.timestamp).getTime() / 1000));
+      newsLinePrimRef.current._barTimes = tfTimes;
       newsLinePrimRef.current._applyBarCorrection = chartTf !== "1D" && chartTf !== "1W";
     }
     chartRef.current?.applyOptions({});
-  }, [showNews, newsCategoryVisibility, newsCurrencyVisibility, isNewsCurrencyVisible, calendarEvents, storedEconomicEvents, treasuryAuctions, pair, tfRows, chartTf]);
+  }, [showNews, newsCategoryVisibility, showForeignNews, calendarEvents, storedEconomicEvents, treasuryAuctions, pair, tfRows, tfTimes, chartTf]);
 
   // Open positions for the currently viewed instrument — polled every 30s
   // (trades are logged manually, not high-frequency, so this is just to
@@ -4822,13 +4882,18 @@ function PriceHistoryChart({
   // pair/tf change clears indSeriesRef via removeIndSeries first, see the
   // chartTf/pair effect above) keeps the chart-object churn to new-load and
   // toggle-on/off only.
-  const addIndSeries = useCallback((key: IndKey, candles: RawCandleTf[]) => {
+  // times/closes are optional precomputed arrays for candles — when the
+  // caller is about to call this once per active indicator for the same
+  // candles (see the tfRows effect below), passing them in avoids mapping
+  // the same candle array (up to 1000 rows, each doing a Date parse) once
+  // per indicator instead of once total.
+  const addIndSeries = useCallback((key: IndKey, candles: RawCandleTf[], precomputedTimes?: UTCTimestamp[], precomputedCloses?: number[]) => {
     if (key === "reversal" || key === "session8am" || key === "pivots") return; // driven by their own effects, not a line series
     const chart = chartRef.current;
     if (!chart || candles.length === 0) return;
 
-    const times  = candles.map(r => Math.floor(new Date(r.timestamp).getTime() / 1000) as UTCTimestamp);
-    const closes = candles.map(r => r.close);
+    const times  = precomputedTimes  ?? candles.map(r => Math.floor(new Date(r.timestamp).getTime() / 1000) as UTCTimestamp);
+    const closes = precomputedCloses ?? candles.map(r => r.close);
     const toData = (vals: (number | null)[]) =>
       vals.reduce<{ time: UTCTimestamp; value: number }[]>((acc, v, i) => {
         if (v !== null) acc.push({ time: times[i], value: v });
@@ -4961,6 +5026,29 @@ function PriceHistoryChart({
       });
       s.setData(volData);
       indSeriesRef.current.volume = [s];
+
+    } else if (key === "vwap") {
+      // Session VWAP only makes sense on intraday bars — a 1D/1W bar already
+      // spans a whole session (or more), so skip rather than draw something
+      // meaningless if the timeframe changed while this was toggled on.
+      const barSpanSec = times.length > 1 ? times[1] - times[0] : 0;
+      const isIntraday = barSpanSec > 0 && barSpanSec < 20 * 3600;
+      if (!isIntraday) { removeIndSeries(key); return; }
+
+      const vwapData = toData(computeVWAP(candles));
+
+      const existing = indSeriesRef.current.vwap;
+      if (existing && existing.length === 1) {
+        existing[0].setData(vwapData);
+        return;
+      }
+      removeIndSeries(key);
+
+      const color = IND_DEFS.find(d => d.key === "vwap")!.color;
+      const s = chart.addSeries(LineSeries, { color, lineWidth: 1 });
+      s.applyOptions(indOpts);
+      s.setData(vwapData);
+      indSeriesRef.current.vwap = [s];
 
     } else {
       const MA_PERIODS: Record<string, { period: number; fn: (c: number[], p: number) => (number | null)[] }> = {
@@ -5475,7 +5563,7 @@ function PriceHistoryChart({
         activeDragListenersRef.current = null;
       }
       ro.disconnect(); chart.remove();
-      chartRef.current = null; seriesRef.current = null; indSeriesRef.current = {}; bbFillPrimRef.current = null; ichiCloudPrimRef.current = null; zonePrimRef.current = null; trendPrimRef.current = null; eightAmBoxPrimRef.current = null; marketSessionPrimRef.current = null; newsLinePrimRef.current = null; watermarkPrimRef.current = null; drawingPrimRef.current = null; openTradePriceLinesRef.current = [];
+      chartRef.current = null; seriesRef.current = null; indSeriesRef.current = {}; bbFillPrimRef.current = null; ichiCloudPrimRef.current = null; zonePrimRef.current = null; trendPrimRef.current = null; eightAmBoxPrimRef.current = null; marketSessionPrimRef.current = null; newsLinePrimRef.current = null; watermarkPrimRef.current = null; drawingPrimRef.current = null; openTradePriceLinesRef.current = []; plannedPriceLinesRef.current = [];
     };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -5520,6 +5608,48 @@ function PriceHistoryChart({
     }
   }, [openTrades, viewMode]);
 
+  // ── Planned trade overlay (Phase 14) — dotted lines, clearly labeled
+  // "PLANNED", from the Trade tab's shared store. Deliberately distinct
+  // styling from the solid/dashed broker-confirmed lines above — these must
+  // never look like an accepted or live order. Editing the Trade tab updates
+  // these lines immediately (one-way for now — see plannedTradeStore.ts for
+  // why dragging back isn't wired up yet).
+  const plannedTrade = useSyncExternalStore(plannedTradeStore.subscribe, plannedTradeStore.get);
+  useEffect(() => {
+    const series = seriesRef.current;
+    if (!series) return;
+    for (const line of plannedPriceLinesRef.current) {
+      try { series.removePriceLine(line); } catch (_) {}
+    }
+    plannedPriceLinesRef.current = [];
+    if (plannedTrade.pair !== pair) return; // plan is for a different instrument — don't draw it here
+    const isBuy = plannedTrade.side === "buy";
+    if (plannedTrade.entry != null) {
+      plannedPriceLinesRef.current.push(series.createPriceLine({
+        price: plannedTrade.entry, color: "#eab308", lineWidth: 1, lineStyle: LineStyle.Dotted,
+        axisLabelVisible: true, title: isBuy ? "PLANNED BUY" : "PLANNED SELL",
+      }));
+    }
+    if (plannedTrade.stop != null) {
+      const dollarNote = plannedTrade.entry != null
+        ? ` (${Math.abs(plannedTrade.entry - plannedTrade.stop).toFixed(5)} pts)`
+        : "";
+      plannedPriceLinesRef.current.push(series.createPriceLine({
+        price: plannedTrade.stop, color: "#ef4444", lineWidth: 1, lineStyle: LineStyle.Dotted,
+        axisLabelVisible: true, title: `PLANNED SL${dollarNote}`,
+      }));
+    }
+    if (plannedTrade.target != null) {
+      const dollarNote = plannedTrade.entry != null
+        ? ` (${Math.abs(plannedTrade.target - plannedTrade.entry).toFixed(5)} pts)`
+        : "";
+      plannedPriceLinesRef.current.push(series.createPriceLine({
+        price: plannedTrade.target, color: "#22c55e", lineWidth: 1, lineStyle: LineStyle.Dotted,
+        axisLabelVisible: true, title: `PLANNED TP${dollarNote}`,
+      }));
+    }
+  }, [plannedTrade, pair, viewMode]);
+
   // Apply price data + refresh all active indicators when data arrives.
   // tfRows changes on the initial [chartTf, pair] load and on the 10s live
   // poll; shouldResetViewRef distinguishes the two so only the former resets
@@ -5527,19 +5657,22 @@ function PriceHistoryChart({
   useEffect(() => {
     if (tfRows.length === 0) return;
     applyData(tfRows, viewModeRef.current, shouldResetViewRef.current);
-    activeIndsRef.current.forEach(key => addIndSeries(key, tfRows));
+    // tfTimes comes from the shared useMemo above; closes has no other
+    // consumer so it's still computed fresh here.
+    const tfCloses = tfRows.map(r => r.close);
+    activeIndsRef.current.forEach(key => addIndSeries(key, tfRows, tfTimes, tfCloses));
     // Track the oldest loaded bar's time and the loaded high/low series
     // itself, so the trendline primitive can resolve each pivot anchor to
     // whichever loaded bar actually touched that price (for the anchor
     // circle markers), and knows when an anchor is within the loaded window
     // at all.
     if (trendPrimRef.current && tfRows.length >= 2) {
-      trendPrimRef.current._oldestLoadedTime = Math.floor(new Date(tfRows[0].timestamp).getTime() / 1000);
-      trendPrimRef.current._loadedCandles = tfRows.map(r => ({
-        t: Math.floor(new Date(r.timestamp).getTime() / 1000), h: r.high, l: r.low,
+      trendPrimRef.current._oldestLoadedTime = tfTimes[0];
+      trendPrimRef.current._loadedCandles = tfRows.map((r, i) => ({
+        t: tfTimes[i], h: r.high, l: r.low,
       }));
     }
-  }, [tfRows, applyData, addIndSeries]);
+  }, [tfRows, tfTimes, applyData, addIndSeries]);
 
   const [showIndPanel, setShowIndPanel] = useState(false);
   const indBtnRef = useRef<HTMLButtonElement>(null);
@@ -6586,6 +6719,29 @@ function PriceHistoryChart({
                   All
                 </button>
               </div>
+              {pairCurrencies.length === 2 && (
+                <button
+                  onClick={() => setShowForeignNews(v => !v)}
+                  title={`High/Medium-impact ${pairCurrencies.find(c => c !== "USD") ?? "foreign"} news — central bank decisions, data releases — for whatever the live feed and persisted archive have`}
+                  style={{
+                    display: "flex", alignItems: "center", justifyContent: "space-between", width: "100%",
+                    fontSize: 10, fontWeight: 700, padding: "6px 8px", marginBottom: 10,
+                    background: showForeignNews ? "rgba(59,130,246,0.14)" : "var(--bg-panel-alt)",
+                    border: `1px solid ${showForeignNews ? "rgba(59,130,246,0.45)" : "var(--border-medium)"}`,
+                    borderRadius: 6, cursor: "pointer",
+                    color: showForeignNews ? "#3b82f6" : "var(--text-secondary)",
+                  }}
+                >
+                  <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <span style={{
+                      width: 14, height: 14, borderRadius: 3, flexShrink: 0,
+                      border: "2px solid #3b82f6", background: showForeignNews ? "#3b82f6" : "transparent",
+                    }} />
+                    Foreign News (High/Med Impact)
+                  </span>
+                  <span style={{ fontSize: 9, opacity: 0.7 }}>{showForeignNews ? "ON" : "OFF"}</span>
+                </button>
+              )}
               <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
                 {(["Monetary Policy", "Inflation / Growth / Labor", "Bond Market"] as const satisfies readonly NewsCategoryGroup[]).map(group => (
                   <div key={group}>
@@ -6597,14 +6753,6 @@ function PriceHistoryChart({
                     <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "2px 10px" }}>
                       {NEWS_CATEGORY_DEFS.filter(d => d.group === group).map(def => {
                         const on = newsCategoryVisibility[def.key];
-                        // CPI and Jobs Reports both release under multiple
-                        // countries (a EUR/USD chart's own USD releases plus
-                        // whatever the live feed has for EUR that week) — FOMC
-                        // is USD-only, so it never needs this. Only worth
-                        // showing when the charted pair actually has two
-                        // currencies to choose between (a real forex pair, not
-                        // an index/stock/ETF, which only ever has USD anyway).
-                        const showCurrencyChips = (def.key === "cpi" || def.key === "jobs") && pairCurrencies.length === 2;
                         return (
                           <div key={def.key}>
                             <button
@@ -6622,29 +6770,6 @@ function PriceHistoryChart({
                                 {def.label}
                               </span>
                             </button>
-                            {showCurrencyChips && (
-                              <div style={{ display: "flex", gap: 4, marginLeft: 22, marginTop: 2, marginBottom: 2 }}>
-                                {pairCurrencies.map(cur => {
-                                  const curOn = isNewsCurrencyVisible(def.key, cur);
-                                  return (
-                                    <button
-                                      key={cur}
-                                      onClick={() => setNewsCurrencyVisibility(v => ({ ...v, [`${def.key}:${cur}`]: !curOn }))}
-                                      style={{
-                                        fontSize: 9, fontWeight: 700, padding: "2px 6px",
-                                        textTransform: "uppercase", letterSpacing: "0.04em",
-                                        background: curOn ? "var(--accent-dim)" : "var(--bg-panel-alt)",
-                                        border:     curOn ? "1px solid var(--accent-border)" : "1px solid var(--border-medium)",
-                                        color:      curOn ? "var(--accent-text)" : "var(--text-muted)",
-                                        borderRadius: 6, cursor: "pointer",
-                                      }}
-                                    >
-                                      {cur}
-                                    </button>
-                                  );
-                                })}
-                              </div>
-                            )}
                           </div>
                         );
                       })}
@@ -6696,7 +6821,7 @@ function PriceHistoryChart({
                   textTransform: "uppercase", letterSpacing: "0.1em", color: "var(--text-muted)" }}>
                   Indicators
                 </div>
-                {IND_DEFS.map(({ key, label, color }) => {
+                {IND_DEFS.filter(d => d.key !== "vwap" || VWAP_TIMEFRAMES.has(chartTf)).map(({ key, label, color }) => {
                   const on = activeInds.has(key);
                   return (
                     <button key={key} onClick={() => toggleInd(key)} style={{
@@ -7344,14 +7469,21 @@ function MacdPanelBodyImpl({ pair, indicatorTf, expanded }: { pair: string; indi
   const [loading,  setLoading]  = useState(false);
 
   useEffect(() => {
+    // Polled every 60s (matching the Strategies stack panels) so this keeps
+    // tracking live price on the selected timeframe instead of going stale
+    // the moment it mounts.
+    let cancelled = false;
     setLoading(true);
     setLiveRows([]);
-    getStackCandles(pair, indicatorTf)
+    const load = () => getStackCandles(pair, indicatorTf)
       .then(candles => setLiveRows(candles.map(c => ({
         date: c.date, macd: c.macd, macdSignal: c.macd_signal, macdHistogram: c.macd_histogram,
       }))))
       .catch(() => {})
-      .finally(() => setLoading(false));
+      .finally(() => { if (!cancelled) setLoading(false); });
+    load();
+    const id = setInterval(load, 60_000);
+    return () => { cancelled = true; clearInterval(id); };
   }, [pair, indicatorTf]);
 
   const rows = liveRows;
@@ -7609,9 +7741,13 @@ function RsiPanelBodyImpl({ pair, indicatorTf, expanded }: { pair: string; indic
   const [loading,  setLoading]  = useState(false);
 
   useEffect(() => {
+    // Polled every 60s (matching the Strategies stack panels) so this keeps
+    // tracking live price on the selected timeframe instead of going stale
+    // the moment it mounts.
+    let cancelled = false;
     setLoading(true);
     setLiveRows([]);
-    getStackCandles(pair, indicatorTf)
+    const load = () => getStackCandles(pair, indicatorTf)
       .then(candles => setLiveRows(candles.map(c => ({
         date:      c.date,
         rsi9:      c.rsi9,
@@ -7619,7 +7755,10 @@ function RsiPanelBodyImpl({ pair, indicatorTf, expanded }: { pair: string; indic
         stochRsiD: c.stoch_rsi_d,
       }))))
       .catch(() => {})
-      .finally(() => setLoading(false));
+      .finally(() => { if (!cancelled) setLoading(false); });
+    load();
+    const id = setInterval(load, 60_000);
+    return () => { cancelled = true; clearInterval(id); };
   }, [pair, indicatorTf]);
 
   const rows = liveRows;
@@ -7857,9 +7996,13 @@ function Rsi14PanelBodyImpl({ pair, indicatorTf, expanded }: { pair: string; ind
   const [loading,  setLoading]  = useState(false);
 
   useEffect(() => {
+    // Polled every 60s (matching the Strategies stack panels) so this keeps
+    // tracking live price on the selected timeframe instead of going stale
+    // the moment it mounts.
+    let cancelled = false;
     setLoading(true);
     setLiveRows([]);
-    getStackCandles(pair, indicatorTf)
+    const load = () => getStackCandles(pair, indicatorTf)
       .then(candles => setLiveRows(candles.map(c => ({
         date:   c.date,
         rsi14:  c.rsi14,
@@ -7868,7 +8011,10 @@ function Rsi14PanelBodyImpl({ pair, indicatorTf, expanded }: { pair: string; ind
         sma200: c.sma200,
       }))))
       .catch(() => {})
-      .finally(() => setLoading(false));
+      .finally(() => { if (!cancelled) setLoading(false); });
+    load();
+    const id = setInterval(load, 60_000);
+    return () => { cancelled = true; clearInterval(id); };
   }, [pair, indicatorTf]);
 
   const rows = liveRows;
@@ -8359,16 +8505,23 @@ function MaPanelBodyImpl({ pair, indicatorTf, expanded }: { pair: string; indica
   const [loading,  setLoading]  = useState(false);
 
   useEffect(() => {
+    // Polled every 60s (matching the Strategies stack panels) so this keeps
+    // tracking live price on the selected timeframe instead of going stale
+    // the moment it mounts.
+    let cancelled = false;
     setLoading(true);
     setLiveRows([]);
-    getStackCandles(pair, indicatorTf)
+    const load = () => getStackCandles(pair, indicatorTf)
       .then(candles => setLiveRows(candles.map(c => ({
         date: c.date, open: c.open, high: c.high, low: c.low, close: c.close,
         ema9: c.ema9, ema20: c.ema20, ema50: c.ema50, ema100: c.ema100, ema200: c.ema200,
         sma20: c.sma20, sma50: c.sma50, sma200: c.sma200,
       }))))
       .catch(() => {})
-      .finally(() => setLoading(false));
+      .finally(() => { if (!cancelled) setLoading(false); });
+    load();
+    const id = setInterval(load, 60_000);
+    return () => { cancelled = true; clearInterval(id); };
   }, [pair, indicatorTf]);
 
   const rows = liveRows;
@@ -8635,14 +8788,21 @@ function AdxPanelBodyImpl({ pair, indicatorTf, expanded }: { pair: string; indic
   const [loading,  setLoading]  = useState(false);
 
   useEffect(() => {
+    // Polled every 60s (matching the Strategies stack panels) so this keeps
+    // tracking live price on the selected timeframe instead of going stale
+    // the moment it mounts.
+    let cancelled = false;
     setLoading(true);
     setLiveRows([]);
-    getStackCandles(pair, indicatorTf)
+    const load = () => getStackCandles(pair, indicatorTf)
       .then(candles => setLiveRows(candles.map(c => ({
         date: c.date, diPlus: c.di_plus, diMinus: c.di_minus, adx: c.adx,
       }))))
       .catch(() => {})
-      .finally(() => setLoading(false));
+      .finally(() => { if (!cancelled) setLoading(false); });
+    load();
+    const id = setInterval(load, 60_000);
+    return () => { cancelled = true; clearInterval(id); };
   }, [pair, indicatorTf]);
 
   const rows = liveRows;
@@ -9440,14 +9600,21 @@ function AvgPricePanelBodyImpl({ pair, indicatorTf, expanded }: { pair: string; 
   const [loading,  setLoading]  = useState(false);
 
   useEffect(() => {
+    // Polled every 60s (matching the Strategies stack panels) so this keeps
+    // tracking live price on the selected timeframe instead of going stale
+    // the moment it mounts.
+    let cancelled = false;
     setLoading(true);
     setLiveRows([]);
-    getStackCandles(pair, indicatorTf)
+    const load = () => getStackCandles(pair, indicatorTf)
       .then(candles => setLiveRows(candles.map(c => ({
         date: c.date, high: c.high, low: c.low, close: c.close,
       }))))
       .catch(() => {})
-      .finally(() => setLoading(false));
+      .finally(() => { if (!cancelled) setLoading(false); });
+    load();
+    const id = setInterval(load, 60_000);
+    return () => { cancelled = true; clearInterval(id); };
   }, [pair, indicatorTf]);
 
   const rows = liveRows;
@@ -9604,12 +9771,19 @@ function RocPanelBodyImpl({ pair, indicatorTf, expanded }: { pair: string; indic
   const [loading,  setLoading]  = useState(false);
 
   useEffect(() => {
+    // Polled every 60s (matching the Strategies stack panels) so this keeps
+    // tracking live price on the selected timeframe instead of going stale
+    // the moment it mounts.
+    let cancelled = false;
     setLoading(true);
     setLiveRows([]);
-    getStackCandles(pair, indicatorTf)
+    const load = () => getStackCandles(pair, indicatorTf)
       .then(candles => setLiveRows(candles.map(c => ({ date: c.date, close: c.close }))))
       .catch(() => {})
-      .finally(() => setLoading(false));
+      .finally(() => { if (!cancelled) setLoading(false); });
+    load();
+    const id = setInterval(load, 60_000);
+    return () => { cancelled = true; clearInterval(id); };
   }, [pair, indicatorTf]);
 
   const rows = liveRows;
@@ -9855,12 +10029,19 @@ function AtrPanelBodyImpl({ pair, indicatorTf, expanded }: { pair: string; indic
   const [loading,  setLoading]  = useState(false);
 
   useEffect(() => {
+    // Polled every 60s (matching the Strategies stack panels) so this keeps
+    // tracking live price on the selected timeframe instead of going stale
+    // the moment it mounts.
+    let cancelled = false;
     setLoading(true);
     setLiveRows([]);
-    getStackCandles(pair, indicatorTf)
+    const load = () => getStackCandles(pair, indicatorTf)
       .then(candles => setLiveRows(candles.map(c => ({ date: c.date, atr14: c.atr14 }))))
       .catch(() => {})
-      .finally(() => setLoading(false));
+      .finally(() => { if (!cancelled) setLoading(false); });
+    load();
+    const id = setInterval(load, 60_000);
+    return () => { cancelled = true; clearInterval(id); };
   }, [pair, indicatorTf]);
 
   const rows = liveRows;
@@ -10080,16 +10261,23 @@ function SqueezePanelBodyImpl({ pair, indicatorTf, expanded }: { pair: string; i
   const [loading,  setLoading]  = useState(false);
 
   useEffect(() => {
+    // Polled every 60s (matching the Strategies stack panels) so this keeps
+    // tracking live price on the selected timeframe instead of going stale
+    // the moment it mounts.
+    let cancelled = false;
     setLoading(true);
     setLiveRows([]);
-    getStackCandles(pair, indicatorTf)
+    const load = () => getStackCandles(pair, indicatorTf)
       .then(candles => setLiveRows(candles.map(c => ({
         date: c.date, high: c.high, low: c.low, close: c.close, sma20: c.sma20,
         bbUpper: c.bb_upper, bbLower: c.bb_lower,
         keltnerUpper: c.keltner_upper, keltnerLower: c.keltner_lower,
       }))))
       .catch(() => {})
-      .finally(() => setLoading(false));
+      .finally(() => { if (!cancelled) setLoading(false); });
+    load();
+    const id = setInterval(load, 60_000);
+    return () => { cancelled = true; clearInterval(id); };
   }, [pair, indicatorTf]);
 
   const rows = liveRows;
@@ -10673,14 +10861,21 @@ function MarketStructurePanelBodyImpl({ pair, indicatorTf, expanded }: { pair: s
   const [loading,  setLoading]  = useState(false);
 
   useEffect(() => {
+    // Polled every 60s (matching the Strategies stack panels) so this keeps
+    // tracking live price on the selected timeframe instead of going stale
+    // the moment it mounts.
+    let cancelled = false;
     setLoading(true);
     setLiveRows([]);
-    getStackCandles(pair, indicatorTf)
+    const load = () => getStackCandles(pair, indicatorTf)
       .then(candles => setLiveRows(candles.map(c => ({
         date: c.date, open: c.open, high: c.high, low: c.low, close: c.close, atr14: c.atr14,
       }))))
       .catch(() => {})
-      .finally(() => setLoading(false));
+      .finally(() => { if (!cancelled) setLoading(false); });
+    load();
+    const id = setInterval(load, 60_000);
+    return () => { cancelled = true; clearInterval(id); };
   }, [pair, indicatorTf]);
 
   const rows = liveRows;
@@ -11045,15 +11240,22 @@ function VolatilityPanelBodyImpl({ pair, indicatorTf, expanded }: { pair: string
   const [loading,  setLoading]  = useState(false);
 
   useEffect(() => {
+    // Polled every 60s (matching the Strategies stack panels) so this keeps
+    // tracking live price on the selected timeframe instead of going stale
+    // the moment it mounts.
+    let cancelled = false;
     setLoading(true);
     setLiveRows([]);
-    getStackCandles(pair, indicatorTf)
+    const load = () => getStackCandles(pair, indicatorTf)
       .then(candles => setLiveRows(candles.map(c => ({
         date: c.date, open: c.open, high: c.high, low: c.low, close: c.close,
         bbUpper: c.bb_upper, bbMiddle: c.bb_middle, bbLower: c.bb_lower, histVol: c.hist_vol,
       }))))
       .catch(() => {})
-      .finally(() => setLoading(false));
+      .finally(() => { if (!cancelled) setLoading(false); });
+    load();
+    const id = setInterval(load, 60_000);
+    return () => { cancelled = true; clearInterval(id); };
   }, [pair, indicatorTf]);
 
   const rows = liveRows;
@@ -11333,16 +11535,23 @@ function CciPanelBodyImpl({ pair, indicatorTf, expanded }: { pair: string; indic
   const [loading,  setLoading]  = useState(false);
 
   useEffect(() => {
+    // Polled every 60s (matching the Strategies stack panels) so this keeps
+    // tracking live price on the selected timeframe instead of going stale
+    // the moment it mounts.
+    let cancelled = false;
     setLoading(true);
     setLiveRows([]);
-    getStackCandles(pair, indicatorTf)
+    const load = () => getStackCandles(pair, indicatorTf)
       .then(candles => setLiveRows(candles.map(c => ({
         date:  c.date,
         cci:   c.cci,
         close: c.close,
       }))))
       .catch(() => {})
-      .finally(() => setLoading(false));
+      .finally(() => { if (!cancelled) setLoading(false); });
+    load();
+    const id = setInterval(load, 60_000);
+    return () => { cancelled = true; clearInterval(id); };
   }, [pair, indicatorTf]);
 
   const rows = liveRows;
@@ -11515,12 +11724,19 @@ function WrPanelBodyImpl({ pair, indicatorTf, expanded }: { pair: string; indica
   const [loading,  setLoading]  = useState(false);
 
   useEffect(() => {
+    // Polled every 60s (matching the Strategies stack panels) so this keeps
+    // tracking live price on the selected timeframe instead of going stale
+    // the moment it mounts.
+    let cancelled = false;
     setLoading(true);
     setLiveRows([]);
-    getStackCandles(pair, indicatorTf)
+    const load = () => getStackCandles(pair, indicatorTf)
       .then(candles => setLiveRows(candles.map(c => ({ date: c.date, high: c.high, low: c.low, close: c.close }))))
       .catch(() => {})
-      .finally(() => setLoading(false));
+      .finally(() => { if (!cancelled) setLoading(false); });
+    load();
+    const id = setInterval(load, 60_000);
+    return () => { cancelled = true; clearInterval(id); };
   }, [pair, indicatorTf]);
 
   const rows = liveRows;
@@ -12026,14 +12242,21 @@ function VolumePanelBodyImpl({ pair, indicatorTf, expanded }: { pair: string; in
   const [loading,  setLoading]  = useState(false);
 
   useEffect(() => {
+    // Polled every 60s (matching the Strategies stack panels) so this keeps
+    // tracking live price on the selected timeframe instead of going stale
+    // the moment it mounts.
+    let cancelled = false;
     setLoading(true);
     setLiveRows([]);
-    getStackCandles(pair, indicatorTf)
+    const load = () => getStackCandles(pair, indicatorTf)
       .then(candles => setLiveRows(candles.map(c => ({
         date: c.date, open: c.open, close: c.close, volume: c.volume, volumeSma20: c.volume_sma20,
       }))))
       .catch(() => {})
-      .finally(() => setLoading(false));
+      .finally(() => { if (!cancelled) setLoading(false); });
+    load();
+    const id = setInterval(load, 60_000);
+    return () => { cancelled = true; clearInterval(id); };
   }, [pair, indicatorTf]);
 
   const rows = liveRows;
@@ -12191,15 +12414,22 @@ function KeltPanelBodyImpl({ pair, indicatorTf, expanded }: { pair: string; indi
   const [loading,  setLoading]  = useState(false);
 
   useEffect(() => {
+    // Polled every 60s (matching the Strategies stack panels) so this keeps
+    // tracking live price on the selected timeframe instead of going stale
+    // the moment it mounts.
+    let cancelled = false;
     setLoading(true);
     setLiveRows([]);
-    getStackCandles(pair, indicatorTf)
+    const load = () => getStackCandles(pair, indicatorTf)
       .then(candles => setLiveRows(candles.map(c => ({
         date: c.date, open: c.open, high: c.high, low: c.low, close: c.close,
         keltnerUpper: c.keltner_upper, keltnerMiddle: c.keltner_middle, keltnerLower: c.keltner_lower,
       }))))
       .catch(() => {})
-      .finally(() => setLoading(false));
+      .finally(() => { if (!cancelled) setLoading(false); });
+    load();
+    const id = setInterval(load, 60_000);
+    return () => { cancelled = true; clearInterval(id); };
   }, [pair, indicatorTf]);
 
   const rows = liveRows;
@@ -12998,28 +13228,33 @@ function computeReversalFlags(
   // shape. Stopping one short of rows.length leaves flags[rows.length - 1]
   // at its untouched `null` default.
   for (let i = 1; i < rows.length - 1; i++) {
-    const window = rows.slice(Math.max(0, i - 11), i + 1);
+    // detectCandlePatterns only ever looks back as far as i-4 (Tweezers'
+    // _priorTrendDown(candles, i2, 2), the deepest lookback of the bunch) —
+    // slicing 12 candles here always over-allocated 7 candles that were
+    // never read.
+    const window = rows.slice(Math.max(0, i - 4), i + 1);
     const patterns = detectCandlePatterns(window).filter(p => enabledPatterns.has(p.name));
     if (patterns.length === 0) continue;
-    const r = rows[i];
-    const t = Math.floor(new Date(r.timestamp).getTime() / 1000);
     // No filter active (default): every detected + enabled pattern qualifies
     // regardless of location. With a filter active: Zone strictly requires
     // bullish reversals inside/on a currently-viewed demand zone and bearish
     // inside/on supply (no cross-bias); every other filter (8AM Box, Trend
     // Line, Gann Fan, Fibonacci) counts either bias, per whichever are on.
-    const qualifying = !anyFilterOn
-      ? patterns[0]
-      : patterns.find(p => {
-          const zoneMatch = zoneFilterOn && (p.bias === "bullish"
-            ? demandZones.some(z => candleTouchesZone(r.low, r.high, t, z))
-            : supplyZones.some(z => candleTouchesZone(r.low, r.high, t, z)));
-          const boxMatch   = eightAmBoxFilterOn && eightAmBoxes.some(b => candleTouchesTimeRangeBox(r.low, r.high, t, b));
-          const trendMatch = trendlineFilterOn && trendlines.some(l => candleTouchesTrendline(r.low, r.high, t, l));
-          const gannMatch  = gannFilterOn && gannDrawings.some(g => candleTouchesGannFan(r.low, r.high, t, g));
-          const fibMatch   = fibFilterOn && fibDrawings.some(f => candleTouchesFibLevels(r.low, r.high, t, f));
-          return zoneMatch || boxMatch || trendMatch || gannMatch || fibMatch;
-        });
+    let qualifying: CandlePattern | undefined = patterns[0];
+    if (anyFilterOn) {
+      const r = rows[i];
+      const t = Math.floor(new Date(r.timestamp).getTime() / 1000);
+      qualifying = patterns.find(p => {
+        const zoneMatch = zoneFilterOn && (p.bias === "bullish"
+          ? demandZones.some(z => candleTouchesZone(r.low, r.high, t, z))
+          : supplyZones.some(z => candleTouchesZone(r.low, r.high, t, z)));
+        const boxMatch   = eightAmBoxFilterOn && eightAmBoxes.some(b => candleTouchesTimeRangeBox(r.low, r.high, t, b));
+        const trendMatch = trendlineFilterOn && trendlines.some(l => candleTouchesTrendline(r.low, r.high, t, l));
+        const gannMatch  = gannFilterOn && gannDrawings.some(g => candleTouchesGannFan(r.low, r.high, t, g));
+        const fibMatch   = fibFilterOn && fibDrawings.some(f => candleTouchesFibLevels(r.low, r.high, t, f));
+        return zoneMatch || boxMatch || trendMatch || gannMatch || fibMatch;
+      });
+    }
     if (qualifying) flags[i] = { name: qualifying.name, bias: qualifying.bias as "bullish" | "bearish" };
   }
   // Keep only the most recent `maxCount` qualifying candles — a long history
@@ -13197,16 +13432,23 @@ function RegimePanelBodyImpl({ pair, indicatorTf, expanded, showCandles, onToggl
   const [loading,  setLoading]  = useState(false);
 
   useEffect(() => {
+    // Polled every 60s (matching the Strategies stack panels) so this keeps
+    // tracking live price on the selected timeframe instead of going stale
+    // the moment it mounts.
+    let cancelled = false;
     setLoading(true);
     setLiveRows([]);
-    getStackCandles(pair, indicatorTf)
+    const load = () => getStackCandles(pair, indicatorTf)
       .then(candles => setLiveRows(candles.map(c => ({
         date: c.date, open: c.open, high: c.high, low: c.low, close: c.close,
         adx: c.adx, diPlus: c.di_plus, diMinus: c.di_minus,
         atr14: c.atr14, bbUpper: c.bb_upper, bbLower: c.bb_lower,
       }))))
       .catch(() => {})
-      .finally(() => setLoading(false));
+      .finally(() => { if (!cancelled) setLoading(false); });
+    load();
+    const id = setInterval(load, 60_000);
+    return () => { cancelled = true; clearInterval(id); };
   }, [pair, indicatorTf]);
 
   const rows = liveRows;
@@ -13473,14 +13715,21 @@ function CandleContextPanelBodyImpl({ pair, indicatorTf, expanded }: { pair: str
   const [loading,  setLoading]  = useState(false);
 
   useEffect(() => {
+    // Polled every 60s (matching the Strategies stack panels) so this keeps
+    // tracking live price on the selected timeframe instead of going stale
+    // the moment it mounts.
+    let cancelled = false;
     setLoading(true);
     setLiveRows([]);
-    getStackCandles(pair, indicatorTf)
+    const load = () => getStackCandles(pair, indicatorTf)
       .then(candles => setLiveRows(candles.map(c => ({
         date: c.date, open: c.open, high: c.high, low: c.low, close: c.close,
       }))))
       .catch(() => {})
-      .finally(() => setLoading(false));
+      .finally(() => { if (!cancelled) setLoading(false); });
+    load();
+    const id = setInterval(load, 60_000);
+    return () => { cancelled = true; clearInterval(id); };
   }, [pair, indicatorTf]);
 
   if (loading) return (
@@ -13735,13 +13984,21 @@ function useLiveCandles(pair: string, tf: string, enabled: boolean, pollMs?: num
 
 const STACK_TFS = ["1W", "1D", "4H", "1H", "15M", "5M", "1M"] as const;
 
-// Deduplicated, briefly cached candle fetch shared by every strategy stack panel.
-// Each stack panel needs all 7 timeframes; without sharing, N panels fire N×7
-// concurrent backend (OANDA) calls on mount — enough to stall app boot on reload.
-// Collapsing identical (pair, tf) requests into one in-flight call keeps it to a
-// single fetch per timeframe — the "one candle source" rule.
+// Deduplicated, briefly cached candle fetch shared by every strategy stack
+// panel AND every indicator panel (MACD, RSI, ADX, etc. — see their 60s poll
+// loops) plus the page-level indicatorRows poll. Each stack panel needs all 7
+// timeframes; without sharing, N panels fire N×7 concurrent backend (OANDA)
+// calls on mount — enough to stall app boot on reload. Collapsing identical
+// (pair, tf) requests into one in-flight call keeps it to a single fetch per
+// timeframe — the "one candle source" rule.
+//
+// TTL is set just under the 60s poll interval every consumer above uses
+// (none polls faster) — that way one round of near-simultaneous polls from
+// ~18 independent components sharing the same (pair, chartTf) lands in the
+// same cache window and produces one backend call instead of several, even
+// with a few seconds of drift between when each component happened to mount.
 const stackCandleCache = new Map<string, { ts: number; promise: Promise<RawCandleV3[]> }>();
-const STACK_CANDLE_TTL_MS = 30_000;
+const STACK_CANDLE_TTL_MS = 55_000;
 
 function getStackCandles(pair: string, tf: string): Promise<RawCandleV3[]> {
   const key = `${pair}:${tf}`;
@@ -14371,7 +14628,7 @@ function NewsAndCalendarPanelImpl({
   news: NewsArticle[]; newsLoading: boolean; pair: string;
   calendarEvents: EconomicEvent[]; calendarLoading: boolean;
 }) {
-  const [tab, setTab] = useState<"news" | "calendar">("calendar");
+  const [tab, setTab] = useState<"news" | "calendar" | "trade">("calendar");
 
   const [impactFilter, setImpactFilter] = useState<Set<CalendarImpact>>(new Set(["High"]));
   const toggleImpact = (imp: CalendarImpact) => setImpactFilter(prev => {
@@ -14412,7 +14669,7 @@ function NewsAndCalendarPanelImpl({
     }}>
       {/* Tab strip — integrated header of the panel, not a separate floating row */}
       <div style={{ display: "flex", alignItems: "center", gap: 4, flexShrink: 0, padding: "6px 8px 0" }}>
-        {(["news", "calendar"] as const).map(t => {
+        {(["news", "calendar", "trade"] as const).map(t => {
           const active = tab === t;
           return (
             <button key={t} onClick={() => setTab(t)} style={{
@@ -14423,7 +14680,7 @@ function NewsAndCalendarPanelImpl({
               color: active ? "var(--accent-text)" : "var(--text-muted)",
               cursor: "pointer", marginBottom: -1,
             }}>
-              {t === "news" ? "News" : "Economic Calendar"}
+              {t === "news" ? "News" : t === "calendar" ? "Economic Calendar" : "Trade"}
             </button>
           );
         })}
@@ -14519,7 +14776,9 @@ function NewsAndCalendarPanelImpl({
       <div style={{ flex: 1, minHeight: 0, borderTop: "1px solid var(--border-medium)" }}>
         {tab === "news"
           ? <ForexNewsPanel news={news} loading={newsLoading} pair={pair} />
-          : <EconomicCalendarPanel events={calendarEvents} loading={calendarLoading} impactFilter={impactFilter} restrictedOnly={restrictedOnly} filterByInstrument={filterByInstrument} pair={pair} />}
+          : tab === "calendar"
+          ? <EconomicCalendarPanel events={calendarEvents} loading={calendarLoading} impactFilter={impactFilter} restrictedOnly={restrictedOnly} filterByInstrument={filterByInstrument} pair={pair} />
+          : <TradeTabPanel pair={pair} />}
       </div>
     </div>
   );
@@ -14710,7 +14969,10 @@ export function AnalyticsV3() {
   // mounts a fresh instance — consume() picks up that request even though
   // it was dispatched before this component (and its subscribe below,
   // which only covers a favorite clicked while already on this page) existed.
-  const [selectedPair, setSelectedPair] = useState(() => pairSelectionEvents.consume() ?? getLastChartSelection()?.pair ?? "EUR/USD");
+  // One localStorage read + JSON.parse, reused below for chartTf too —
+  // getLastChartSelection() used to be called separately for each field.
+  const [savedChartSelection] = useState(() => getLastChartSelection());
+  const [selectedPair, setSelectedPair] = useState(() => pairSelectionEvents.consume() ?? savedChartSelection?.pair ?? "EUR/USD");
   const [aisRowCollapsed, setAisRowCollapsed] = useState(true);
   const [belowChartCollapsed, setBelowChartCollapsed] = useState(false);
   const [rightOfChartCollapsed, setRightOfChartCollapsed] = useState(false);
@@ -14772,6 +15034,13 @@ export function AnalyticsV3() {
   const [alerts, setAlerts] = useState<Alert[]>([]);
   const [toasts, setToasts] = useState<AlertToast[]>([]);
   const seenStatuses = useRef<Record<string, string>>({});
+  // Alerts with local edits not yet flushed to alerts.json — the Save button
+  // per row lights up while its id is in here. Mirrored into a ref so the
+  // 10s poll below (fixed empty deps, reads via refs) can skip overwriting
+  // an alert mid-edit with whatever's currently on disk.
+  const [dirtyAlertIds, setDirtyAlertIds] = useState<Set<string>>(new Set());
+  const dirtyAlertIdsRef = useRef<Set<string>>(new Set());
+  useEffect(() => { dirtyAlertIdsRef.current = dirtyAlertIds; }, [dirtyAlertIds]);
   const [newsItems, setNewsItems]     = useState<NewsArticle[]>([]);
   const [newsLoading, setNewsLoading] = useState(false);
   const [calendarEvents, setCalendarEvents]   = useState<EconomicEvent[]>([]);
@@ -14958,7 +15227,18 @@ export function AnalyticsV3() {
             setToasts(prev => [...prev, ...newToasts]);
           }
 
-          setAlerts(loaded);
+          // Alerts with unsaved local edits keep their in-memory version —
+          // otherwise this 10s refresh would silently overwrite an edit the
+          // user hasn't clicked Save on yet with the stale copy on disk.
+          const dirty = dirtyAlertIdsRef.current;
+          if (dirty.size === 0) {
+            setAlerts(loaded);
+          } else {
+            setAlerts(prev => {
+              const prevById = new Map(prev.map(a => [a.id, a]));
+              return loaded.map(a => dirty.has(a.id) ? (prevById.get(a.id) ?? a) : a);
+            });
+          }
         })
         .catch(() => {});
     };
@@ -14967,162 +15247,16 @@ export function AnalyticsV3() {
     return () => clearInterval(id);
   }, []);
 
-  // Keep a ref to alerts so the evaluation interval always reads current state
-  const alertsRef = useRef<Alert[]>([]);
-  useEffect(() => { alertsRef.current = alerts; }, [alerts]);
-
-  // Evaluate RSI/MACD Cross alerts every 60 s against computed candle data
-  useEffect(() => {
-    const evaluate = async () => {
-      const activeRsiMacd = alertsRef.current.filter(
-        a => a.direction === "rsi_macd_cross" && a.status === "watching" && a.active && a.rsiMacdConfig
-      );
-      const activeRsi = alertsRef.current.filter(
-        a => a.direction === "rsi" && a.status === "watching" && a.active && a.rsiConfig
-      );
-      const active = activeRsiMacd; // existing variable kept for downstream RSI/MACD loop
-      if (activeRsiMacd.length === 0 && activeRsi.length === 0) return;
-
-      // Collect unique timeframes across all active alerts (both types)
-      const allTfs = new Set<string>();
-      activeRsiMacd.forEach(a => a.rsiMacdConfig!.timeframes.forEach(tf => allTfs.add(tf)));
-      activeRsi.forEach(a => a.rsiConfig!.timeframes.forEach(tf => allTfs.add(tf)));
-
-      // Fetch last 3 computed candles per timeframe
-      const tfData: Record<string, RawCandleV3[]> = {};
-      await Promise.all([...allTfs].map(async tf => {
-        try {
-          const candles = await getStackCandles(selectedPair, tf);
-          if (candles.length >= 2) tfData[tf] = candles.slice(-3);
-        } catch { /* ignore fetch errors */ }
-      }));
-
-      const triggered: { id: string; direction: "bullish" | "bearish"; tf: string; kind?: "rsi"; condition?: "cross_above_70" | "cross_below_30" | "hit_50" }[] = [];
-
-      // RSI alerts evaluation
-      activeRsi.forEach(alert => {
-        const config = alert.rsiConfig!;
-        for (const tf of config.timeframes) {
-          const candles = tfData[tf];
-          if (!candles || candles.length < 2) continue;
-          const prev = candles[candles.length - 2];
-          const curr = candles[candles.length - 1];
-
-          let fires = false;
-          let direction: "bullish" | "bearish" = "bullish";
-
-          if (config.condition === "cross_above_70") {
-            fires = prev.rsi14 <= 70 && curr.rsi14 > 70;
-            direction = "bearish"; // overbought
-          } else if (config.condition === "cross_below_30") {
-            fires = prev.rsi14 >= 30 && curr.rsi14 < 30;
-            direction = "bullish"; // oversold
-          } else if (config.condition === "hit_50") {
-            fires =
-              (prev.rsi14 < 50 && curr.rsi14 >= 50) ||
-              (prev.rsi14 > 50 && curr.rsi14 <= 50);
-            direction = curr.rsi14 >= 50 ? "bullish" : "bearish";
-          }
-
-          if (fires) {
-            triggered.push({ id: alert.id, direction, tf, kind: "rsi", condition: config.condition });
-            break;
-          }
-        }
-      });
-
-      active.forEach(alert => {
-        const config = alert.rsiMacdConfig!;
-        for (const tf of config.timeframes) {
-          const candles = tfData[tf];
-          if (!candles || candles.length < 2) continue;
-          const prev = candles[candles.length - 2];
-          const curr = candles[candles.length - 1];
-
-          // MACD cross: histogram changes sign between prev and current candle
-          const macdBullishCross = prev.macd_histogram <= 0 && curr.macd_histogram > 0;
-          const macdBearishCross = prev.macd_histogram >= 0 && curr.macd_histogram < 0;
-
-          const isBullish = macdBullishCross && curr.rsi14 < 30;
-          const isBearish = macdBearishCross && curr.rsi14 > 70;
-
-          const fires =
-            (config.directionBias === "bullish" && isBullish) ||
-            (config.directionBias === "bearish" && isBearish) ||
-            (config.directionBias === "both" && (isBullish || isBearish));
-
-          if (fires) {
-            triggered.push({ id: alert.id, direction: isBullish ? "bullish" : "bearish", tf });
-            break; // first matching TF per alert is enough
-          }
-        }
-      });
-
-      if (triggered.length === 0) return;
-
-      const now = new Date().toISOString();
-
-      setAlerts(prev => {
-        const next = prev.map(a => {
-          const t = triggered.find(x => x.id === a.id);
-          return t ? { ...a, status: "triggered" as const, triggered_at_utc: now } : a;
-        });
-        alertsJsonPath
-          .then(path => invoke("write_text_file", { path, content: JSON.stringify(next, null, 2) }))
-          .catch(console.error);
-        return next;
-      });
-
-      // Prevent the JSON polling loop from double-firing a toast for the same trigger
-      triggered.forEach(t => { seenStatuses.current[t.id] = "triggered"; });
-
-      // Fire Telegram notifications for any triggered alerts
-      const rsiCondLabel: Record<string, string> = {
-        cross_above_70: "RSI crossed above 70",
-        cross_below_30: "RSI crossed below 30",
-        hit_50: "RSI hit 50",
-      };
-      triggered.forEach(t => {
-        const alert = alertsRef.current.find(a => a.id === t.id);
-        if (!alert || !alert.notifications.telegram) return;
-        const dirLabel = t.direction === "bullish" ? "Bullish" : "Bearish";
-        const body = t.kind === "rsi"
-          ? `${alert.instrument.replace("_", "/")} · ${rsiCondLabel[t.condition!]}\nTimeframe: ${t.tf}`
-          : `${alert.instrument.replace("_", "/")} · ${dirLabel} MACD×RSI cross\nTimeframe: ${t.tf}`;
-        invoke("send_telegram_message", { text: `🚨 ${alert.name}\n${body}` }).catch(console.error);
-      });
-
-      // Fire in-app toasts + sound
-      const newToasts: AlertToast[] = triggered
-        .map(t => {
-          const alert = alertsRef.current.find(a => a.id === t.id);
-          if (!alert || !alert.notifications.in_app) return null;
-          const dirLabel = t.direction === "bullish" ? "Bullish" : "Bearish";
-          const subtitle = t.kind === "rsi"
-            ? `${alert.instrument.replace("_", "/")} · ${rsiCondLabel[t.condition!]} · ${t.tf}`
-            : `${alert.instrument.replace("_", "/")} · ${dirLabel} MACD×RSI · ${t.tf}`;
-          return {
-            toastId: crypto.randomUUID(),
-            name: alert.name,
-            instrument: alert.instrument,
-            direction: alert.direction,
-            price: 0,
-            subtitle,
-          };
-        })
-        .filter(Boolean) as AlertToast[];
-
-      if (newToasts.length > 0) {
-        const firstAlert = alertsRef.current.find(a => a.id === triggered[0].id);
-        playAlertSound((firstAlert?.sound as AlertSound) ?? "chime");
-        setToasts(prev => [...prev, ...newToasts]);
-      }
-    };
-
-    evaluate();
-    const id = setInterval(evaluate, 60_000);
-    return () => clearInterval(id);
-  }, [selectedPair]); // eslint-disable-line react-hooks/exhaustive-deps
+  // RSI/RSI×MACD Cross evaluation used to run here too (60s poll against
+  // getStackCandles), in addition to price_alert.py's own 60s poll against
+  // the same alerts once that was added. Running both was a real bug, not
+  // just redundant compute: two independent evaluators racing on the same
+  // 60s cadence against the same alerts.json could both observe a
+  // still-"watching" alert in the same window and both fire — a duplicate
+  // Telegram message for one trigger. price_alert.py is the only evaluator
+  // now, for every direction (above/below/crosses/rsi/rsi_macd_cross), and
+  // it's the one that also runs with the app closed. The 10s poll below
+  // still turns whatever it writes into an in-app toast when the app is open.
 
   function createAlert() {
     const next: Alert = {
@@ -15165,12 +15299,22 @@ export function AnalyticsV3() {
       });
   }
 
+  // Field edits (name, direction, price, RSI/RSI×MACD config, notifications,
+  // sound) — local only, not written to alerts.json until the row's Save
+  // button is clicked. Marks the alert dirty so Save lights up and the 10s
+  // poll above leaves it alone.
   function updateAlert(id: string, patch: Partial<Alert>) {
-    setAlerts(prev => {
-      const next = prev.map(a => a.id === id ? { ...a, ...patch } : a);
-      saveAlerts(next);
-      return next;
-    });
+    setAlerts(prev => prev.map(a => a.id === id ? { ...a, ...patch } : a));
+    setDirtyAlertIds(prev => prev.has(id) ? prev : new Set(prev).add(id));
+  }
+
+  // alerts.json holds every alert in one array, so a save always flushes the
+  // whole current list — there's no way to persist just one alert's row in
+  // isolation. Saving from any row therefore clears every alert's dirty flag,
+  // not only the one clicked.
+  function saveAlert() {
+    setAlerts(prev => { saveAlerts(prev); return prev; });
+    setDirtyAlertIds(new Set());
   }
 
   function deleteAlert(id: string) {
@@ -15179,14 +15323,14 @@ export function AnalyticsV3() {
       saveAlerts(next);
       return next;
     });
+    setDirtyAlertIds(prev => prev.has(id) ? (() => { const n = new Set(prev); n.delete(id); return n; })() : prev);
   }
   const [expanded, setExpanded] = useState<PanelMeta | null>(null);
   const CHART_TFS = ["1W", "1D", "4H", "1H", "15M", "5M", "1M"] as const;
   const [chartTf, setChartTf] = useState<"1W" | "1D" | "4H" | "1H" | "15M" | "5M" | "1M">(() => {
-    const saved = getLastChartSelection()?.chartTf;
+    const saved = savedChartSelection?.chartTf;
     return (CHART_TFS as readonly string[]).includes(saved ?? "") ? (saved as typeof CHART_TFS[number]) : "1D";
   });
-  const [indicatorTf, setIndicatorTf] = useState<"1W" | "1D" | "4H" | "1H" | "15M" | "5M" | "1M">("1D");
   // Remember the instrument+timeframe across navigation and app restarts —
   // see getLastChartSelection in preferences.ts.
   useEffect(() => { setLastChartSelection(selectedPair, chartTf); }, [selectedPair, chartTf]);
@@ -15377,15 +15521,30 @@ export function AnalyticsV3() {
     analysisResult.direction === "SHORT" ? "short"   :
     "neutral";
 
+  // Drives every indicator panel's header badge/headline (iRows/latestRow
+  // below) off the SAME timeframe as the chart itself — see chartTf. Price,
+  // Failure Swing, and Ichimoku intentionally stay pinned to sheetRows
+  // (daily) instead of this; see dailyLatestRow / priceBias / priceScore /
+  // priceHeadline / ichiBias / ichiScore / ichiHeadline. Polled every 60s
+  // (matching the Strategies stack panels) so these headers, plus the
+  // Session/Pivots panel bodies (which read iRows too), keep tracking live
+  // price instead of going stale once loaded.
   const [indicatorRows, setIndicatorRows] = useState<SheetRow[]>([]);
   useEffect(() => {
-    getStackCandles(selectedPair, indicatorTf)
-      .then(candles => setIndicatorRows(candles.map(mapToSheetRow)))
+    let cancelled = false;
+    const load = () => getStackCandles(selectedPair, chartTf)
+      .then(candles => { if (!cancelled) setIndicatorRows(candles.map(mapToSheetRow)); })
       .catch(() => {});
-  }, [selectedPair, indicatorTf]);
+    load();
+    const id = setInterval(load, 60_000);
+    return () => { cancelled = true; clearInterval(id); };
+  }, [selectedPair, chartTf]);
   const iRows     = indicatorRows.length > 0 ? indicatorRows : sheetRows;
 
   const latestRow   = iRows[iRows.length - 1];
+  // Price panel is pinned to daily data (like Failure Swing) even though
+  // every other panel's header now follows chartTf via iRows/latestRow above.
+  const dailyLatestRow = sheetRows[sheetRows.length - 1];
 
   // Instrument name + Current Price + Today's Change must always sit on one
   // aligned row, for every instrument, with zero clipping past the app edge
@@ -15473,7 +15632,7 @@ export function AnalyticsV3() {
   const macdBadge         = makeMacdBadge();
   const macdBadgeExpanded = makeMacdBadge(true);
   const macdHeadline      = iRows.length > 0 ? buildMacdAnalysis(iRows).headline : "";
-  const priceHeadline     = iRows.length > 0 ? buildPriceAnalysis(iRows).headline : "";
+  const priceHeadline     = sheetRows.length > 0 ? buildPriceAnalysis(sheetRows).headline : "";
   const rsiHeadline       = iRows.length > 0 ? buildRsiAnalysis(iRows).headline : "";
   const rsi14Headline     = iRows.length > 0 ? buildRsi14Analysis(iRows).headline : "";
   const maHeadline        = iRows.length > 0 ? buildMaAnalysis(iRows).headline : "";
@@ -15570,22 +15729,25 @@ export function AnalyticsV3() {
   const adxBadge         = makeAdxBadge();
   const adxBadgeExpanded = makeAdxBadge(true);
 
-  const ichiHeadline = iRows.length > 0 ? buildIchiAnalysis(iRows).headline : "";
-  const ichiBias = !latestRow ? "neutral"
-    : latestRow.close > Math.max(latestRow.senkouA, latestRow.senkouB) ? "bullish"
-    : latestRow.close < Math.min(latestRow.senkouA, latestRow.senkouB) ? "bearish"
+  // Ichimoku is pinned to daily (like Price and Failure Swing) — its cloud
+  // spans, Tenkan/Kijun periods, and Chikou offset were built around daily
+  // bars and don't hold up as a shorter/longer timeframe swap.
+  const ichiHeadline = sheetRows.length > 0 ? buildIchiAnalysis(sheetRows).headline : "";
+  const ichiBias = !dailyLatestRow ? "neutral"
+    : dailyLatestRow.close > Math.max(dailyLatestRow.senkouA, dailyLatestRow.senkouB) ? "bullish"
+    : dailyLatestRow.close < Math.min(dailyLatestRow.senkouA, dailyLatestRow.senkouB) ? "bearish"
     : "neutral";
   const ichiScore = useMemo(() => {
-    if (!latestRow) return 0;
-    const cloudTop     = Math.max(latestRow.senkouA ?? 0, latestRow.senkouB ?? 0);
-    const cloudBottom  = Math.min(latestRow.senkouA ?? 0, latestRow.senkouB ?? 0);
-    const aboveCloud   = latestRow.close > cloudTop;
-    const belowCloud   = latestRow.close < cloudBottom;
-    const bullishCloud = (latestRow.senkouA ?? 0) > (latestRow.senkouB ?? 0);
-    const bearishCloud = latestRow.senkouB > latestRow.senkouA;
-    const tkBullish    = latestRow.tenkan > latestRow.kijun;
+    if (!dailyLatestRow) return 0;
+    const cloudTop     = Math.max(dailyLatestRow.senkouA ?? 0, dailyLatestRow.senkouB ?? 0);
+    const cloudBottom  = Math.min(dailyLatestRow.senkouA ?? 0, dailyLatestRow.senkouB ?? 0);
+    const aboveCloud   = dailyLatestRow.close > cloudTop;
+    const belowCloud   = dailyLatestRow.close < cloudBottom;
+    const bullishCloud = (dailyLatestRow.senkouA ?? 0) > (dailyLatestRow.senkouB ?? 0);
+    const bearishCloud = dailyLatestRow.senkouB > dailyLatestRow.senkouA;
+    const tkBullish    = dailyLatestRow.tenkan > dailyLatestRow.kijun;
     const chikouRef    = sheetRows.length > 26 ? sheetRows[sheetRows.length - 27] : null;
-    const chikouBull   = chikouRef ? latestRow.close > chikouRef.close : null;
+    const chikouBull   = chikouRef ? dailyLatestRow.close > chikouRef.close : null;
     if (aboveCloud) {
       let c = 1;
       if (bullishCloud)        c++;
@@ -15603,10 +15765,10 @@ export function AnalyticsV3() {
     const bandwidth = cloudTop - cloudBottom;
     if (bandwidth <= 0) return 0;
     const cloudMid = (cloudTop + cloudBottom) / 2;
-    return Math.min(100, Math.round((Math.abs(latestRow.close - cloudMid) / (bandwidth / 2)) * 100));
-  }, [latestRow, sheetRows]);
+    return Math.min(100, Math.round((Math.abs(dailyLatestRow.close - cloudMid) / (bandwidth / 2)) * 100));
+  }, [dailyLatestRow, sheetRows]);
   const makeIchiBadge = (large?: boolean) => (
-    <HoverTooltip tip={`Score ${ichiScore}/100 — ${latestRow && latestRow.close > Math.max(latestRow.senkouA, latestRow.senkouB) ? "bullish confirmations" : latestRow && latestRow.close < Math.min(latestRow.senkouA, latestRow.senkouB) ? "bearish confirmations" : "cloud penetration depth"}. Counts: (1) price vs cloud, (2) cloud color, (3) Tenkan/Kijun alignment, (4) Chikou vs price 26 bars ago. Higher = more confirmations aligned.`}>
+    <HoverTooltip tip={`Score ${ichiScore}/100 — ${dailyLatestRow && dailyLatestRow.close > Math.max(dailyLatestRow.senkouA, dailyLatestRow.senkouB) ? "bullish confirmations" : dailyLatestRow && dailyLatestRow.close < Math.min(dailyLatestRow.senkouA, dailyLatestRow.senkouB) ? "bearish confirmations" : "cloud penetration depth"}. Counts: (1) price vs cloud, (2) cloud color, (3) Tenkan/Kijun alignment, (4) Chikou vs price 26 bars ago. Higher = more confirmations aligned.`}>
       <span
         className={`${large ? "text-[11px]" : "text-[8px]"} font-black uppercase rounded-full`}
         style={{
@@ -16134,16 +16296,16 @@ export function AnalyticsV3() {
   const rsiBadge         = makeRsiBadge();
   const rsiBadgeExpanded = makeRsiBadge(true);
 
-  const priceBias = !latestRow ? "neutral"
-    : latestRow.close > latestRow.open ? "bullish"
-    : latestRow.close < latestRow.open ? "bearish"
+  const priceBias = !dailyLatestRow ? "neutral"
+    : dailyLatestRow.close > dailyLatestRow.open ? "bullish"
+    : dailyLatestRow.close < dailyLatestRow.open ? "bearish"
     : "neutral";
   const priceScore = useMemo(() => {
-    if (!latestRow || iRows.length < 2) return 0;
-    const recent = iRows.slice(-20);
+    if (!dailyLatestRow || sheetRows.length < 2) return 0;
+    const recent = sheetRows.slice(-20);
     const maxBody = Math.max(...recent.map(r => Math.abs(r.close - r.open)));
-    return maxBody > 0 ? Math.round((Math.abs(latestRow.close - latestRow.open) / maxBody) * 100) : 0;
-  }, [iRows, latestRow]);
+    return maxBody > 0 ? Math.round((Math.abs(dailyLatestRow.close - dailyLatestRow.open) / maxBody) * 100) : 0;
+  }, [sheetRows, dailyLatestRow]);
   const makePriceBadge = (large?: boolean) => (
     <HoverTooltip tip={`Score ${priceScore}/100 — candle body size relative to the 20-session peak. Higher = stronger conviction in the current direction. 100 means today has the largest body in the recent window.`}>
       <span
@@ -16238,7 +16400,7 @@ export function AnalyticsV3() {
         {!aisRowCollapsed && !quadView && (
         <div style={{
           display:             "grid",
-          gridTemplateColumns: "repeat(4, 1fr)",
+          gridTemplateColumns: "1fr 1fr 1fr 1.3fr",
           gridTemplateRows:    "160px",
           gridTemplateAreas:   '"ais ais ais aic"',
           gap:                 "10px",
@@ -16281,7 +16443,7 @@ export function AnalyticsV3() {
                 ) : undefined}
                 onExpand={() => setExpanded({ id: p.id, label: p.label, sub: p.sub })}>
                 {p.id === "ai-synthesis" && <AiSynthesisPanelBody result={analysisResult} pair={selectedPair} />}
-                {p.id === "ai-chat"      && <AlertsPanel instrument={selectedPair.replace("/", "_")} alerts={alerts} onUpdate={updateAlert} onDelete={deleteAlert} />}
+                {p.id === "ai-chat"      && <AlertsPanel instrument={selectedPair.replace("/", "_")} alerts={alerts} onUpdate={updateAlert} onSave={saveAlert} dirtyAlertIds={dirtyAlertIds} onDelete={deleteAlert} />}
               </BlankPanel>
             );
           })}
@@ -16315,9 +16477,8 @@ export function AnalyticsV3() {
         )}
 
         {/* ── Scrollable bottom rows — category container panels ──
-            paddingTop intentionally 0 so the sticky Indicator Timeframe row
-            can rest flush with the container top edge; the first child
-            below carries the 10px of initial spacing instead. */}
+            paddingTop intentionally 0 — the first child below carries the
+            10px of initial spacing instead. */}
         <div className="flex-1 min-h-0" style={{
           display: "flex", flexDirection: "column",
           // marginRight eats 8px of the page's own right padding so the
@@ -16573,27 +16734,27 @@ export function AnalyticsV3() {
                             subtitle2={p.id === "regime" ? regimeAlignmentInsight : undefined}
                             onExpand={() => setExpanded({ id: p.id, label: p.label, sub: p.sub })}>
                             {p.id === "price"           && <PricePanelBody        rows={sheetRows} />}
-                            {p.id === "macd"            && <MacdPanelBody         pair={selectedPair} indicatorTf={indicatorTf} />}
-                            {p.id === "rsi9"            && <RsiPanelBody          pair={selectedPair} indicatorTf={indicatorTf} />}
-                            {p.id === "rsi14"           && <Rsi14PanelBody        pair={selectedPair} indicatorTf={indicatorTf} />}
-                            {p.id === "moving-averages" && <MaPanelBody           pair={selectedPair} indicatorTf={indicatorTf} />}
-                            {p.id === "keltner"         && <KeltPanelBody         pair={selectedPair} indicatorTf={indicatorTf} />}
-                            {p.id === "adx"             && <AdxPanelBody          pair={selectedPair} indicatorTf={indicatorTf} />}
+                            {p.id === "macd"            && <MacdPanelBody         pair={selectedPair} indicatorTf={chartTf} />}
+                            {p.id === "rsi9"            && <RsiPanelBody          pair={selectedPair} indicatorTf={chartTf} />}
+                            {p.id === "rsi14"           && <Rsi14PanelBody        pair={selectedPair} indicatorTf={chartTf} />}
+                            {p.id === "moving-averages" && <MaPanelBody           pair={selectedPair} indicatorTf={chartTf} />}
+                            {p.id === "keltner"         && <KeltPanelBody         pair={selectedPair} indicatorTf={chartTf} />}
+                            {p.id === "adx"             && <AdxPanelBody          pair={selectedPair} indicatorTf={chartTf} />}
                             {p.id === "ichimoku"        && <IchiPanelBody         rows={sheetRows} />}
-                            {p.id === "session"         && <SessionPanelBody      rows={sheetRows} />}
-                            {p.id === "volume"          && <VolumePanelBody       pair={selectedPair} indicatorTf={indicatorTf} />}
-                            {p.id === "pivots"          && <PivotPanelBody        rows={sheetRows} />}
-                            {p.id === "cci"             && <CciPanelBody          pair={selectedPair} indicatorTf={indicatorTf} />}
-                            {p.id === "wr"              && <WrPanelBody           pair={selectedPair} indicatorTf={indicatorTf} />}
-                            {p.id === "volatility"      && <VolatilityPanelBody   pair={selectedPair} indicatorTf={indicatorTf} />}
-                            {p.id === "avg-price"       && <AvgPricePanelBody     pair={selectedPair} indicatorTf={indicatorTf} />}
-                            {p.id === "roc"             && <RocPanelBody          pair={selectedPair} indicatorTf={indicatorTf} />}
-                            {p.id === "atr"             && <AtrPanelBody          pair={selectedPair} indicatorTf={indicatorTf} />}
-                            {p.id === "squeeze"         && <SqueezePanelBody      pair={selectedPair} indicatorTf={indicatorTf} />}
+                            {p.id === "session"         && <SessionPanelBody      rows={iRows} />}
+                            {p.id === "volume"          && <VolumePanelBody       pair={selectedPair} indicatorTf={chartTf} />}
+                            {p.id === "pivots"          && <PivotPanelBody        rows={iRows} />}
+                            {p.id === "cci"             && <CciPanelBody          pair={selectedPair} indicatorTf={chartTf} />}
+                            {p.id === "wr"              && <WrPanelBody           pair={selectedPair} indicatorTf={chartTf} />}
+                            {p.id === "volatility"      && <VolatilityPanelBody   pair={selectedPair} indicatorTf={chartTf} />}
+                            {p.id === "avg-price"       && <AvgPricePanelBody     pair={selectedPair} indicatorTf={chartTf} />}
+                            {p.id === "roc"             && <RocPanelBody          pair={selectedPair} indicatorTf={chartTf} />}
+                            {p.id === "atr"             && <AtrPanelBody          pair={selectedPair} indicatorTf={chartTf} />}
+                            {p.id === "squeeze"         && <SqueezePanelBody      pair={selectedPair} indicatorTf={chartTf} />}
                             {p.id === "failure-swing"   && <FailureSwingPanelBody  rows={sheetRows} pair={selectedPair} />}
-                            {p.id === "candle-context"  && <CandleContextPanelBody    pair={selectedPair} indicatorTf={indicatorTf} />}
-                            {p.id === "market-structure" && <MarketStructurePanelBody pair={selectedPair} indicatorTf={indicatorTf} />}
-                            {p.id === "regime"          && <RegimePanelBody           pair={selectedPair} indicatorTf={indicatorTf} showCandles={regimeShowCandles} onToggleCandles={() => setRegimeShowCandles(v => !v)} />}
+                            {p.id === "candle-context"  && <CandleContextPanelBody    pair={selectedPair} indicatorTf={chartTf} />}
+                            {p.id === "market-structure" && <MarketStructurePanelBody pair={selectedPair} indicatorTf={chartTf} />}
+                            {p.id === "regime"          && <RegimePanelBody           pair={selectedPair} indicatorTf={chartTf} showCandles={regimeShowCandles} onToggleCandles={() => setRegimeShowCandles(v => !v)} />}
                             {p.id === "macd-stack"      && <MacdStackPanelBody        pair={selectedPair} />}
                             {p.id === "ema-stack"       && <EmaStackPanelBody         pair={selectedPair} />}
                             {p.id === "ema-stack-200"   && <Ema200StackPanelBody      pair={selectedPair} />}
@@ -16610,34 +16771,9 @@ export function AnalyticsV3() {
                   </div>
                 );
                 const isRowEnd = colsAccum % 4 === 0;
-                if (catIdx === 0) {
-                  // Indicator Timeframe selector lives directly below the Strategies row — it
-                  // controls the indicator panels below, not the timeframe-independent stacks.
-                  return [el, (
-                    <div key="indicator-tf" style={{
-                      width: "100%", flexShrink: 0,
-                      display: "flex", alignItems: "center", gap: 10,
-                      position: "sticky", top: 0, zIndex: 20,
-                      background: "var(--bg-base)",
-                      paddingTop: 10, paddingBottom: 10, marginTop: 8, marginBottom: 6,
-                      borderBottom: "1px solid var(--border-subtle)",
-                    }}>
-                      <span style={{ fontSize: 9, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.1em", color: "var(--text-muted)", whiteSpace: "nowrap" }}>Indicator Timeframe</span>
-                      <div style={{ display: "flex", gap: 4 }}>
-                        {(["1W","1D","4H","1H","15M","5M","1M"] as const).map(tf => (
-                          <button key={tf} onClick={() => setIndicatorTf(tf)} style={{
-                            fontSize: 9, fontWeight: 700, padding: "4px 10px",
-                            textTransform: "uppercase", letterSpacing: "0.08em",
-                            background: indicatorTf === tf ? "var(--accent-dim)"    : "var(--bg-panel-alt)",
-                            border:     indicatorTf === tf ? "1px solid var(--accent-border)" : "1px solid var(--border-medium)",
-                            color:      indicatorTf === tf ? "var(--accent-text)"   : "var(--text-secondary)",
-                            borderRadius: 8, cursor: "pointer",
-                          }}>{tf}</button>
-                        ))}
-                      </div>
-                    </div>
-                  )];
-                }
+                // Indicator panels now follow the chart's own timeframe
+                // (chartTf) instead of a separate selector that used to live
+                // here — see the indicatorRows effect above.
                 return catIdx < CATEGORIES.length - 1 && isRowEnd
                   ? [el, <div key={`sep-${catIdx}`} style={{ width: "100%", height: 26, display: "flex", alignItems: "center", pointerEvents: "none" }}><div style={{ flex: 1, height: 1, background: "rgba(255,255,255,0.07)" }} /></div>]
                   : [el];
@@ -16675,28 +16811,28 @@ export function AnalyticsV3() {
         ) : undefined} badge={expanded.id === "ai-synthesis" ? aisBadgeExpanded : expanded.id === "macd" ? macdBadgeExpanded : expanded.id === "price" ? priceBadgeExpanded : expanded.id === "rsi9" ? rsiBadgeExpanded : expanded.id === "rsi14" ? rsi14BadgeExpanded : expanded.id === "moving-averages" ? maBadgeExpanded : expanded.id === "keltner" ? keltBadgeExpanded : expanded.id === "adx" ? adxBadgeExpanded : expanded.id === "ichimoku" ? ichiBadgeExpanded : expanded.id === "session" ? sessionBadgeExpanded : expanded.id === "volume" ? volBadgeExpanded : expanded.id === "pivots" ? pivotBadgeExpanded : expanded.id === "cci" ? momBadgeExpanded : expanded.id === "wr" ? wrBadgeExpanded : expanded.id === "volatility" ? volaBadgeExpanded : expanded.id === "avg-price" ? avgpBadgeExpanded : expanded.id === "roc" ? rocBadgeExpanded : expanded.id === "atr" ? atrBadgeExpanded : expanded.id === "candle-context" ? cctxBadgeExpanded : expanded.id === "market-structure" ? msBadgeExpanded : expanded.id === "regime" ? regimeBadgeExpanded : undefined} subtitle={expanded.id === "ai-synthesis" ? aisHeadline : expanded.id === "macd" ? macdHeadline : expanded.id === "price" ? priceHeadline : expanded.id === "rsi9" ? rsiHeadline : expanded.id === "rsi14" ? rsi14Headline : expanded.id === "moving-averages" ? maHeadline : expanded.id === "keltner" ? keltHeadline : expanded.id === "adx" ? adxHeadline : expanded.id === "ichimoku" ? ichiHeadline : expanded.id === "session" ? sessionHeadline : expanded.id === "volume" ? volHeadline : expanded.id === "pivots" ? pivotHeadline : expanded.id === "cci" ? momHeadline : expanded.id === "wr" ? wrHeadline : expanded.id === "volatility" ? volaHeadline : expanded.id === "avg-price" ? avgpHeadline : expanded.id === "roc" ? rocHeadline : expanded.id === "atr" ? atrHeadline : expanded.id === "failure-swing" ? fswHeadline : expanded.id === "candle-context" ? cctxHeadline : expanded.id === "market-structure" ? msHeadline : expanded.id === "regime" ? regimeHeadline : undefined} subtitle2={expanded.id === "regime" ? regimeAlignmentInsight : undefined}>
           {expanded.id === "ai-synthesis"    && <AiSynthesisPanelBody result={analysisResult} pair={selectedPair} expanded />}
           {expanded.id === "price"           && <PricePanelBody      rows={sheetRows} expanded />}
-          {expanded.id === "macd"            && <MacdPanelBody       pair={selectedPair} indicatorTf={indicatorTf} expanded />}
-          {expanded.id === "rsi9"            && <RsiPanelBody        pair={selectedPair} indicatorTf={indicatorTf} expanded />}
-          {expanded.id === "rsi14"           && <Rsi14PanelBody      pair={selectedPair} indicatorTf={indicatorTf} expanded />}
-          {expanded.id === "moving-averages" && <MaPanelBody         pair={selectedPair} indicatorTf={indicatorTf} expanded />}
-          {expanded.id === "keltner"         && <KeltPanelBody       pair={selectedPair} indicatorTf={indicatorTf} expanded />}
-          {expanded.id === "adx"             && <AdxPanelBody        pair={selectedPair} indicatorTf={indicatorTf} expanded />}
+          {expanded.id === "macd"            && <MacdPanelBody       pair={selectedPair} indicatorTf={chartTf} expanded />}
+          {expanded.id === "rsi9"            && <RsiPanelBody        pair={selectedPair} indicatorTf={chartTf} expanded />}
+          {expanded.id === "rsi14"           && <Rsi14PanelBody      pair={selectedPair} indicatorTf={chartTf} expanded />}
+          {expanded.id === "moving-averages" && <MaPanelBody         pair={selectedPair} indicatorTf={chartTf} expanded />}
+          {expanded.id === "keltner"         && <KeltPanelBody       pair={selectedPair} indicatorTf={chartTf} expanded />}
+          {expanded.id === "adx"             && <AdxPanelBody        pair={selectedPair} indicatorTf={chartTf} expanded />}
           {expanded.id === "ichimoku"        && <IchiPanelBody       rows={sheetRows} expanded />}
-          {expanded.id === "session"         && <SessionPanelBody    rows={sheetRows} expanded />}
-          {expanded.id === "volume"          && <VolumePanelBody     pair={selectedPair} indicatorTf={indicatorTf} expanded />}
-          {expanded.id === "pivots"          && <PivotPanelBody      rows={sheetRows} expanded />}
-          {expanded.id === "cci"             && <CciPanelBody        pair={selectedPair} indicatorTf={indicatorTf} expanded />}
-          {expanded.id === "wr"              && <WrPanelBody         pair={selectedPair} indicatorTf={indicatorTf} expanded />}
-          {expanded.id === "volatility"      && <VolatilityPanelBody pair={selectedPair} indicatorTf={indicatorTf} expanded />}
-          {expanded.id === "avg-price"       && <AvgPricePanelBody   pair={selectedPair} indicatorTf={indicatorTf} expanded />}
-          {expanded.id === "roc"             && <RocPanelBody        pair={selectedPair} indicatorTf={indicatorTf} expanded />}
-          {expanded.id === "atr"             && <AtrPanelBody             pair={selectedPair} indicatorTf={indicatorTf} expanded />}
-          {expanded.id === "squeeze"         && <SqueezePanelBody         pair={selectedPair} indicatorTf={indicatorTf} expanded />}
+          {expanded.id === "session"         && <SessionPanelBody    rows={iRows} expanded />}
+          {expanded.id === "volume"          && <VolumePanelBody     pair={selectedPair} indicatorTf={chartTf} expanded />}
+          {expanded.id === "pivots"          && <PivotPanelBody      rows={iRows} expanded />}
+          {expanded.id === "cci"             && <CciPanelBody        pair={selectedPair} indicatorTf={chartTf} expanded />}
+          {expanded.id === "wr"              && <WrPanelBody         pair={selectedPair} indicatorTf={chartTf} expanded />}
+          {expanded.id === "volatility"      && <VolatilityPanelBody pair={selectedPair} indicatorTf={chartTf} expanded />}
+          {expanded.id === "avg-price"       && <AvgPricePanelBody   pair={selectedPair} indicatorTf={chartTf} expanded />}
+          {expanded.id === "roc"             && <RocPanelBody        pair={selectedPair} indicatorTf={chartTf} expanded />}
+          {expanded.id === "atr"             && <AtrPanelBody             pair={selectedPair} indicatorTf={chartTf} expanded />}
+          {expanded.id === "squeeze"         && <SqueezePanelBody         pair={selectedPair} indicatorTf={chartTf} expanded />}
           {expanded.id === "failure-swing"   && <FailureSwingPanelBody   rows={sheetRows} pair={selectedPair} expanded />}
-          {expanded.id === "ai-chat"         && <AlertsPanel instrument={selectedPair.replace("/", "_")} alerts={alerts} onUpdate={updateAlert} onDelete={deleteAlert} />}
-          {expanded.id === "candle-context"   && <CandleContextPanelBody    pair={selectedPair} indicatorTf={indicatorTf} expanded />}
-          {expanded.id === "market-structure" && <MarketStructurePanelBody  pair={selectedPair} indicatorTf={indicatorTf} expanded />}
-          {expanded.id === "regime"           && <RegimePanelBody           pair={selectedPair} indicatorTf={indicatorTf} expanded showCandles={regimeShowCandles} onToggleCandles={() => setRegimeShowCandles(v => !v)} />}
+          {expanded.id === "ai-chat"         && <AlertsPanel instrument={selectedPair.replace("/", "_")} alerts={alerts} onUpdate={updateAlert} onSave={saveAlert} dirtyAlertIds={dirtyAlertIds} onDelete={deleteAlert} />}
+          {expanded.id === "candle-context"   && <CandleContextPanelBody    pair={selectedPair} indicatorTf={chartTf} expanded />}
+          {expanded.id === "market-structure" && <MarketStructurePanelBody  pair={selectedPair} indicatorTf={chartTf} expanded />}
+          {expanded.id === "regime"           && <RegimePanelBody           pair={selectedPair} indicatorTf={chartTf} expanded showCandles={regimeShowCandles} onToggleCandles={() => setRegimeShowCandles(v => !v)} />}
           {expanded.id === "macd-stack"       && <MacdStackPanelBody        pair={selectedPair} expanded />}
           {expanded.id === "ema-stack"        && <EmaStackPanelBody         pair={selectedPair} expanded />}
           {expanded.id === "ema-stack-200"    && <Ema200StackPanelBody      pair={selectedPair} expanded />}

@@ -6,7 +6,7 @@ import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { FormField, inputClass, inputStyle } from "../ui/FormField";
 import { getImagesByTradeId } from "../../db/queries";
 import type { Account, TradeWithJournal } from "../../db/queries";
-import { serverTimeToStorage } from "../../lib/serverTime";
+import { serverTimeToStorage, resolveAccountServerZone } from "../../lib/serverTime";
 import { getAccountPropFirm, type PropFirm } from "../../lib/preferences";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -698,19 +698,21 @@ export function TradeForm({ account, existingTrade, defaultDate, onClose, onSave
     if (!validate()) return;
     setSaving(true);
     try {
-      const propFirm: PropFirm = getAccountPropFirm(
-        account.id,
-        account.brokerOrFirm === "FTMO" ? "FTMO" : "E8 Markets"
-      );
-      const toSave = serverTime
-        ? {
-            ...values,
-            openedAt: serverTimeToStorage(values.openedAt, propFirm),
-            closedAt: serverTimeToStorage(values.closedAt, propFirm),
-            maeTime:  serverTimeToStorage(values.maeTime, propFirm),
-            mfeTime:  serverTimeToStorage(values.mfeTime, propFirm),
-          }
-        : values;
+      let toSave = values;
+      if (serverTime) {
+        const propFirm: PropFirm = getAccountPropFirm(
+          account.id,
+          account.brokerOrFirm === "FTMO" ? "FTMO" : "E8 Markets"
+        );
+        const serverZone = await resolveAccountServerZone(account.id, propFirm);
+        toSave = {
+          ...values,
+          openedAt: serverTimeToStorage(values.openedAt, serverZone),
+          closedAt: serverTimeToStorage(values.closedAt, serverZone),
+          maeTime:  serverTimeToStorage(values.maeTime, serverZone),
+          mfeTime:  serverTimeToStorage(values.mfeTime, serverZone),
+        };
+      }
       await onSaved(toSave);
     } finally {
       setSaving(false);

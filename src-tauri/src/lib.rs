@@ -235,7 +235,90 @@ mod treasury_auctions_store;
 mod indicators;
 mod scoring;
 mod backtest;
+mod tradelocker_client;
+mod oanda_account;
 use analytics_v3_demo::CandleV3;
+
+// ─── TradeLocker — read-only broker connection (Phase 5) ─────────────────────
+// No order placement/modification/cancellation is exposed — read-only by design.
+
+#[tauri::command]
+fn tradelocker_connect(email: String, password: String, server: String, env: String) -> Result<Vec<tradelocker_client::TlAccountSummary>, String> {
+    tradelocker_client::connect(&email, &password, &server, &env)
+}
+
+#[tauri::command]
+fn tradelocker_disconnect() -> Result<(), String> {
+    tradelocker_client::disconnect()
+}
+
+#[tauri::command]
+fn tradelocker_status() -> tradelocker_client::TlStatus {
+    tradelocker_client::status()
+}
+
+#[tauri::command]
+fn tradelocker_list_accounts() -> Result<Vec<tradelocker_client::TlAccountSummary>, String> {
+    tradelocker_client::list_accounts()
+}
+
+#[tauri::command]
+fn tradelocker_get_account_state(account_id: String, acc_num: String) -> Result<std::collections::HashMap<String, serde_json::Value>, String> {
+    tradelocker_client::get_account_state(&account_id, &acc_num)
+}
+
+#[tauri::command]
+fn tradelocker_get_positions(account_id: String, acc_num: String) -> Result<Vec<std::collections::HashMap<String, serde_json::Value>>, String> {
+    tradelocker_client::get_positions(&account_id, &acc_num)
+}
+
+#[tauri::command]
+fn tradelocker_get_orders(account_id: String, acc_num: String) -> Result<Vec<std::collections::HashMap<String, serde_json::Value>>, String> {
+    tradelocker_client::get_orders(&account_id, &acc_num)
+}
+
+#[tauri::command]
+fn tradelocker_get_orders_history(account_id: String, acc_num: String) -> Result<Vec<std::collections::HashMap<String, serde_json::Value>>, String> {
+    tradelocker_client::get_orders_history(&account_id, &acc_num)
+}
+
+#[tauri::command]
+fn tradelocker_get_instruments(account_id: String, acc_num: String) -> Result<Vec<tradelocker_client::TlInstrument>, String> {
+    tradelocker_client::get_instruments(&account_id, &acc_num)
+}
+
+// ─── OANDA trading account — read-only (Phase 8) ──────────────────────────────
+// Reuses the same OANDA API key already on file for market data.
+
+#[tauri::command]
+fn oanda_list_accounts() -> Result<serde_json::Value, String> {
+    oanda_account::get_accounts(&read_oanda_key()?)
+}
+
+#[tauri::command]
+fn oanda_get_account_summary(account_id: String) -> Result<serde_json::Value, String> {
+    oanda_account::get_account_summary(&read_oanda_key()?, &account_id)
+}
+
+#[tauri::command]
+fn oanda_get_open_positions(account_id: String) -> Result<serde_json::Value, String> {
+    oanda_account::get_open_positions(&read_oanda_key()?, &account_id)
+}
+
+#[tauri::command]
+fn oanda_get_open_trades(account_id: String) -> Result<serde_json::Value, String> {
+    oanda_account::get_open_trades(&read_oanda_key()?, &account_id)
+}
+
+#[tauri::command]
+fn oanda_get_trades_history(account_id: String) -> Result<serde_json::Value, String> {
+    oanda_account::get_trades_history(&read_oanda_key()?, &account_id)
+}
+
+#[tauri::command]
+fn oanda_get_pending_orders(account_id: String) -> Result<serde_json::Value, String> {
+    oanda_account::get_pending_orders(&read_oanda_key()?, &account_id)
+}
 
 /// Read the OANDA API key from disk (first non-empty line), cached for the
 /// process lifetime — this used to be re-read from disk on every single
@@ -934,7 +1017,7 @@ pub fn run() {
 
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![list_images, read_credentials_file, write_text_file, save_trade_screenshot, save_chart_screenshot, get_candles_v3, sync_oanda_candles_v3, send_test_notification, send_telegram_message, get_forex_news, get_economic_calendar, get_stored_economic_events, sync_treasury_auctions, get_stored_treasury_auctions, backfill_treasury_auctions, get_live_price, get_live_candles, get_live_candles_computed, get_synthesis])
+        .invoke_handler(tauri::generate_handler![list_images, read_credentials_file, write_text_file, save_trade_screenshot, save_chart_screenshot, get_candles_v3, sync_oanda_candles_v3, send_test_notification, send_telegram_message, get_forex_news, get_economic_calendar, get_stored_economic_events, sync_treasury_auctions, get_stored_treasury_auctions, backfill_treasury_auctions, get_live_price, get_live_candles, get_live_candles_computed, get_synthesis, tradelocker_connect, tradelocker_disconnect, tradelocker_status, tradelocker_list_accounts, tradelocker_get_account_state, tradelocker_get_positions, tradelocker_get_orders, tradelocker_get_orders_history, tradelocker_get_instruments, oanda_list_accounts, oanda_get_account_summary, oanda_get_open_positions, oanda_get_open_trades, oanda_get_trades_history, oanda_get_pending_orders])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

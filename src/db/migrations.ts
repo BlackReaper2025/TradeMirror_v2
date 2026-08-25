@@ -44,6 +44,87 @@ const MIGRATIONS: string[] = [
   // v9 — planned stop-loss / take-profit distance in pips
   `ALTER TABLE trades ADD COLUMN sl_pips REAL`,
   `ALTER TABLE trades ADD COLUMN tp_pips REAL`,
+  // v10 — Phase 2 canonical multi-account model: per-account risk/discipline
+  // rules, a shared parent trade idea, and per-account execution records.
+  // Additive only — existing accounts/trades tables and the Trade Log are untouched.
+  `CREATE TABLE IF NOT EXISTS account_profiles (
+    id TEXT PRIMARY KEY,
+    account_id TEXT NOT NULL UNIQUE REFERENCES accounts(id),
+    platform_type TEXT,
+    program_type TEXT,
+    profit_target_amount REAL,
+    profit_target_pct REAL,
+    daily_drawdown_amount REAL,
+    daily_drawdown_pct REAL,
+    static_drawdown_amount REAL,
+    static_drawdown_pct REAL,
+    max_risk_per_trade_pct REAL NOT NULL DEFAULT 1.0,
+    cooldown_hours REAL NOT NULL DEFAULT 12,
+    server_timezone TEXT,
+    live_execution_enabled INTEGER NOT NULL DEFAULT 0
+  )`,
+  `CREATE TABLE IF NOT EXISTS trade_ideas (
+    id TEXT PRIMARY KEY,
+    symbol TEXT NOT NULL,
+    direction TEXT NOT NULL,
+    order_type TEXT NOT NULL,
+    intended_entry REAL,
+    intended_stop REAL,
+    intended_target REAL,
+    lifecycle_state TEXT NOT NULL DEFAULT 'planned',
+    discipline_state TEXT,
+    copy_trade_enabled INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    closed_at TEXT
+  )`,
+  `CREATE TABLE IF NOT EXISTS executions (
+    id TEXT PRIMARY KEY,
+    trade_idea_id TEXT NOT NULL REFERENCES trade_ideas(id),
+    account_id TEXT NOT NULL REFERENCES accounts(id),
+    trade_id TEXT REFERENCES trades(id),
+    broker_order_id TEXT,
+    broker_position_id TEXT,
+    status TEXT NOT NULL DEFAULT 'planned',
+    entry_price REAL,
+    stop_price REAL,
+    target_price REAL,
+    quantity REAL,
+    fees REAL,
+    pnl REAL,
+    opened_at TEXT,
+    closed_at TEXT,
+    error_message TEXT
+  )`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_executions_account_broker_order ON executions(account_id, broker_order_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_executions_trade_idea_id ON executions(trade_idea_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_executions_account_id ON executions(account_id)`,
+  // v11 — Phase 5: link an account_profile to its TradeLocker broker account.
+  // Login credentials themselves live in the OS keyring, never in this DB.
+  `ALTER TABLE account_profiles ADD COLUMN tradelocker_account_id TEXT`,
+  `ALTER TABLE account_profiles ADD COLUMN tradelocker_acc_num TEXT`,
+  // v12 — Phase 6: idempotency backstop so a repeated/restarted TradeLocker
+  // sync can never insert a second execution (and therefore second Trade Log
+  // record) for the same broker position.
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_executions_account_broker_position ON executions(account_id, broker_position_id)`,
+  // v13 — Phase 8: link an account_profile to its OANDA trading account, and
+  // tag each execution with which broker's sync owns it — TradeLocker and
+  // OANDA syncs share the executions table keyed by broker_position_id, and
+  // without this an account linked to both could have one sync's closure
+  // detection misinterpret the other broker's still-open rows as gone.
+  `ALTER TABLE account_profiles ADD COLUMN oanda_account_id TEXT`,
+  `ALTER TABLE executions ADD COLUMN broker TEXT`,
+  `UPDATE executions SET broker = 'tradelocker' WHERE broker IS NULL AND broker_position_id IS NOT NULL`,
+  // v14 — Phase 12: persistent global cooldown log, triggered when a synced
+  // execution closes at/through its stop price.
+  `CREATE TABLE IF NOT EXISTS cooldowns (
+    id TEXT PRIMARY KEY,
+    triggered_by_execution_id TEXT REFERENCES executions(id),
+    triggered_by_account_id TEXT REFERENCES accounts(id),
+    stop_out_at TEXT NOT NULL,
+    cooldown_until TEXT NOT NULL,
+    created_at TEXT NOT NULL
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_cooldowns_until ON cooldowns(cooldown_until)`,
 ];
 
 export async function runMigrations(): Promise<void> {

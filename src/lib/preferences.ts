@@ -21,32 +21,32 @@ export function setTimeFormat(fmt: TimeFormat): void {
 
 // Per-account prop firm — determines which server timezone the Trade Log's
 // "Server Time" entry mode converts from (see src/lib/serverTime.ts).
-export type PropFirm = "FTMO" | "E8 Markets";
+export type PropFirm = "FTMO" | "E8 Markets" | "OANDA" | "Robinhood";
+const PROP_FIRMS: PropFirm[] = ["FTMO", "E8 Markets", "OANDA", "Robinhood"];
 
 export function getAccountPropFirm(accountId: string, fallback: PropFirm = "E8 Markets"): PropFirm {
   const v = localStorage.getItem(`tm_prop_firm_${accountId}`);
-  return v === "FTMO" || v === "E8 Markets" ? v : fallback;
+  return (PROP_FIRMS as string[]).includes(v ?? "") ? (v as PropFirm) : fallback;
 }
 export function setAccountPropFirm(accountId: string, firm: PropFirm): void {
   localStorage.setItem(`tm_prop_firm_${accountId}`, firm);
   window.dispatchEvent(new CustomEvent("tm:prefs-changed"));
 }
 
-// Server timezone per prop firm — the IANA zone that firm's trade server
-// reports times in, used to convert "Server Time" entries into TradeMirror's
-// storage zone (see src/lib/serverTime.ts). Keyed by firm, not account, since
-// the server zone is a property of the firm, not any one account.
+// Default server timezone per prop firm — used only as a fallback for
+// accounts that don't have their own account_profiles.serverTimezone saved
+// yet (see resolveAccountServerZone in src/lib/serverTime.ts). Since Phase 4,
+// the actual per-account server zone is a DB-backed Account Profile field,
+// not shared across every account under the same firm.
 const DEFAULT_PROP_FIRM_SERVER_ZONE: Record<PropFirm, string> = {
   "FTMO":       "Europe/Helsinki",
   "E8 Markets": "Europe/Helsinki",
+  "OANDA":      "America/New_York",
+  "Robinhood":  "America/New_York",
 };
 
 export function getPropFirmServerZone(firm: PropFirm): string {
   return localStorage.getItem(`tm_prop_firm_zone_${firm}`) ?? DEFAULT_PROP_FIRM_SERVER_ZONE[firm];
-}
-export function setPropFirmServerZone(firm: PropFirm, zone: string): void {
-  localStorage.setItem(`tm_prop_firm_zone_${firm}`, zone);
-  window.dispatchEvent(new CustomEvent("tm:prefs-changed"));
 }
 
 // Per-account brokerage URLs — keyed by account ID

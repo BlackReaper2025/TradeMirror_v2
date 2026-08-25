@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect, useCallback } from "react";
 import { createPortal } from "react-dom";
 import { Trash2, Settings } from "lucide-react";
 import { playAlertSound, ALERT_SOUNDS } from "../../lib/alertSound";
+import { decimalsForPair } from "../../lib/priceFormat";
 
 export interface Alert {
   id: string;
@@ -62,6 +63,8 @@ interface AlertsPanelProps {
   instrument: string;
   alerts: Alert[];
   onUpdate: (id: string, patch: Partial<Alert>) => void;
+  onSave: () => void;
+  dirtyAlertIds: Set<string>;
   onDelete: (id: string) => void;
 }
 
@@ -403,14 +406,13 @@ function DirectionPopup({ alert, anchorRef, onUpdate, onClose }: DirectionPopupP
 
 // ─── Main panel ───────────────────────────────────────────────────────────────
 
-export function AlertsPanel({ instrument, alerts, onUpdate, onDelete }: AlertsPanelProps) {
+export function AlertsPanel({ instrument, alerts, onUpdate, onSave, dirtyAlertIds, onDelete }: AlertsPanelProps) {
   const visible = alerts.filter(a => a.instrument === instrument && a.status !== "deleted");
   const [openSettings, setOpenSettings] = useState<string | null>(null);
   const [openDir, setOpenDir] = useState<string | null>(null);
   const [draftPrices, setDraftPrices] = useState<Record<string, string>>({});
-  const btnRefs = useRef<Record<string, HTMLButtonElement | null>>({});
-  const dirRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const dirAnchorRefs = useRef<Record<string, React.RefObject<HTMLDivElement | null>>>({});
+  const settingsBtnAnchorRefs = useRef<Record<string, React.RefObject<HTMLButtonElement | null>>>({});
 
   function commitPrice(id: string, raw: string) {
     const val = parseFloat(raw);
@@ -431,11 +433,15 @@ export function AlertsPanel({ instrument, alerts, onUpdate, onDelete }: AlertsPa
         {visible.map((alert, i) => {
           const isOpen = openSettings === alert.id;
           const isDirOpen = openDir === alert.id;
-          const btnRef = { current: btnRefs.current[alert.id] ?? null } as React.RefObject<HTMLButtonElement | null>;
+          const dirty = dirtyAlertIds.has(alert.id);
           if (!dirAnchorRefs.current[alert.id]) {
             dirAnchorRefs.current[alert.id] = { current: null } as React.RefObject<HTMLDivElement | null>;
           }
           const dirAnchorRef = dirAnchorRefs.current[alert.id];
+          if (!settingsBtnAnchorRefs.current[alert.id]) {
+            settingsBtnAnchorRefs.current[alert.id] = { current: null } as React.RefObject<HTMLButtonElement | null>;
+          }
+          const btnRef = settingsBtnAnchorRefs.current[alert.id];
 
           return (
             <div
@@ -461,7 +467,7 @@ export function AlertsPanel({ instrument, alerts, onUpdate, onDelete }: AlertsPa
 
               {/* Direction */}
               <div
-                ref={el => { dirRefs.current[alert.id] = el; dirAnchorRef.current = el; }}
+                ref={el => { dirAnchorRef.current = el; }}
                 onClick={() => setOpenDir(isDirOpen ? null : alert.id)}
                 style={{
                   fontSize: 10, fontWeight: 600, padding: "3px 8px", borderRadius: 6,
@@ -498,7 +504,7 @@ export function AlertsPanel({ instrument, alerts, onUpdate, onDelete }: AlertsPa
                 <input
                   type="text"
                   inputMode="decimal"
-                  value={draftPrices[alert.id] ?? alert.price.toFixed(5)}
+                  value={draftPrices[alert.id] ?? alert.price.toFixed(decimalsForPair(alert.instrument.replace("_", "/"), alert.price))}
                   onChange={e => setDraftPrices(d => ({ ...d, [alert.id]: e.target.value }))}
                   onBlur={e => commitPrice(alert.id, e.target.value)}
                   onKeyDown={e => { if (e.key === "Enter") { commitPrice(alert.id, (e.target as HTMLInputElement).value); (e.target as HTMLInputElement).blur(); } }}
@@ -506,14 +512,11 @@ export function AlertsPanel({ instrument, alerts, onUpdate, onDelete }: AlertsPa
                 />
               )}
 
-              {/* Status */}
-              <span style={{ fontSize: 10, fontWeight: 600, color: STATUS_COLORS[alert.status], flex: 1, textAlign: "center" }}>
-                {alert.status}
-              </span>
+              <span style={{ flex: 1 }} />
 
               {/* Settings button */}
               <button
-                ref={el => { btnRefs.current[alert.id] = el; }}
+                ref={el => { btnRef.current = el; }}
                 onClick={() => setOpenSettings(isOpen ? null : alert.id)}
                 title="Alert settings"
                 style={{
@@ -549,6 +552,31 @@ export function AlertsPanel({ instrument, alerts, onUpdate, onDelete }: AlertsPa
               >
                 <Trash2 size={11} />
               </button>
+
+              {/* Save — lit up while this alert has local edits not yet
+                  written to alerts.json (see dirtyAlertIds upstream); greyed
+                  and inert once there's nothing new to persist. */}
+              <button
+                onClick={() => dirty && onSave()}
+                disabled={!dirty}
+                title={dirty ? "Save changes to this alert" : "No unsaved changes"}
+                style={{
+                  fontSize: 9, fontWeight: 700, letterSpacing: "0.04em",
+                  padding: "3px 8px", borderRadius: 6, flexShrink: 0,
+                  background: dirty ? "rgba(74,222,128,0.14)" : "rgba(255,255,255,0.03)",
+                  border: `1px solid ${dirty ? "rgba(74,222,128,0.40)" : "var(--border-subtle)"}`,
+                  color: dirty ? "#4ade80" : "var(--text-muted)",
+                  cursor: dirty ? "pointer" : "not-allowed",
+                  opacity: dirty ? 1 : 0.5,
+                }}
+              >
+                SAVE
+              </button>
+
+              {/* Status */}
+              <span style={{ fontSize: 10, fontWeight: 600, color: STATUS_COLORS[alert.status], flexShrink: 0, minWidth: 52, textAlign: "center" }}>
+                {alert.status}
+              </span>
             </div>
           );
         })}

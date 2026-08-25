@@ -9,6 +9,7 @@ import {
   dailyStats,
   quotes,
   appSettings,
+  accountProfiles,
 } from "./schema";
 
 // ─── Shared date helper ───────────────────────────────────────────────────────
@@ -25,12 +26,13 @@ export function localDateStr(date: Date = new Date()): string {
 
 // ─── Inferred types ───────────────────────────────────────────────────────────
 
-export type Account      = typeof accounts.$inferSelect;
-export type Trade        = typeof trades.$inferSelect;
-export type TradeJournal = typeof tradeJournal.$inferSelect;
-export type TradeImage   = typeof tradeImages.$inferSelect;
-export type DailyStat    = typeof dailyStats.$inferSelect;
-export type Quote        = typeof quotes.$inferSelect;
+export type Account        = typeof accounts.$inferSelect;
+export type AccountProfile = typeof accountProfiles.$inferSelect;
+export type Trade          = typeof trades.$inferSelect;
+export type TradeJournal   = typeof tradeJournal.$inferSelect;
+export type TradeImage     = typeof tradeImages.$inferSelect;
+export type DailyStat      = typeof dailyStats.$inferSelect;
+export type Quote          = typeof quotes.$inferSelect;
 
 // ─── Trade with optional joined journal ───────────────────────────────────────
 
@@ -115,6 +117,35 @@ export async function getAccount(id: string): Promise<Account | null> {
     .where(eq(accounts.id, id))
     .limit(1);
   return rows[0] ?? null;
+}
+
+// ─── Account Profiles — risk/discipline rules per account (Phase 3) ──────────
+
+export async function getAccountProfile(accountId: string): Promise<AccountProfile | null> {
+  const db = getDb();
+  const rows = await db
+    .select()
+    .from(accountProfiles)
+    .where(eq(accountProfiles.accountId, accountId))
+    .limit(1);
+  return rows[0] ?? null;
+}
+
+export async function upsertAccountProfile(
+  accountId: string,
+  data: Partial<Omit<AccountProfile, "id" | "accountId">>
+): Promise<void> {
+  const db = getDb();
+  const existing = await getAccountProfile(accountId);
+  if (existing) {
+    await db.update(accountProfiles).set(data).where(eq(accountProfiles.accountId, accountId));
+  } else {
+    await db.insert(accountProfiles).values({
+      id: `profile-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      accountId,
+      ...data,
+    });
+  }
 }
 
 // ─── Dashboard: all-time account stats ───────────────────────────────────────
