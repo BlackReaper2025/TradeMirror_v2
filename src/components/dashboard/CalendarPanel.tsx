@@ -179,8 +179,8 @@ export function CalendarPanel({ calendarDays, selectedDate, onSelectDate }: Prop
 
         {/* Day cells */}
         <div
-          className="grid grid-cols-7 gap-1 flex-1"
-          style={{ gridTemplateRows: `repeat(${grid.length / 7}, 1fr)` }}
+          className="grid grid-cols-7 gap-1 flex-1 min-h-0"
+          style={{ gridTemplateRows: `repeat(${grid.length / 7}, minmax(0, 1fr))` }}
         >
           {grid.map((cell, i) => {
             if (!cell.date) {
@@ -220,45 +220,47 @@ export function CalendarPanel({ calendarDays, selectedDate, onSelectDate }: Prop
                   overflow:   "hidden",
                 }}
               >
-                {/* Day number row — date left, holiday name right */}
-                <div className="flex items-start justify-between gap-0.5 leading-tight">
-                  <span
-                    className="text-[13px] font-semibold shrink-0"
-                    style={{
-                      color: isToday ? "var(--accent-text)"
-                           : hasTrades ? pnlColor(pnl)
-                           : isWeekend ? "var(--text-muted)"
-                           : "var(--text-secondary)",
-                    }}
-                  >
-                    {dayNum}
-                  </span>
-                  {holiday && (
+                {/* Day number left, holiday below it; P&L + trade count stacked on the right */}
+                <div className="flex items-start justify-between gap-1 leading-tight min-w-0">
+                  <div className="flex flex-col min-w-0 shrink-0">
                     <span
-                      className="text-[8px] font-semibold leading-tight text-right"
-                      style={{ color: "var(--text-muted)", lineHeight: 1.2 }}
+                      className="text-[13px] font-semibold"
+                      style={{
+                        color: isToday ? "var(--accent-text)"
+                             : hasTrades ? pnlColor(pnl)
+                             : isWeekend ? "var(--text-muted)"
+                             : "var(--text-secondary)",
+                      }}
                     >
-                      {holiday}
+                      {dayNum}
                     </span>
+                    {holiday && (
+                      <span
+                        className="text-[8px] font-semibold leading-tight truncate"
+                        style={{ color: "var(--text-muted)", lineHeight: 1.2 }}
+                      >
+                        {holiday}
+                      </span>
+                    )}
+                  </div>
+
+                  {hasTrades && (
+                    <div className="flex flex-col items-end min-w-0 leading-tight">
+                      <span
+                        className="text-[12px] font-semibold tabular-nums truncate"
+                        style={{ color: pnlColor(pnl) }}
+                      >
+                        {fmtPnl(pnl)}
+                      </span>
+                      <span
+                        className="text-[9px] font-semibold truncate"
+                        style={{ color: "var(--text-secondary)" }}
+                      >
+                        {tradeCount} {tradeCount === 1 ? "trade" : "trades"}
+                      </span>
+                    </div>
                   )}
                 </div>
-
-                {hasTrades && (
-                  <>
-                    <span
-                      className="text-[12px] font-semibold tabular-nums leading-tight mt-0.5"
-                      style={{ color: pnlColor(pnl) }}
-                    >
-                      {fmtPnl(pnl)}
-                    </span>
-                    <span
-                      className="text-[10px] font-semibold leading-tight mt-0.5"
-                      style={{ color: "var(--text-secondary)" }}
-                    >
-                      {tradeCount} {tradeCount === 1 ? "trade" : "trades"}
-                    </span>
-                  </>
-                )}
               </div>
             );
           })}
